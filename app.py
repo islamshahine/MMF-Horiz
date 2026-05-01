@@ -2,12 +2,123 @@ import streamlit as st
 import math
 
 default_media_presets = {
-    "Custom": {"d10": 0.0, "cu": 1.0},
-    "Fine Sand": {"d10": 0.25, "cu": 1.6},
-    "Medium Sand": {"d10": 0.50, "cu": 1.8},
-    "Coarse Sand": {"d10": 0.85, "cu": 2.0},
-    "Anthracite": {"d10": 1.20, "cu": 1.5},
-    "Gravel": {"d10": 2.50, "cu": 1.4},
+    "Custom": {
+        "d10": 0.0,
+        "cu": 1.0,
+        "epsilon0": 0.0,
+        "rho_p_eff": 0,
+        "d60": 0.0,
+        "psi": 0.0,
+        "phi": 0,
+    },
+    "Gravel": {
+        "d10": 6,
+        "cu": 0,
+        "epsilon0": 0.46,
+        "rho_p_eff": 2600,
+        "d60": None,
+        "psi": 0.9,
+        "phi": 35,
+    },
+    "Coarse Sand": {
+        "d10": 1.35,
+        "cu": 1.5,
+        "epsilon0": 0.44,
+        "rho_p_eff": 2650,
+        "d60": 2.03,
+        "psi": 0.85,
+        "phi": 35,
+    },
+    "Fine Sand": {
+        "d10": 0.8,
+        "cu": 1.3,
+        "epsilon0": 0.42,
+        "rho_p_eff": 2650,
+        "d60": 1.2,
+        "psi": 0.8,
+        "phi": 35,
+    },
+    "Fine Sand (extra)": {
+        "d10": 0.5,
+        "cu": 1.3,
+        "epsilon0": 0.41,
+        "rho_p_eff": 2650,
+        "d60": 0.9,
+        "psi": 0.75,
+        "phi": 35,
+    },
+    "MnO2": {
+        "d10": 1,
+        "cu": 2.4,
+        "epsilon0": 0.5,
+        "rho_p_eff": 4200,
+        "d60": 2.4,
+        "psi": 0.65,
+        "phi": 35,
+    },
+    "Medium GAC": {
+        "d10": 1,
+        "cu": 1.6,
+        "epsilon0": 0.55,
+        "rho_p_eff": 1000,
+        "d60": 1.44,
+        "psi": 0.65,
+        "phi": 35,
+    },
+    "Anthracite": {
+        "d10": 1.3,
+        "cu": 1.5,
+        "epsilon0": 0.48,
+        "rho_p_eff": 1450,
+        "d60": 2.25,
+        "psi": 0.7,
+        "phi": 35,
+    },
+    "Biodagene": {
+        "d10": 2.5,
+        "cu": 1.4,
+        "epsilon0": 0.42,
+        "rho_p_eff": 1600,
+        "d60": 3.5,
+        "psi": 0.8,
+        "phi": 35,
+    },
+    "Schist": {
+        "d10": 3.3,
+        "cu": 1.5,
+        "epsilon0": 0.47,
+        "rho_p_eff": 1300,
+        "d60": 4.95,
+        "psi": 0.65,
+        "phi": 35,
+    },
+    "Limestone": {
+        "d10": 3,
+        "cu": 1.4,
+        "epsilon0": 0.55,
+        "rho_p_eff": 2700,
+        "d60": 4.2,
+        "psi": 0.6,
+        "phi": 35,
+    },
+    "Pumice": {
+        "d10": 1.5,
+        "cu": 1.3,
+        "epsilon0": 0.55,
+        "rho_p_eff": 900,
+        "d60": 1.56,
+        "psi": 0.55,
+        "phi": 35,
+    },
+    "FILTRALITE clay": {
+        "d10": 1.2,
+        "cu": 1.5,
+        "epsilon0": 0.48,
+        "rho_p_eff": 1250,
+        "d60": 1.8,
+        "psi": 0.5,
+        "phi": 35,
+    },
 }
 
 if "media_presets" not in st.session_state:
@@ -69,38 +180,104 @@ with st.sidebar:
 
     for layer_index in range(media_layers):
         with st.expander(f"Media Layer {layer_index + 1}"):
+            preset_key = f"preset_{layer_index}"
             preset = st.selectbox(
                 f"Media Preset for layer {layer_index + 1}",
-                list(media_presets.keys()),
+                list(st.session_state.media_presets.keys()),
                 index=0,
-                key=f"preset_{layer_index}"
+                key=preset_key,
             )
-            if preset == "Custom":
+
+            is_custom = preset == "Custom"
+            if is_custom:
                 media_type = st.text_input(
                     f"Custom Media Type {layer_index + 1}",
                     value=f"Custom Layer {layer_index + 1}",
                     key=f"media_type_{layer_index}"
                 )
+                st.info("Custom media: edit values below.")
             else:
                 media_type = preset
+                st.info(f"Preset: {preset}")
 
-            default_d10 = media_presets[preset]["d10"]
-            default_cu = media_presets[preset]["cu"]
+            preset_data = st.session_state.media_presets[preset]
+            d10 = float(preset_data["d10"])
+            cu = float(preset_data["cu"])
+            epsilon0 = float(preset_data["epsilon0"])
+            rho_p_eff = int(preset_data["rho_p_eff"])
+            d60 = float(preset_data["d60"]) if preset_data["d60"] is not None else 0.0
+            psi = float(preset_data["psi"])
+            phi = int(preset_data["phi"])
 
-            d10 = st.number_input(
-                f"d10 (mm) for layer {layer_index + 1}",
-                min_value=0.0,
-                value=default_d10,
-                step=0.01,
-                key=f"d10_{layer_index}"
-            )
-            cu = st.number_input(
-                f"Uniformity Coefficient (Cu) for layer {layer_index + 1}",
-                min_value=1.0,
-                value=default_cu,
-                step=0.1,
-                key=f"cu_{layer_index}"
-            )
+            if is_custom:
+                col1, col2 = st.columns(2)
+                with col1:
+                    d10 = st.number_input(
+                        f"d10 (mm) for layer {layer_index + 1}",
+                        min_value=0.0,
+                        value=d10,
+                        step=0.01,
+                        key=f"d10_input_{layer_index}"
+                    )
+                    cu = st.number_input(
+                        f"Uniformity Coefficient (Cu) for layer {layer_index + 1}",
+                        min_value=0.0,
+                        value=cu,
+                        step=0.1,
+                        key=f"cu_input_{layer_index}"
+                    )
+                    d60 = st.number_input(
+                        f"d60 (mm) for layer {layer_index + 1}",
+                        min_value=0.0,
+                        value=d60,
+                        step=0.01,
+                        key=f"d60_input_{layer_index}"
+                    )
+                with col2:
+                    epsilon0 = st.number_input(
+                        f"Void Fraction (ε₀) for layer {layer_index + 1}",
+                        min_value=0.0,
+                        max_value=1.0,
+                        value=epsilon0,
+                        step=0.01,
+                        key=f"epsilon0_input_{layer_index}"
+                    )
+                    rho_p_eff = st.number_input(
+                        f"Effective Density ρp,eff (kg/m³) for layer {layer_index + 1}",
+                        min_value=0,
+                        value=rho_p_eff,
+                        step=10,
+                        key=f"rho_p_eff_input_{layer_index}"
+                    )
+                    psi = st.number_input(
+                        f"Sphericity (ψ) for layer {layer_index + 1}",
+                        min_value=0.0,
+                        max_value=1.0,
+                        value=psi,
+                        step=0.01,
+                        key=f"psi_input_{layer_index}"
+                    )
+
+                phi = st.number_input(
+                    f"Friction Angle φ (°) for layer {layer_index + 1}",
+                    min_value=0,
+                    max_value=90,
+                    value=phi,
+                    step=1,
+                    key=f"phi_input_{layer_index}"
+                )
+            else:
+                col1, col2 = st.columns(2)
+                with col1:
+                    col1.markdown(f"<div style='font-size:14px; line-height:1.4;'><strong>d10 (mm)</strong><br>{d10:.2f}</div>", unsafe_allow_html=True)
+                    col1.markdown(f"<div style='font-size:14px; line-height:1.4;'><strong>Uniformity Coefficient (Cu)</strong><br>{cu:.2f}</div>", unsafe_allow_html=True)
+                    col1.markdown(f"<div style='font-size:14px; line-height:1.4;'><strong>d60 (mm)</strong><br>{d60:.2f}</div>", unsafe_allow_html=True)
+                with col2:
+                    col2.markdown(f"<div style='font-size:14px; line-height:1.4;'><strong>Void Fraction (ε₀)</strong><br>{epsilon0:.2f}</div>", unsafe_allow_html=True)
+                    col2.markdown(f"<div style='font-size:14px; line-height:1.4;'><strong>Effective Density ρp,eff (kg/m³)</strong><br>{rho_p_eff}</div>", unsafe_allow_html=True)
+                    col2.markdown(f"<div style='font-size:14px; line-height:1.4;'><strong>Sphericity (ψ)</strong><br>{psi:.2f}</div>", unsafe_allow_html=True)
+                st.markdown(f"<div style='font-size:14px; line-height:1.4;'><strong>Friction Angle φ (°)</strong><br>{phi}</div>", unsafe_allow_html=True)
+
             depth = st.number_input(
                 f"Depth from previous top (m) for layer {layer_index + 1}",
                 min_value=0.0,
@@ -116,7 +293,12 @@ with st.sidebar:
                 "Layer": layer_index + 1,
                 "Type": media_type,
                 "d10 (mm)": d10,
+                "d60 (mm)": d60,
                 "Cu": cu,
+                "ε₀": epsilon0,
+                "ρp,eff (kg/m³)": rho_p_eff,
+                "ψ": psi,
+                "φ (°)": phi,
                 "Depth (m)": depth,
             })
 
@@ -160,11 +342,34 @@ cylindrical_volume = math.pi * (diameter / 2) ** 2 * cylindrical_length
 media_total_depth = sum(media_depths)
 available_internal_height = cylindrical_length - nozzle_plate_height
 remaining_internal_height = available_internal_height - media_total_depth
-media_layer_tops = []
-current_top = nozzle_plate_height
-for depth in media_depths:
-    media_layer_tops.append(current_top)
-    current_top += depth
+
+R = diameter / 2
+
+# theta and area helper functions
+def theta_at_height(height_m: float) -> tuple[float, float]:
+    value = (R - height_m) / R
+    value = max(-1.0, min(1.0, value))
+    theta_rad = 2 * math.acos(value)
+    return theta_rad, math.degrees(theta_rad)
+
+
+def circular_segment_area(theta_rad: float) -> float:
+    return 0.5 * R**2 * (theta_rad - math.sin(theta_rad))
+
+
+def elliptical_cap_volume(height_m: float) -> float:
+    dish_h = diameter / 4
+    h = max(0.0, min(height_m, dish_h))
+    a = R
+    b = dish_h
+    return math.pi * a**2 * b * (1 - (1 - h / b) ** 2 * (2 + h / b)) / 3
+
+
+def spherical_cap_volume(height_m: float) -> float:
+    dish_h = 0.2 * diameter
+    h = max(0.0, min(height_m, dish_h))
+    return math.pi * h**2 * (R - h / 3)
+
 
 # 4. DASHBOARD LAYOUT
 tab1, tab2 = st.tabs(["💧 Process Results", "🛠️ Mechanical Design"])
@@ -210,19 +415,46 @@ with tab2:
     if media_layers_data:
         st.subheader("Media Layer Details")
         details = []
-        for i, layer in enumerate(media_layers_data):
+        current_top = 0.0
+        for layer in media_layers_data:
+            top = current_top
+            depth = layer["Depth (m)"]
+            bottom = top + depth
+            top_abs = nozzle_plate_height + top
+            bottom_abs = nozzle_plate_height + bottom
+
+            theta_bottom_rad, theta_bottom_deg = theta_at_height(bottom_abs)
+            theta_top_rad, _ = theta_at_height(top_abs)
+            area_bottom = circular_segment_area(theta_bottom_rad)
+            area_top = circular_segment_area(theta_top_rad)
+            layer_area = max(0.0, area_bottom - area_top)
+
+            v_cyl = layer_area * cylindrical_length
+
+            def dish_volume(depth_mm: float) -> float:
+                factor = (1/3) if end_geometry == "Elliptic 2:1" else (4/15)
+                return factor * (math.pi / 4) * diameter**2 * depth_mm / 1000
+
+            prev_depth_mm = top_abs * 1000
+            curr_depth_mm = bottom_abs * 1000
+            v_end = max(0.0, dish_volume(curr_depth_mm) - dish_volume(prev_depth_mm))
+
             details.append({
                 "Layer": layer["Layer"],
                 "Type": layer["Type"],
-                "Top from Plate (m)": f"{media_layer_tops[i]:.2f}",
-                "Depth (m)": f"{layer['Depth (m)']:.2f}",
-                "d10 (mm)": f"{layer['d10 (mm)']:.2f}",
-                "Cu": f"{layer['Cu']:.2f}",
+                "Top (m)": f"{top:.2f}",
+                "Depth (m)": f"{depth:.2f}",
+                "θ (°)": f"{theta_bottom_deg:.2f}",
+                "Circ. Area (m²)": f"{layer_area:.2f}",
+                "Vsph/Elli (m³)": f"{v_end:.2f}",
+                "Vcyl (m³)": f"{v_cyl:.2f}",
+                "Vtot (m³)": f"{(v_end + v_cyl):.2f}",
             })
+            current_top += depth
         st.table(details)
 
     st.info(f"Design based on Diameter: {diameter}m, Total Length: {total_length}m, End Geometry: {end_geometry} at {design_pressure} bar using {allowable_stress} kg/cm² allowable stress.")
 
 # 5. FOOTER & SECURITY
 st.markdown("---")
-st.caption("Proprietary Tool © Islam Shahine | Process Expert | Veolia. Unauthorized distribution of results is prohibited.")
+st.caption("Proprietary Tool © Islam Shahine | Process Expert |. Unauthorized distribution of results is prohibited.")
