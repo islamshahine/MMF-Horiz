@@ -433,7 +433,8 @@ w_body  = wt_body["weight_body_kg"]
 w_np    = wt_np["weight_total_kg"]
 w_sup   = wt_sup["weight_all_supports_kg"]
 w_noz   = nozzle_wt_total
-w_total = w_body + w_np + w_sup + w_noz
+w_int   = wt_int["weight_internals_kg"]
+w_total = w_body + w_np + w_sup + w_noz + w_int
 
 # ══════════════════════════════════════════════════════════════════════════════
 # STATUS BADGES
@@ -932,14 +933,35 @@ with main:
             w3.metric("Waste / filter",     f"{bw_seq['waste_vol_avg_m3']:.0f} m³")
             w4.metric("Plant waste / day",  f"{bw_seq['waste_vol_daily_m3']:.0f} m³/d")
 
+            st.markdown("**Waste volume & TSS mass balance**")
             st.table(pd.DataFrame([
-                ["Low TSS",  f"{tss_low:.0f} mg/L",
-                 f"{bw_seq['total_vol_low_m3']:.0f} m³"],
-                ["Avg TSS",  f"{tss_avg:.0f} mg/L",
-                 f"{bw_seq['total_vol_avg_m3']:.0f} m³"],
-                ["High TSS", f"{tss_high:.0f} mg/L",
-                 f"{bw_seq['total_vol_high_m3']:.0f} m³"],
-            ], columns=["Scenario", "Feed TSS", "Total BW vol / filter"]))
+                ["Low TSS",
+                 f"{tss_low:.0f} mg/L",
+                 f"{bw_seq['total_vol_low_m3']:.0f} m³",
+                 f"{m_sol_low:.0f} kg",
+                 f"{w_tss_low:.0f} mg/L",
+                 f"{m_daily_low:,.0f} kg/d"],
+                ["Avg TSS",
+                 f"{tss_avg:.0f} mg/L",
+                 f"{bw_seq['total_vol_avg_m3']:.0f} m³",
+                 f"{m_sol_avg:.0f} kg",
+                 f"{w_tss_avg:.0f} mg/L",
+                 f"{m_daily_avg:,.0f} kg/d"],
+                ["High TSS",
+                 f"{tss_high:.0f} mg/L",
+                 f"{bw_seq['total_vol_high_m3']:.0f} m³",
+                 f"{m_sol_high:.0f} kg",
+                 f"{w_tss_high:.0f} mg/L",
+                 f"{m_daily_high:,.0f} kg/d"],
+            ], columns=["Scenario", "Feed TSS",
+                        "BW vol / filter", "Solids captured / filter",
+                        "Waste TSS conc.", "Plant solids / day"]))
+            st.caption(
+                f"Run time between BW cycles: {run_time_h:.1f} h  "
+                f"({bw_cycles_day} cycle/d per filter).  "
+                "Solids captured = TSS × Q_filter × run_time.  "
+                "Waste TSS = solids mass / waste volume (excl. rinse)."
+            )
 
     # ─────────────────────────────────────────────────────────────────────
     # TAB 7 · WEIGHT
@@ -999,10 +1021,37 @@ with main:
             q2.metric("Qty",           wt_sup["n_supports"])
             q3.metric("Total weight",  f"{wt_sup['weight_all_supports_kg']:,.0f} kg")
 
-        with st.expander("5 · Consolidated summary", expanded=True):
+        with st.expander("5 · Vessel internals", expanded=True):
+            ii1, ii2, ii3 = st.columns(3)
+            ii1.metric("Strainer nozzles",
+                       f"{wt_int['weight_strainers_kg']:,.0f} kg",
+                       delta=f"{wt_int['n_strainer_nozzles']} × "
+                             f"{wt_int['strainer_material']} "
+                             f"@ {wt_int['weight_per_strainer_kg']:.3f} kg",
+                       delta_color="off")
+            ii2.metric("Air scour header",
+                       f"{wt_int['weight_air_header_kg']:,.0f} kg",
+                       delta=f"DN{wt_int['air_header_dn_mm']} × "
+                             f"{wt_int['air_header_length_m']:.1f} m @ "
+                             f"{wt_int['air_header_kg_per_m']} kg/m",
+                       delta_color="off")
+            ii3.metric("Manholes",
+                       f"{wt_int['weight_manholes_kg']:,.0f} kg",
+                       delta=f"{wt_int['n_manholes']} × {wt_int['manhole_dn']}",
+                       delta_color="off")
+            st.caption(
+                f"Total internals: **{wt_int['weight_internals_kg']:,.0f} kg = "
+                f"{wt_int['weight_internals_t']:.3f} t**"
+            )
+
+        with st.expander("6 · Consolidated summary", expanded=True):
             w_total_final = (wt_body["weight_body_kg"] + nozzle_wt_edited
                              + wt_np["weight_total_kg"]
                              + wt_sup["weight_all_supports_kg"])
+            w_total_final = (wt_body["weight_body_kg"] + nozzle_wt_edited
+                             + wt_np["weight_total_kg"]
+                             + wt_sup["weight_all_supports_kg"]
+                             + wt_int["weight_internals_kg"])
             st.table(pd.DataFrame([
                 ["Shell (cylindrical)",
                  f"{wt_body['weight_shell_kg']:>12,.1f} kg"],
@@ -1010,27 +1059,34 @@ with main:
                  f"{wt_body['weight_two_heads_kg']:>12,.1f} kg"],
                 ["Nozzles (stubs + flanges)",
                  f"{nozzle_wt_edited:>12,.1f} kg"],
-                ["Nozzle plate assembly",
+                ["Nozzle plate + IPE beams",
                  f"{wt_np['weight_total_kg']:>12,.1f} kg"],
                 [f"Supports ({wt_sup['support_type']})",
                  f"{wt_sup['weight_all_supports_kg']:>12,.1f} kg"],
-                ["─" * 28, "─" * 16],
+                ["Strainer nozzles",
+                 f"{wt_int['weight_strainers_kg']:>12,.1f} kg"],
+                ["Air scour header",
+                 f"{wt_int['weight_air_header_kg']:>12,.1f} kg"],
+                ["Manholes",
+                 f"{wt_int['weight_manholes_kg']:>12,.1f} kg"],
+                ["─" * 30, "─" * 16],
                 ["TOTAL EMPTY WEIGHT",
                  f"{w_total_final:>12,.1f} kg"],
                 ["",
                  f"= {w_total_final/1000:.3f} t"],
             ], columns=["Component", "Weight"]))
 
-            e1, e2, e3, e4, e5 = st.columns(5)
-            e1.metric("Shell + heads",  f"{wt_body['weight_body_kg']:,.0f} kg")
-            e2.metric("Nozzles",        f"{nozzle_wt_edited:,.0f} kg")
-            e3.metric("Nozzle plate",   f"{wt_np['weight_total_kg']:,.0f} kg")
-            e4.metric("Supports",       f"{wt_sup['weight_all_supports_kg']:,.0f} kg")
-            e5.metric("TOTAL",          f"{w_total_final/1000:.3f} t",
+            e1, e2, e3, e4, e5, e6 = st.columns(6)
+            e1.metric("Shell+heads", f"{wt_body['weight_body_kg']:,.0f} kg")
+            e2.metric("Nozzles",     f"{nozzle_wt_edited:,.0f} kg")
+            e3.metric("Plate+beams", f"{wt_np['weight_total_kg']:,.0f} kg")
+            e4.metric("Supports",    f"{wt_sup['weight_all_supports_kg']:,.0f} kg")
+            e5.metric("Internals",   f"{wt_int['weight_internals_kg']:,.0f} kg")
+            e6.metric("TOTAL",       f"{w_total_final/1000:.3f} t",
                       delta=f"{w_total_final:,.0f} kg", delta_color="off")
             st.caption(
-                "⚠️  Internals (strainer laterals, air header, underdrains), "
-                "manhole, and platform not yet included."
+                "⚠️  Underdrains, platform/walkway, piping manifolds, "
+                "and instrument connections not included."
             )
 
     # ─────────────────────────────────────────────────────────────────────

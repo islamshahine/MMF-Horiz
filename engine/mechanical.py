@@ -553,6 +553,103 @@ def nozzle_plate_design(
         "plate_vol_m3":           round(vol_plate,           5),
     }
 
+
+
+# =============================================================================
+# VESSEL INTERNALS WEIGHT
+# =============================================================================
+
+# Standard pipe weight per metre (kg/m) — carbon steel Sch 40
+# Source: ASME B36.10M
+PIPE_WEIGHT_KG_M = {
+    50:  3.23,  80:  5.31,  100: 7.09,  150: 12.15,
+    200: 20.10, 250: 28.26, 300: 36.69, 400: 55.87,
+}
+
+# Strainer nozzle unit weights (one nozzle body, no base)
+STRAINER_WEIGHT_KG = {
+    "SS316":  0.35,   # stainless steel — pressure service
+    "HDPE":   0.08,   # high-density polyethylene — standard duty
+    "PP":     0.06,   # polypropylene — low pressure
+}
+
+# Manhole standard weights (cover + neck stub, DN 600)
+MANHOLE_WEIGHT_KG = {
+    "DN 600": 130,
+    "DN 800": 210,
+}
+
+
+def internals_weight(
+    n_strainer_nozzles: int,
+    strainer_material: str      = "SS316",
+    air_header_dn_mm: int       = 200,
+    air_header_length_m: float  = 0.0,    # = cyl_len if not overridden
+    cyl_len_m: float            = 21.55,
+    manhole_dn: str             = "DN 600",
+    n_manholes: int             = 1,
+    density_kg_m3: float        = STEEL_DENSITY_KG_M3,
+) -> dict:
+    """
+    Weight of internal components:
+      - Strainer lateral nozzles (screwed into nozzle plate bores)
+      - Air scour distribution header pipe
+      - Manhole(s) with cover
+
+    Parameters
+    ----------
+    n_strainer_nozzles  : Number of strainer nozzles (= n_bores from nozzle plate)
+    strainer_material   : "SS316" | "HDPE" | "PP"
+    air_header_dn_mm    : Air scour header pipe DN, mm
+    air_header_length_m : Header length (defaults to cyl_len if 0)
+    cyl_len_m           : Vessel cylindrical length, m
+    manhole_dn          : Manhole size key
+    n_manholes          : Number of manholes per vessel
+    density_kg_m3       : Steel density (for header pipe)
+
+    Returns
+    -------
+    dict with individual and total weights, kg and tonnes
+    """
+    # Strainer nozzles
+    w_per_nozzle   = STRAINER_WEIGHT_KG.get(strainer_material, 0.35)
+    w_strainers    = n_strainer_nozzles * w_per_nozzle
+
+    # Air scour header
+    L_header       = air_header_length_m if air_header_length_m > 0 else cyl_len_m
+    # Get nearest DN from table
+    dn_options     = sorted(PIPE_WEIGHT_KG_M.keys())
+    dn_actual      = min(dn_options, key=lambda d: abs(d - air_header_dn_mm))
+    w_per_m        = PIPE_WEIGHT_KG_M[dn_actual]
+    w_air_header   = w_per_m * L_header
+
+    # Manhole
+    w_manhole_each = MANHOLE_WEIGHT_KG.get(manhole_dn, 130)
+    w_manholes     = w_manhole_each * n_manholes
+
+    w_total        = w_strainers + w_air_header + w_manholes
+
+    return {
+        # Strainers
+        "n_strainer_nozzles":     n_strainer_nozzles,
+        "strainer_material":      strainer_material,
+        "weight_per_strainer_kg": round(w_per_nozzle, 3),
+        "weight_strainers_kg":    round(w_strainers, 1),
+        # Air header
+        "air_header_dn_mm":       dn_actual,
+        "air_header_length_m":    round(L_header, 3),
+        "air_header_kg_per_m":    w_per_m,
+        "weight_air_header_kg":   round(w_air_header, 1),
+        # Manholes
+        "manhole_dn":             manhole_dn,
+        "n_manholes":             n_manholes,
+        "weight_per_manhole_kg":  w_manhole_each,
+        "weight_manholes_kg":     round(w_manholes, 1),
+        # Total
+        "weight_internals_kg":    round(w_total, 1),
+        "weight_internals_t":     round(w_total / 1000, 4),
+    }
+
 # =============================================================================
 # SADDLE / LEG SUPPORT WEIGHT
 # =============================================================================

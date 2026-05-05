@@ -532,9 +532,26 @@ def bw_sequence(
 
     # TSS of waste stream: approximate — show feed TSS scenarios
     # Detailed mass balance requires filtration run time (handled in app)
+    # ── TSS mass balance ──────────────────────────────────────────────────
+    # M_solids per filter per cycle = TSS × Q_filter × run_time
+    # run_time = 24 / bw_per_day  (hours between BW cycles)
+    # Waste TSS concentration = M_solids / waste_vol
+    run_time_h = 24.0 / bw_per_day_per_filter if bw_per_day_per_filter > 0 else 24.0
+
+    def tss_balance(tss_mg_l, q_filter_m3h):
+        """Solids captured (kg) and waste concentration (mg/L) per filter per cycle."""
+        if q_filter_m3h <= 0 or waste_avg <= 0:
+            return 0.0, 0.0
+        m_solids = tss_mg_l * q_filter_m3h * run_time_h / 1000.0  # kg
+        waste_tss = (m_solids * 1e3) / waste_avg if waste_avg > 0 else 0.0
+        return round(m_solids, 1), round(waste_tss, 0)
+
+    # Placeholder — q_filter passed from app; store formula, fill in app
+    # Store run_time for the app to use
     return {
         "steps":                  steps,
         "dur_total_avg_min":      dur_total,
+        "run_time_h":             round(run_time_h, 2),
         # Per filter per cycle
         "total_vol_low_m3":       round(total_low,   1),
         "total_vol_avg_m3":       round(total_avg,   1),
@@ -546,7 +563,7 @@ def bw_sequence(
         "rinse_vol_daily_m3":     round(rinse_daily, 1),
         "n_filters_total":        n_filters_total,
         "bw_per_day_per_filter":  bw_per_day_per_filter,
-        # TSS
+        # TSS scenarios
         "tss_low_mg_l":           tss_low,
         "tss_avg_mg_l":           tss_avg,
         "tss_high_mg_l":          tss_high,
