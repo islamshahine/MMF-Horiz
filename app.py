@@ -20,10 +20,11 @@ from engine.process    import filter_loading
 from engine.water      import water_properties, FEED_PRESETS, BW_PRESETS
 from engine.mechanical import (
     thickness, apply_thickness_override, empty_weight,
-    nozzle_plate_design, nozzle_plate_area, saddle_weight,
+    nozzle_plate_design, nozzle_plate_area, saddle_weight, internals_weight,
     MATERIALS, RADIOGRAPHY_OPTIONS, JOINT_EFFICIENCY,
     STEEL_DENSITY_KG_M3, SUPPORT_TYPES,
     NOZZLE_DENSITY_MIN, NOZZLE_DENSITY_MAX, NOZZLE_DENSITY_DEFAULT,
+    STRAINER_WEIGHT_KG, MANHOLE_WEIGHT_KG,
 )
 from engine.nozzles import (
     estimate_nozzle_schedule,
@@ -240,6 +241,15 @@ with ctx:
         default_rating  = st.selectbox("Flange rating", FLANGE_RATINGS, index=1)
         nozzle_stub_len = st.number_input("Nozzle stub length (mm)",
                                           value=350, step=50)
+        strainer_mat    = st.selectbox("Strainer material",
+                                       list(STRAINER_WEIGHT_KG.keys()), index=0,
+                                       help="SS316 seawater · HDPE/PP fresh/brackish")
+        air_header_dn   = st.number_input("Air scour header DN (mm)",
+                                          value=200, step=50, key="ah_dn")
+        manhole_dn      = st.selectbox("Manhole size",
+                                       list(MANHOLE_WEIGHT_KG.keys()), index=0)
+        n_manholes      = int(st.number_input("No. of manholes",
+                                               value=1, min_value=0, step=1))
         support_type    = st.selectbox("Support type", SUPPORT_TYPES, key="sup_t")
         if "Saddle" in support_type:
             saddle_h      = st.number_input("Saddle height (m)", value=0.8,
@@ -426,6 +436,31 @@ bw_seq = bw_sequence(
     n_filters_total=streams * n_filters,
     bw_per_day_per_filter=bw_cycles_day,
 )
+
+# ── Block 6: Internals weight ─────────────────────────────────────────────
+wt_int = internals_weight(
+    n_strainer_nozzles=wt_np.get("n_bores", 0),
+    strainer_material=strainer_mat,
+    air_header_dn_mm=int(air_header_dn),
+    cyl_len_m=cyl_len,
+    manhole_dn=manhole_dn,
+    n_manholes=n_manholes,
+    density_kg_m3=steel_density,
+)
+
+# ── TSS mass balance ────────────────────────────────────────────────────────
+run_time_h = bw_seq.get("run_time_h", 24.0)
+waste_vol   = bw_seq.get("waste_vol_avg_m3", 1.0)
+
+def _tss_bal(tss_mg_l):
+    m_sol = tss_mg_l * q_per_filter * run_time_h / 1000.0
+    w_tss = (m_sol * 1e3) / waste_vol if waste_vol > 0 else 0.0
+    m_day = m_sol * (streams * n_filters) * bw_cycles_day
+    return round(m_sol, 1), round(w_tss, 0), round(m_day, 0)
+
+m_sol_low,  w_tss_low,  m_daily_low  = _tss_bal(tss_low)
+m_sol_avg,  w_tss_avg,  m_daily_avg  = _tss_bal(tss_avg)
+m_sol_high, w_tss_high, m_daily_high = _tss_bal(tss_high)
 
 # ── Consolidated weight ────────────────────────────────────────────────────
 nozzle_wt_total = sum(r.get("Total wt (kg)", 0) for r in nozzle_sched)
