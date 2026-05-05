@@ -11,9 +11,18 @@ Block flow (matches calculation dependency order):
   6  Weight summary      → consolidated empty weight
 """
 
+import io
 import math
 import pandas as pd
 import streamlit as st
+
+try:
+    from docx import Document as _DocxDocument
+    from docx.shared import Pt as _Pt, Cm as _Cm
+    from docx.enum.text import WD_ALIGN_PARAGRAPH as _WD_ALIGN
+    _DOCX_OK = True
+except ImportError:
+    _DOCX_OK = False
 
 from engine.geometry   import segment_area, dish_volume
 from engine.process    import filter_loading
@@ -32,7 +41,13 @@ from engine.nozzles import (
 )
 from engine.backwash import (
     backwash_hydraulics, bed_expansion, pressure_drop,
-    collector_check, bw_sequence,
+    bw_sequence,
+)
+from engine.collector_ext import collector_check_ext
+from engine.cartridge import (
+    cartridge_design,
+    ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS, RECOMMENDED_FLUX,
+    MAX_ELEMENTS_PER_HOUSING,
 )
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -170,10 +185,6 @@ with ctx:
 
     # ── Block 3: Nozzle plate ──────────────────────────────────────────────
     with st.expander("🟫 Nozzle plate", expanded=False):
-        np_dp_bar      = st.number_input("Design ΔP (bar)", value=0.5,
-                                         step=0.05, min_value=0.0, key="np_dp",
-                                         help="BW hydraulic backpressure — "
-                                              "will be overridden by Ergun ΔP dirty")
         np_bore_dia    = st.number_input("Bore diameter (mm)", value=50.0,
                                          step=5.0, min_value=10.0, key="np_bd")
         np_density     = st.number_input(
@@ -224,6 +235,11 @@ with ctx:
         collector_h    = st.number_input(
             "BW outlet collector height (m)", value=4.2, step=0.1,
             help="Height from vessel bottom to BW outlet collector / trough")
+        freeboard_mm   = st.number_input(
+            "Min. freeboard (mm)", value=200, step=50, min_value=50,
+            key="fb_mm",
+            help="Minimum clearance required between expanded bed top and "
+                 "collector. Governs max-safe-BW binary search.")
         bw_velocity    = st.number_input("Proposed BW velocity (m/h)",
                                          value=30.0, step=5.0)
         air_scour_rate = st.number_input("Air scour rate (m/h)",
@@ -274,6 +290,23 @@ with ctx:
     with st.expander("⚠️ Thresholds", expanded=False):
         velocity_threshold = st.number_input("Max LV (m/h)",   value=12.0)
         ebct_threshold     = st.number_input("Min EBCT (min)", value=5.0)
+
+    # ── Block 7: Cartridge filter ───────────────────────────────────────────
+    with st.expander("🔷 Cartridge filter", expanded=False):
+        cart_flow   = st.number_input(
+            "Design flow (m³/h)", value=float(total_flow),
+            step=100.0, key="cart_flow",
+            help="Total flow to the cartridge station (usually = plant flow)")
+        cart_size   = st.selectbox(
+            "Element size", ELEMENT_SIZE_LABELS, index=1, key="cart_size")
+        cart_rating = st.selectbox(
+            "Rating (μm)", RATING_UM_OPTIONS, index=1, key="cart_rating")
+        _rlo, _rhi  = RECOMMENDED_FLUX[cart_size]
+        cart_flux   = st.number_input(
+            "Target flux (m³/h / element)",
+            value=round((_rlo + _rhi) / 2.0, 2),
+            step=0.01, min_value=0.01, key="cart_flux",
+            help=f"Recommended {_rlo}–{_rhi} m³/h per element for {cart_size}")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PRE-COMPUTE — all calculations in dependency order
@@ -414,13 +447,14 @@ bw_hyd = backwash_hydraulics(
     filtration_flow_m3h=q_per_filter,
 )
 
-bw_col = collector_check(
+bw_col = collector_check_ext(
     layers=layers,
     nozzle_plate_h_m=nozzle_plate_h,
     collector_h_m=collector_h,
     bw_velocity_m_h=bw_velocity,
     water_temp_c=bw_temp,
     rho_water=rho_bw,
+    min_freeboard_m=freeboard_mm / 1000.0,
 )
 
 bw_exp = bed_expansion(
@@ -461,6 +495,14 @@ def _tss_bal(tss_mg_l):
 m_sol_low,  w_tss_low,  m_daily_low  = _tss_bal(tss_low)
 m_sol_avg,  w_tss_avg,  m_daily_avg  = _tss_bal(tss_avg)
 m_sol_high, w_tss_high, m_daily_high = _tss_bal(tss_high)
+
+# ── Cartridge design ──────────────────────────────────────────────────────
+cart_result = cartridge_design(
+    design_flow_m3h=cart_flow,
+    element_size=cart_size,
+    rating_um=cart_rating,
+    target_flux_m3h_element=cart_flux,
+)
 
 # ── Consolidated weight ────────────────────────────────────────────────────
 nozzle_wt_total = sum(r.get("Total wt (kg)", 0) for r in nozzle_sched)
@@ -503,7 +545,7 @@ with ctx:
 # ══════════════════════════════════════════════════════════════════════════════
 with main:
     (tab_proj, tab_proc, tab_water, tab_vessel,
-     tab_media, tab_bw, tab_weight, tab_report) = st.tabs([
+     tab_media, tab_bw, tab_weight, tab_cart, tab_report) = st.tabs([
         "📋 Project",
         "💧 Process",
         "🌊 Water",
@@ -511,6 +553,7 @@ with main:
         "🧱 Media",
         "🔄 Backwash",
         "⚖️ Weight",
+        "🔷 Cartridge",
         "📄 Report",
     ])
 
@@ -850,12 +893,13 @@ with main:
             cc4.metric("Freeboard",
                        f"{bw_col['freeboard_m']:.3f} m",
                        delta=f"{bw_col['freeboard_pct']:.1f}% of bed",
-                       delta_color="normal" if bw_col["freeboard_m"] >= 0.15
+                       delta_color="normal"
+                       if bw_col["freeboard_m"] >= bw_col["min_freeboard_m"]
                        else "inverse")
 
             st.info(
                 f"**Max safe BW velocity: {bw_col['max_safe_bw_m_h']:.1f} m/h** "
-                f"(maintains ≥ 100 mm freeboard below collector).  "
+                f"(maintains ≥ {freeboard_mm:.0f} mm freeboard below collector).  "
                 f"Proposed BW: **{bw_col['proposed_bw_m_h']:.1f} m/h**."
             )
 
@@ -1125,19 +1169,245 @@ with main:
             )
 
     # ─────────────────────────────────────────────────────────────────────
-    # TAB 8 · REPORT
+    # TAB 8 · CARTRIDGE
+    # ─────────────────────────────────────────────────────────────────────
+    with tab_cart:
+        st.subheader("Cartridge (polishing) filter sizing")
+
+        with st.expander("1 · Sizing", expanded=True):
+            ca1, ca2, ca3 = st.columns(3)
+            ca1.metric("Elements required",  str(cart_result["n_elements"]))
+            ca2.metric("Housings required",
+                       str(cart_result["n_housings"]),
+                       delta=f"{MAX_ELEMENTS_PER_HOUSING} elem./housing max",
+                       delta_color="off")
+            ca3.metric("Actual flux",
+                       f"{cart_result['actual_flux_m3h_element']:.3f} m³/h/elem",
+                       delta=f"{cart_result['actual_flux_m3h_m2']:.2f} m³/h/m²",
+                       delta_color="off")
+            st.caption(
+                f"Element: **{cart_size}**  |  Rating: **{cart_rating} µm**  |  "
+                f"Area/element: {cart_result['element_area_m2']} m²  |  "
+                f"Recommended flux: "
+                f"{cart_result['recommended_flux_lo']}–"
+                f"{cart_result['recommended_flux_hi']} m³/h/element"
+            )
+            st.table(pd.DataFrame([
+                ["Design flow",         f"{cart_result['design_flow_m3h']:,.1f} m³/h"],
+                ["Element size",        cart_result["element_size"]],
+                ["Element area",        f"{cart_result['element_area_m2']} m²"],
+                ["Rating",              f"{cart_result['rating_um']} µm absolute"],
+                ["Target flux",         f"{cart_result['target_flux_m3h_element']:.3f} m³/h/element"],
+                ["Elements required",   str(cart_result["n_elements"])],
+                ["Housings required",   str(cart_result["n_housings"])],
+                ["Max elem./housing",   str(MAX_ELEMENTS_PER_HOUSING)],
+                ["Actual flux",         f"{cart_result['actual_flux_m3h_element']:.3f} m³/h/element"],
+                ["Flux density",        f"{cart_result['actual_flux_m3h_m2']:.3f} m³/h/m²"],
+            ], columns=["Parameter", "Value"]))
+
+        with st.expander("2 · ΔP & performance", expanded=True):
+            cb1, cb2, cb3 = st.columns(3)
+            cb1.metric("ΔP clean",   f"{cart_result['dp_clean_bar']:.4f} bar")
+            cb2.metric("ΔP dirty",   f"{cart_result['dp_dirty_bar']:.4f} bar")
+            cb3.metric("Replace at", f"{cart_result['dp_replacement_bar']:.2f} bar")
+            st.caption(
+                "ΔP model: empirical power-law calibrated to Pall/Parker/3M data.  "
+                "Clean ΔP at actual flux density; dirty ΔP ≈ 4 × clean "
+                "(fully plugged element end-of-life).  "
+                "Replace elements when differential pressure exceeds "
+                f"{cart_result['dp_replacement_bar']:.2f} bar."
+            )
+
+        with st.expander("3 · Economics", expanded=True):
+            cc1, cc2, cc3 = st.columns(3)
+            cc1.metric("Replacement interval", f"{cart_result['replacement_freq_days']} days")
+            cc2.metric("Changes / year",        f"{cart_result['replacements_per_year']:.1f}")
+            cc3.metric("Annual element cost",   f"USD {cart_result['annual_cost_usd']:,.0f}")
+            st.table(pd.DataFrame([
+                ["Cost per element",    f"USD {cart_result['cost_per_element_usd']:,.0f}"],
+                ["Replacement interval", f"{cart_result['replacement_freq_days']} days"],
+                ["Changes / year",      f"{cart_result['replacements_per_year']:.1f}"],
+                ["Total elements",      str(cart_result["n_elements"])],
+                ["Annual cost",         f"USD {cart_result['annual_cost_usd']:,.0f}"],
+            ], columns=["Item", "Value"]))
+            st.caption(
+                "Cost estimates are mid-market indicative values (2024). "
+                "Replacement frequency based on typical TSS loading — "
+                "adjust for actual feed quality."
+            )
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TAB 9 · REPORT
     # ─────────────────────────────────────────────────────────────────────
     with tab_report:
         st.subheader("Calculation summary")
-        st.info("PDF export will be added in the next step.")
 
         w_total_rep = (wt_body["weight_body_kg"] + w_noz
                        + wt_np["weight_total_kg"]
-                       + wt_sup["weight_all_supports_kg"])
+                       + wt_sup["weight_all_supports_kg"]
+                       + wt_int["weight_internals_kg"])
 
+        # ── Word export ────────────────────────────────────────────────────
+        def _build_docx() -> bytes:
+            doc = _DocxDocument()
+
+            # ── Title ──
+            t = doc.add_heading("AQUASIGHT™  Horizontal Multi-Media Filter", 0)
+            t.alignment = _WD_ALIGN.CENTER
+            t2 = doc.add_heading("Calculation Report", 1)
+            t2.alignment = _WD_ALIGN.CENTER
+            doc.add_paragraph("")
+
+            def _tbl(rows_data, cols=("Parameter", "Value")):
+                tbl = doc.add_table(rows=len(rows_data), cols=len(cols))
+                tbl.style = "Table Grid"
+                for i, row_vals in enumerate(rows_data):
+                    for j, v in enumerate(row_vals):
+                        tbl.rows[i].cells[j].text = str(v)
+                return tbl
+
+            # ── 1. Project ──
+            doc.add_heading("1. Project Information", 2)
+            _tbl([
+                ("Project",      project_name),
+                ("Document",     f"{doc_number}  ·  Rev {revision}"),
+                ("Client",       client or "—"),
+                ("Prepared by",  engineer),
+            ])
+            doc.add_paragraph("")
+
+            # ── 2. Process ──
+            doc.add_heading("2. Process Basis", 2)
+            _tbl([
+                ("Total plant flow",          f"{total_flow:,.0f} m³/h"),
+                ("Streams × filters",    f"{streams} × {n_filters}"),
+                ("Redundancy",                f"N to N-{redundancy}"),
+                ("Flow / filter (N)",         f"{q_per_filter:.1f} m³/h"),
+                ("Filtration rate (N)",       f"{q_per_filter/avg_area:.2f} m/h"),
+            ])
+            doc.add_paragraph("")
+
+            # ── 3. Water ──
+            doc.add_heading("3. Water Properties", 2)
+            _tbl([
+                ("",            "Feed",                             "Backwash"),
+                ("Salinity",    f"{feed_sal:.2f} ppt",             f"{bw_sal:.2f} ppt"),
+                ("Temperature", f"{feed_temp:.1f} °C",        f"{bw_temp:.1f} °C"),
+                ("Density",     f"{rho_feed:.3f} kg/m³",      f"{rho_bw:.3f} kg/m³"),
+                ("Viscosity",   f"{mu_feed*1000:.4f} cP",          f"{mu_bw*1000:.4f} cP"),
+            ], cols=("Property", "Feed", "Backwash"))
+            doc.add_paragraph("")
+
+            # ── 4. Vessel ──
+            doc.add_heading("4. Vessel & Mechanical", 2)
+            _tbl([
+                ("Nominal ID",           f"{nominal_id:.3f} m"),
+                ("Real hydraulic ID",    f"{real_id:.4f} m"),
+                ("Total length T/T",     f"{total_length:.3f} m"),
+                ("End geometry",         end_geometry),
+                ("Material",             material_name),
+                ("Shell t_design",       f"{mech['t_shell_design_mm']} mm"),
+                ("Head t_design",        f"{mech['t_head_design_mm']} mm"),
+                ("Outside diameter",     f"{mech['od_m']:.4f} m"),
+                ("Design pressure",      f"{design_pressure:.2f} bar"),
+                ("Corrosion allowance",  f"{corrosion:.1f} mm"),
+            ])
+            doc.add_paragraph("")
+
+            # ── 5. Media ──
+            doc.add_heading("5. Media Design", 2)
+            media_rows = [("Media", "Depth (m)", "d10 (mm)", "CU", "Vol (m³)", "Area (m²)")]
+            for b in base:
+                media_rows.append((
+                    b["Type"],
+                    f"{b['Depth']:.3f}",
+                    f"{b['d10']:.2f}",
+                    f"{b['cu']:.2f}",
+                    f"{b['Vol']:.4f}",
+                    f"{b['Area']:.4f}",
+                ))
+            _tbl(media_rows, cols=("Media", "Depth (m)", "d10 (mm)", "CU",
+                                   "Vol (m³)", "Area (m²)"))
+            doc.add_paragraph("")
+
+            # ── 6. Backwash ──
+            doc.add_heading("6. Backwash — Collector Check", 2)
+            _tbl([
+                ("Proposed BW velocity",  f"{bw_velocity:.1f} m/h"),
+                ("Max safe BW velocity",  f"{bw_col['max_safe_bw_m_h']:.1f} m/h"),
+                ("Min. freeboard",        f"{freeboard_mm:.0f} mm"),
+                ("Actual freeboard",
+                 f"{bw_col['freeboard_m']:.3f} m  ({bw_col['freeboard_pct']:.1f}%)"),
+                ("Status",                bw_col["status"]),
+            ])
+            doc.add_paragraph("")
+
+            # ── 7. Weight ──
+            doc.add_heading("7. Empty Weight Summary", 2)
+            _tbl([
+                ("Shell (cylindrical)",      f"{wt_body['weight_shell_kg']:,.1f} kg"),
+                ("2 × Dish ends",       f"{wt_body['weight_two_heads_kg']:,.1f} kg"),
+                ("Nozzles",                  f"{w_noz:,.1f} kg"),
+                ("Nozzle plate + IPE beams", f"{wt_np['weight_total_kg']:,.1f} kg"),
+                (f"Supports ({wt_sup['support_type']})",
+                                             f"{wt_sup['weight_all_supports_kg']:,.1f} kg"),
+                ("Strainer nozzles",         f"{wt_int['weight_strainers_kg']:,.1f} kg"),
+                ("Air scour header",         f"{wt_int['weight_air_header_kg']:,.1f} kg"),
+                ("Manholes",                 f"{wt_int['weight_manholes_kg']:,.1f} kg"),
+                ("TOTAL EMPTY WEIGHT",
+                 f"{w_total_rep:,.1f} kg  =  {w_total_rep/1000:.3f} t"),
+            ])
+            doc.add_paragraph("")
+
+            # ── 8. Cartridge ──
+            doc.add_heading("8. Cartridge Filter", 2)
+            _tbl([
+                ("Design flow",          f"{cart_result['design_flow_m3h']:,.1f} m³/h"),
+                ("Element size",         cart_result["element_size"]),
+                ("Rating",               f"{cart_result['rating_um']} µm"),
+                ("Elements required",    str(cart_result["n_elements"])),
+                ("Housings required",    str(cart_result["n_housings"])),
+                ("Actual flux",          f"{cart_result['actual_flux_m3h_element']:.3f} m³/h/element"),
+                ("ΔP clean",        f"{cart_result['dp_clean_bar']:.4f} bar"),
+                ("ΔP dirty",        f"{cart_result['dp_dirty_bar']:.4f} bar"),
+                ("Annual element cost",  f"USD {cart_result['annual_cost_usd']:,.0f}"),
+            ])
+            doc.add_paragraph("")
+
+            # ── Sign-off ──
+            doc.add_page_break()
+            doc.add_heading("Sign-off", 2)
+            doc.add_paragraph(f"Prepared by:  {engineer}")
+            doc.add_paragraph("Role:  Process Expert — AQUASIGHT™")
+            doc.add_paragraph(f"Document:  {doc_number}  ·  Rev {revision}")
+            doc.add_paragraph(f"Project:  {project_name}")
+
+            buf = io.BytesIO()
+            doc.save(buf)
+            buf.seek(0)
+            return buf.getvalue()
+
+        # ── Download button ────────────────────────────────────────────────
+        rep_col, _ = st.columns([2, 3])
+        with rep_col:
+            if _DOCX_OK:
+                st.download_button(
+                    label="⬇️  Download Word report (.docx)",
+                    data=_build_docx(),
+                    file_name=f"{doc_number}_Rev{revision}.docx",
+                    mime=("application/vnd.openxmlformats-officedocument"
+                          ".wordprocessingml.document"),
+                )
+            else:
+                st.warning("Install python-docx to enable Word export: "
+                           "`pip install python-docx`")
+
+        st.divider()
+
+        # ── Inline markdown summary ────────────────────────────────────────
         st.markdown(f"""
-**Project:** {project_name}  
-**Document:** {doc_number} · Rev {revision}  
+**Project:** {project_name}
+**Document:** {doc_number} · Rev {revision}
 **Prepared by:** {engineer}
 
 ---
@@ -1175,17 +1445,27 @@ with main:
 |---|---|
 | Proposed BW velocity | {bw_velocity:.1f} m/h |
 | Max safe BW velocity | {bw_col['max_safe_bw_m_h']:.1f} m/h |
+| Min. freeboard | {freeboard_mm:.0f} mm |
 | Freeboard | {bw_col['freeboard_m']:.3f} m ({bw_col['freeboard_pct']:.1f}%) |
 | Status | {bw_col['status']} |
 
-### Empty weight (current scope)
+### Empty weight
 | Component | Weight |
 |---|---|
 | Shell + 2 heads | {wt_body['weight_body_kg']:,.0f} kg |
 | Nozzles | {w_noz:,.0f} kg |
 | Nozzle plate assembly | {wt_np['weight_total_kg']:,.0f} kg |
 | Supports | {wt_sup['weight_all_supports_kg']:,.0f} kg |
+| Internals | {wt_int['weight_internals_kg']:,.0f} kg |
 | **Total** | **{w_total_rep:,.0f} kg = {w_total_rep/1000:.3f} t** |
+
+### Cartridge filter
+| Parameter | Value |
+|---|---|
+| Design flow | {cart_result['design_flow_m3h']:,.1f} m³/h |
+| Element | {cart_result['element_size']} · {cart_result['rating_um']} µm |
+| Elements / Housings | {cart_result['n_elements']} elem. / {cart_result['n_housings']} housings |
+| Annual element cost | USD {cart_result['annual_cost_usd']:,.0f} |
         """)
 
         col_sign, _ = st.columns([1, 2])
