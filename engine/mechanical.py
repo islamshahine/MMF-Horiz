@@ -149,6 +149,53 @@ def thickness(
     }
 
 
+def apply_thickness_override(
+    mech: dict,
+    override_shell_mm: float = 0.0,
+    override_head_mm:  float = 0.0,
+    internal_lining_mm: float = 0.0,
+    nominal_id_m: float = 0.0,
+) -> dict:
+    """
+    Apply user thickness overrides (must be >= t_min + CA).
+    Recompute real hydraulic ID and OD from the overridden values.
+
+    The nominal ID chosen by the user IS the internal diameter before lining.
+    Real hydraulic ID = nominal ID - 2 × lining thickness.
+    This real ID feeds ALL hydraulic calculations downstream.
+    """
+    result = dict(mech)
+
+    # Shell override — floor at t_design (already includes CA)
+    if override_shell_mm > 0:
+        if override_shell_mm < mech["t_shell_min_mm"] + (mech.get("corrosion_mm", 1.5)):
+            override_shell_mm = mech["t_shell_design_mm"]   # silently enforce floor
+        result["t_shell_design_mm"] = math.ceil(override_shell_mm)
+        result["shell_overridden"]  = True
+    else:
+        result["shell_overridden"]  = False
+
+    # Head override
+    if override_head_mm > 0:
+        if override_head_mm < mech["t_head_min_mm"] + (mech.get("corrosion_mm", 1.5)):
+            override_head_mm = mech["t_head_design_mm"]
+        result["t_head_design_mm"] = math.ceil(override_head_mm)
+        result["head_overridden"]  = True
+    else:
+        result["head_overridden"]  = False
+
+    # Real hydraulic ID (used in ALL hydraulic calculations)
+    real_id = nominal_id_m - 2.0 * internal_lining_mm / 1000.0
+    result["real_id_m"]    = round(real_id, 4)
+    result["nominal_id_m"] = round(nominal_id_m, 4)
+    result["lining_mm"]    = internal_lining_mm
+
+    # OD from real ID + 2 × shell thickness
+    result["od_m"] = round(real_id + 2.0 * result["t_shell_design_mm"] / 1000.0, 4)
+
+    return result
+
+
 # =============================================================================
 # STEEL DENSITY
 # =============================================================================
@@ -248,4 +295,420 @@ def empty_weight(
         "weight_two_heads_kg":  round(w_two_heads, 1),
         "weight_body_kg":       round(w_body, 1),
         "weight_body_t":        round(w_body / 1000, 3),
+    }
+
+
+# =============================================================================
+# NOZZLE PLATE — GEOMETRY, BORE LAYOUT, THICKNESS DESIGN, AND WEIGHT
+# =============================================================================
+
+# Nozzle density range (nozzles/m²) — water-treatment industry standard
+NOZZLE_DENSITY_MIN     = 45.0
+NOZZLE_DENSITY_MAX     = 55.0
+NOZZLE_DENSITY_DEFAULT = 50.0
+
+_KGF_CM2_TO_PA = 98_066.5   # 1 kgf/cm² in Pa
+
+
+def nozzle_plate_area(
+    h_m: float,
+    vessel_id_m: float,
+    cyl_len_m: float,
+    h_dish_m: float,
+    n_integration: int = 5000,
+) -> dict:
+    """
+    Horizontal nozzle (strainer support) plate area at height h from vessel bottom.
+
+    The plate is a HORIZONTAL flat shelf running the full length of the vessel.
+    It is NOT a cross-sectional disk — it lies flat at elevation h.
+
+    Three components
+    ----------------
+    1. Cylindrical section : chord(h) × cyl_len
+       where chord(h) = 2 × sqrt(R² − (R−h)²)
+
+    2. Each dish end (×2)  : ∫₀^h_dish  chord(h, R_z) dz
+       where R_z = R × sqrt(1 − (z/h_dish)²)  (ellipsoidal radius at axial pos z)
+       The plate is flat — height h is fixed in space.  As z increases into the
+       dish, the local vessel radius R_z shrinks, so the chord narrows and
+       eventually reaches zero where the dish wall drops below h.
+
+    Integration is numerical (5 000 steps, error < 0.01 %).
+
+    Parameters
+    ----------
+    h_m          : Plate height from vessel bottom, m
+    vessel_id_m  : Vessel internal diameter, m
+    cyl_len_m    : Straight (tangent-to-tangent) cylindrical length, m
+    h_dish_m     : Dish depth (h_dish = D/4 for 2:1 ellipsoidal), m
+    n_integration: Number of integration steps for dish end
+
+    Returns
+    -------
+    dict with keys:
+        chord_m            plate width at vessel centreline, m
+        theta_deg          subtended half-angle, degrees
+        area_cyl_m2        plate area in cylindrical section, m²
+        area_one_dish_m2   plate area in one dish end, m²
+        area_both_dish_m2  plate area in both dish ends, m²
+        area_total_m2      total plate face area, m²
+    """
+    R = vessel_id_m / 2.0
+
+    def _chord(R_z: float, h: float) -> float:
+        if h <= 0 or R_z <= 0 or h >= 2 * R_z:
+            return 0.0
+        return 2.0 * math.sqrt(max(0.0, R_z**2 - (R_z - h)**2))
+
+    chord_at_h = _chord(R, h_m)
+    area_cyl   = chord_at_h * cyl_len_m
+
+    dz = h_dish_m / n_integration
+    area_one_dish = sum(
+        _chord(R * math.sqrt(max(0.0, 1.0 - (i * dz / h_dish_m)**2)), h_m) * dz
+        for i in range(n_integration)
+    )
+
+    # Half-angle (θ) for reference
+    if chord_at_h > 0 and R > 0:
+        val   = max(-1.0, min(1.0, (R - h_m) / R))
+        theta = math.degrees(2 * math.acos(val))
+    else:
+        theta = 0.0
+
+    return {
+        "chord_m":           round(chord_at_h,        4),
+        "theta_deg":         round(theta,              2),
+        "area_cyl_m2":       round(area_cyl,           4),
+        "area_one_dish_m2":  round(area_one_dish,      4),
+        "area_both_dish_m2": round(2 * area_one_dish,  4),
+        "area_total_m2":     round(area_cyl + 2 * area_one_dish, 4),
+    }
+
+
+def nozzle_plate_design(
+    vessel_id_m: float,
+    cyl_len_m: float,
+    h_dish_m: float,
+    h_plate_m: float,
+    design_dp_bar: float,
+    media_layers: list,
+    water_density_kg_m3: float   = 1025.0,
+    nozzle_density_per_m2: float = NOZZLE_DENSITY_DEFAULT,
+    bore_diameter_mm: float      = 50.0,
+    beam_spacing_mm: float       = 500.0,
+    allowable_stress_kgf_cm2: float = 1200.0,
+    corrosion_allowance_mm: float   = 1.5,
+    density_kg_m3: float         = STEEL_DENSITY_KG_M3,
+    override_thickness_mm: float = 0.0,
+) -> dict:
+    """
+    Full nozzle plate design: geometry -> loads -> plate thickness -> support
+    beams -> bore layout -> weight.
+
+    STRUCTURAL MODEL
+    ----------------
+    The nozzle plate assembly consists of two components:
+
+    1. FLAT PLATE  — thin steel plate carrying distributed pressure.
+       Spans between support beams (effective span = beam_spacing).
+       Formula: Roark Table 11.4, case 10b (long plate, simply supported):
+           t = b_eff * sqrt(q / (2 * S_allow))
+       where b_eff = beam_spacing_mm.
+
+    2. SUPPORT BEAMS (stiffener ribs) — carry the plate load to the vessel shell.
+       Span = chord at plate elevation (simply supported at shell wall welds).
+       Line load on one beam = q_total * beam_spacing.
+       Required section modulus: Z = M_max / S_allow = (q_line * chord²/8) / S_allow.
+       Closest standard IPE section is selected; its unit weight * chord * n_beams
+       gives total beam weight.
+
+    LOADING
+    -------
+    q_dp    = design_dp_bar * 1e5              [Pa]  — BW hydraulic, upward
+    q_media = sum(rho_sat_i * g * depth_i)    [Pa]  — saturated media, downward
+    q_total = q_dp + q_media                         — worst-case envelope
+    """
+    g = 9.81
+
+    # ── Geometry ──────────────────────────────────────────────────────────────
+    geo = nozzle_plate_area(
+        h_m=h_plate_m,
+        vessel_id_m=vessel_id_m,
+        cyl_len_m=cyl_len_m,
+        h_dish_m=h_dish_m,
+    )
+    area_total = geo["area_total_m2"]
+    chord      = geo["chord_m"]
+
+    # ── Loads ─────────────────────────────────────────────────────────────────
+    q_dp = design_dp_bar * 1e5
+    q_media = sum(
+        (L.get("rho_p_eff", 2650) * (1 - L.get("epsilon0", 0.42))
+         + water_density_kg_m3 * L.get("epsilon0", 0.42))
+        * g * L.get("Depth", 0.0)
+        for L in media_layers
+    )
+    q_total = q_dp + q_media
+
+    # ── Plate thickness (beam spacing is the effective span) ───────────────────
+    S_pa           = allowable_stress_kgf_cm2 * _KGF_CM2_TO_PA
+    b_eff_m        = beam_spacing_mm / 1000.0
+    t_calc_mm      = b_eff_m * math.sqrt(q_total / (2 * S_pa)) * 1000
+    t_calc_mm     *= 1.10          # 10 % bore-opening stress concentration
+    t_min_mm       = t_calc_mm
+    t_design_mm    = math.ceil(t_calc_mm + corrosion_allowance_mm)
+    t_used_mm      = override_thickness_mm if override_thickness_mm > 0 else float(t_design_mm)
+    thickness_src  = "User override" if override_thickness_mm > 0                      else "Calculated (Roark long plate, simply supported)"
+
+    # ── Support beams ─────────────────────────────────────────────────────────
+    # Standard IPE sections: {name: (Z_cm3, unit_weight_kg_m)}
+    IPE = {
+        "IPE 160": (123,  15.8),
+        "IPE 200": (194,  22.4),
+        "IPE 240": (324,  30.7),
+        "IPE 270": (395,  36.1),
+        "IPE 300": (557,  42.2),
+        "IPE 330": (713,  49.1),
+        "IPE 360": (904,  57.1),
+        "IPE 400": (1156, 66.3),
+        "IPE 450": (1500, 77.6),
+        "IPE 500": (1928, 90.7),
+    }
+    b_sp_m   = beam_spacing_mm / 1000.0
+    q_line   = q_total * b_sp_m             # N/m  (line load per beam)
+    M_max    = q_line * chord**2 / 8        # N·m
+    Z_req_cm3 = M_max / S_pa * 1e6         # cm³
+
+    # Select lightest adequate section
+    beam_name, beam_Z, beam_w = "IPE 500", 1928, 90.7  # default to heaviest if none fits
+    for name, (Z, w) in IPE.items():
+        if Z >= Z_req_cm3:
+            beam_name, beam_Z, beam_w = name, Z, w
+            break
+
+    n_beams       = math.ceil(cyl_len_m / b_sp_m) + 1
+    weight_beams  = n_beams * chord * beam_w          # kg
+
+    # ── Plate weight ──────────────────────────────────────────────────────────
+    # Bore layout
+    n_bores_min  = math.ceil(NOZZLE_DENSITY_MIN * area_total)
+    n_bores_max  = math.floor(NOZZLE_DENSITY_MAX * area_total)
+    n_bores      = max(n_bores_min,
+                       min(n_bores_max, round(nozzle_density_per_m2 * area_total)))
+    bore_a_each  = math.pi / 4 * (bore_diameter_mm / 1000) ** 2
+    bores_area   = bore_a_each * n_bores
+    net_area     = max(area_total - bores_area, 0.0)
+    open_ratio   = bores_area / area_total if area_total > 0 else 0.0
+    act_density  = n_bores / area_total if area_total > 0 else 0.0
+
+    t_plate_m    = t_used_mm / 1000.0
+    vol_plate    = net_area * t_plate_m
+    weight_plate = vol_plate * density_kg_m3
+
+    weight_total = weight_plate + weight_beams
+
+    return {
+        # Geometry
+        "h_plate_m":              round(h_plate_m,          3),
+        "chord_m":                geo["chord_m"],
+        "theta_deg":              geo["theta_deg"],
+        "area_cyl_m2":            geo["area_cyl_m2"],
+        "area_one_dish_m2":       geo["area_one_dish_m2"],
+        "area_both_dish_m2":      geo["area_both_dish_m2"],
+        "area_total_m2":          round(area_total,          4),
+        # Bore layout
+        "n_bores":                n_bores,
+        "n_bores_min":            n_bores_min,
+        "n_bores_max":            n_bores_max,
+        "bore_diameter_mm":       bore_diameter_mm,
+        "bore_area_each_m2":      round(bore_a_each,         6),
+        "bores_total_area_m2":    round(bores_area,          4),
+        "net_area_m2":            round(net_area,            4),
+        "open_ratio_pct":         round(open_ratio * 100,    2),
+        "actual_density_per_m2":  round(act_density,         1),
+        # Loads
+        "q_dp_kpa":               round(q_dp    / 1000,      2),
+        "q_media_kpa":            round(q_media / 1000,      2),
+        "q_total_kpa":            round(q_total / 1000,      2),
+        # Plate thickness
+        "beam_spacing_mm":        beam_spacing_mm,
+        "t_min_mm":               round(t_min_mm,            2),
+        "t_design_mm":            t_design_mm,
+        "t_used_mm":              t_used_mm,
+        "thickness_source":       thickness_src,
+        "allowable_stress_kgf_cm2": allowable_stress_kgf_cm2,
+        # Support beams
+        "beam_section":           beam_name,
+        "beam_Z_cm3":             beam_Z,
+        "beam_Z_req_cm3":         round(Z_req_cm3,           1),
+        "beam_unit_weight_kg_m":  beam_w,
+        "n_beams":                n_beams,
+        "M_max_kNm":              round(M_max / 1000,        2),
+        "weight_beams_kg":        round(weight_beams,        1),
+        # Weight
+        "weight_plate_kg":        round(weight_plate,        1),
+        "weight_total_kg":        round(weight_total,        1),
+        "plate_vol_m3":           round(vol_plate,           5),
+    }
+
+# =============================================================================
+# SADDLE / LEG SUPPORT WEIGHT
+# =============================================================================
+
+# Saddle geometry constants (Zick / industry standard proportions)
+# Width of saddle web plate = 1/6 of vessel OD (typical)
+# Saddle contact arc = 120° (standard; 2-saddle horizontal vessel)
+_SADDLE_ARC_DEG   = 120.0
+_SADDLE_WIDTH_RATIO = 1 / 6      # saddle width ≈ OD / 6
+
+# Leg support: square hollow section or pipe leg — approximated as solid square bar
+# for weight estimation purposes
+_LEG_SOLID_FRACTION = 0.5        # hollow section ≈ 50 % of solid area (conservative)
+
+SUPPORT_TYPES = ["Saddle (2-support)",
+                 "Saddle (3-support)",
+                 "Leg (3-leg)",
+                 "Leg (4-leg)"]
+
+
+def saddle_weight(
+    vessel_od_m: float,
+    vessel_length_m: float,
+    support_type: str                 = "Saddle (2-support)",
+    saddle_height_m: float            = 0.8,
+    leg_height_m: float               = 1.2,
+    leg_section_mm: float             = 150.0,
+    base_plate_thickness_mm: float    = 20.0,
+    gusset_thickness_mm: float        = 12.0,
+    density_kg_m3: float              = STEEL_DENSITY_KG_M3,
+) -> dict:
+    """
+    Estimate support structure weight for a horizontal pressure vessel.
+
+    Two configurations:
+
+    SADDLE SUPPORTS (Zick saddle)
+    ─────────────────────────────
+    Each saddle is made of three components:
+      1. Web plate  — curved plate conforming to the vessel OD over 120°
+                     thickness ≈ vessel wall thickness proxy (use shell t);
+                     estimated here as 16 mm flat equivalent.
+      2. Base plate — rectangular steel plate sitting on the foundation.
+                     Width = saddle width (OD/6), Length = OD × 0.8.
+      3. Two gusset plates — triangular stiffeners on each side.
+
+    LEG SUPPORTS
+    ─────────────
+    Each leg assembly = one vertical leg (hollow square section) +
+    one base plate + two gusset plates welded to the vessel shell.
+
+    Parameters
+    ----------
+    vessel_od_m            : Vessel outside diameter, m
+    vessel_length_m        : Total vessel length (T/T), m
+    support_type           : One of SUPPORT_TYPES
+    saddle_height_m        : Height from foundation to vessel centreline minus R, m
+    leg_height_m           : Leg height from foundation to vessel bottom, m
+    leg_section_mm         : Leg hollow section outer dimension, mm (square)
+    base_plate_thickness_mm: Thickness of base plate under each saddle/leg, mm
+    gusset_thickness_mm    : Thickness of each triangular gusset plate, mm
+    density_kg_m3          : Steel density, kg/m³
+
+    Returns
+    -------
+    dict with keys (all weights in kg):
+        support_type
+        n_supports
+        weight_web_or_leg_kg    weight of web plates (saddle) or leg columns (legs)
+        weight_base_plates_kg   weight of all base plates
+        weight_gussets_kg       weight of all gusset plates
+        weight_per_support_kg   total weight of one support assembly
+        weight_all_supports_kg  total weight (all supports)
+        weight_all_supports_t   same in metric tons
+        notes                   brief engineering note
+    """
+    R   = vessel_od_m / 2.0
+    t_b = base_plate_thickness_mm / 1000.0
+    t_g = gusset_thickness_mm     / 1000.0
+
+    # Number of supports
+    if "2-support" in support_type or "2-saddle" in support_type.lower():
+        n = 2
+    elif "3-support" in support_type or "3-saddle" in support_type.lower():
+        n = 3
+    elif "3-leg" in support_type:
+        n = 3
+    else:
+        n = 4
+
+    if "Saddle" in support_type:
+        # ── SADDLE ───────────────────────────────────────────────────────────
+        # 1. Web plate: curved, arc = 120°, height = saddle_height, t ≈ 16 mm
+        arc_rad      = math.radians(_SADDLE_ARC_DEG)
+        arc_length   = arc_rad * R                          # half arc on one side, m
+        web_t        = 0.016                                # m — standard 16 mm web plate
+        saddle_width = max(vessel_od_m * _SADDLE_WIDTH_RATIO, 0.15)  # m, min 150 mm
+        web_area     = arc_length * 2 * saddle_height_m    # 2 sides × arc × height
+        vol_web      = web_area * web_t
+        w_web        = vol_web * density_kg_m3
+
+        # 2. Base plate: width × length × thickness
+        base_w       = saddle_width + 0.10                 # 50 mm overhang each side
+        base_l       = vessel_od_m * 0.80
+        vol_base     = base_w * base_l * t_b
+        w_base       = vol_base * density_kg_m3
+
+        # 3. Gusset plates (2 per saddle): right-triangle, legs = saddle_height × saddle_width/2
+        gusset_leg_v = saddle_height_m
+        gusset_leg_h = saddle_width / 2
+        area_gusset  = 0.5 * gusset_leg_v * gusset_leg_h  # one triangle
+        vol_gussets  = 2 * area_gusset * t_g
+        w_gussets    = vol_gussets * density_kg_m3
+
+        note = (f"Zick saddle, 120° arc, web t=16 mm, "
+                f"base {base_w*1000:.0f}×{base_l*1000:.0f} mm, "
+                f"2 gussets t={gusset_thickness_mm:.0f} mm per saddle")
+
+    else:
+        # ── LEGS ─────────────────────────────────────────────────────────────
+        # 1. Leg column: hollow square section, outer dim = leg_section_mm,
+        #    wall ≈ section/10 (typical for SHS), height = leg_height
+        s    = leg_section_mm / 1000.0                     # m, outer side
+        t_w  = s / 10.0                                    # m, wall thickness
+        area_outer = s ** 2
+        area_inner = (s - 2 * t_w) ** 2
+        area_shs   = area_outer - area_inner               # hollow section area
+        vol_leg    = area_shs * leg_height_m
+        w_web      = vol_leg * density_kg_m3               # reuse key name for consistency
+
+        # 2. Base plate: square, 2× leg section, standard thickness
+        base_side  = s * 2.0
+        vol_base   = base_side ** 2 * t_b
+        w_base     = vol_base * density_kg_m3
+
+        # 3. Gussets (2 per leg): triangular, leg_section × leg_section / 2
+        area_gusset = 0.5 * s * s
+        vol_gussets = 2 * area_gusset * t_g
+        w_gussets   = vol_gussets * density_kg_m3
+
+        note = (f"Hollow square section {leg_section_mm:.0f}×{leg_section_mm:.0f} mm, "
+                f"t_wall={t_w*1000:.1f} mm, h={leg_height_m:.2f} m, "
+                f"base {base_side*1000:.0f}×{base_side*1000:.0f} mm, "
+                f"2 gussets t={gusset_thickness_mm:.0f} mm per leg")
+
+    w_per    = w_web + w_base + w_gussets
+    w_total  = w_per * n
+
+    return {
+        "support_type":             support_type,
+        "n_supports":               n,
+        "weight_web_or_leg_kg":     round(w_web    * n, 1),
+        "weight_base_plates_kg":    round(w_base   * n, 1),
+        "weight_gussets_kg":        round(w_gussets * n, 1),
+        "weight_per_support_kg":    round(w_per,  1),
+        "weight_all_supports_kg":   round(w_total, 1),
+        "weight_all_supports_t":    round(w_total / 1000, 4),
+        "notes":                    note,
     }

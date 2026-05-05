@@ -1,0 +1,554 @@
+"""
+engine/backwash.py
+──────────────────
+Backwash and media expansion for horizontal multi-media filters.
+
+Four modules
+------------
+1. backwash_hydraulics   BW pump flow, air-scour blower capacity
+2. bed_expansion         Richardson-Zaki fluidisation per layer
+3. pressure_drop         Ergun equation  — clean / moderate / dirty
+4. bw_sequence           BW step schedule, waste volumes & TSS
+"""
+
+import math
+
+GRAVITY         = 9.81       # m/s²
+_RHO_WATER_DEF  = 1025.0     # kg/m³
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# HELPERS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _viscosity(temp_c: float) -> float:
+    """Dynamic viscosity of water, Pa·s  (Vogel equation)."""
+    return 2.414e-5 * 10 ** (247.8 / (temp_c + 133.15))
+
+
+def _archimedes(d_m: float, rho_p: float, rho_f: float, mu: float) -> float:
+    """Archimedes number using particle diameter d_m."""
+    if d_m <= 0:
+        return 0.0
+    return d_m**3 * rho_f * (rho_p - rho_f) * GRAVITY / mu**2
+
+
+def _terminal_velocity(d_m: float, rho_p: float, rho_f: float, mu: float) -> float:
+    """
+    Terminal settling velocity, m/s.
+    Stokes / Allen intermediate / Newton via Archimedes number.
+    Returns 0 for degenerate inputs.
+    """
+    if d_m <= 0:
+        return 0.0
+    Ar = _archimedes(d_m, rho_p, rho_f, mu)
+    if Ar < 36:
+        return d_m**2 * (rho_p - rho_f) * GRAVITY / (18.0 * mu)
+    elif Ar < 83_000:
+        return (0.153 * d_m**1.14
+                * ((rho_p - rho_f) * GRAVITY / rho_f) ** 0.714
+                / (mu / rho_f) ** 0.428)
+    else:
+        return 1.74 * math.sqrt(d_m * (rho_p - rho_f) * GRAVITY / rho_f)
+
+
+def _rz_exponent(Re_mf: float) -> float:
+    """
+    Richardson-Zaki n evaluated at Re_mf (Wen & Yu proxy).
+    Calibrated to filter media expansion data.
+    """
+    if Re_mf < 0.2:   return 4.65
+    if Re_mf < 1.0:   return 4.35 * Re_mf ** (-0.03)
+    if Re_mf < 500.0: return 4.45 * Re_mf ** (-0.1)
+    return 2.39
+
+
+def _u_mf_wen_yu(d_m: float, rho_p: float, rho_f: float, mu: float) -> tuple:
+    """
+    Minimum fluidisation velocity — Wen & Yu (1966).
+    Standard for granular filter media expansion design.
+
+        Re_mf = sqrt(33.7^2 + 0.0408*Ar) - 33.7
+        u_mf  = Re_mf * mu / (rho_f * d10)
+
+    Returns (u_mf m/s, Re_mf, n_rz).
+    """
+    if d_m <= 0:
+        return 0.0, 0.0, 4.65
+    Ar    = _archimedes(d_m, rho_p, rho_f, mu)
+    Re_mf = max(math.sqrt(33.7**2 + 0.0408 * Ar) - 33.7, 0.0)
+    u_mf  = Re_mf * mu / (rho_f * d_m)
+    n_rz  = _rz_exponent(Re_mf)
+    return u_mf, Re_mf, n_rz
+
+
+# Keep old _u_mf for Ergun pressure drop (different use case)
+def _u_mf(d_m, rho_p, rho_f, mu, eps0, phi=0.85):
+    """Ergun-based u_mf — used only for pressure drop cross-check."""
+    if d_m <= 0 or eps0 <= 0:
+        return 0.0
+    A = 150 * mu * (1 - eps0)**2 / (phi**2 * d_m**2 * eps0**3)
+    B = 1.75 * rho_f * (1 - eps0) / (phi * d_m * eps0**3)
+    C = (rho_p - rho_f) * GRAVITY
+    disc = A**2 + 4 * B * C
+    if disc < 0 or B == 0:
+        return 0.0
+    return (-A + math.sqrt(disc)) / (2 * B)
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 1. BACKWASH HYDRAULICS
+# ═══════════════════════════════════════════════════════════════════════════
+
+def backwash_hydraulics(
+    filter_area_m2: float,
+    bw_rate_m_h: float         = 30.0,
+    air_scour_rate_m_h: float  = 55.0,
+    filtration_flow_m3h: float = 0.0,
+    bw_safety_factor: float    = 1.10,
+) -> dict:
+    """
+    BW pump flow and air-scour blower capacity.
+
+    BW flow = max(bw_rate × area,  2 × filtration_flow)
+    Air flow = air_scour_rate × area  (volumetric, at vessel conditions)
+
+    Blower power: isothermal compression, ΔP=0.5 bar, η=0.65.
+    """
+    q_bw_area = bw_rate_m_h * filter_area_m2
+    q_bw_2x   = 2.0 * filtration_flow_m3h
+    q_bw      = max(q_bw_area, q_bw_2x)
+    governs   = "BW rate × area" if q_bw_area >= q_bw_2x else "2 × filtration flow"
+
+    q_air     = air_scour_rate_m_h * filter_area_m2
+    p_blower  = (q_air / 3600) * (0.5e5) / 0.65 / 1000   # kW
+
+    return {
+        "q_bw_from_rate_m3h":  round(q_bw_area, 2),
+        "q_bw_from_2x_m3h":    round(q_bw_2x,   2),
+        "q_bw_m3h":            round(q_bw,       2),
+        "bw_governs":          governs,
+        "bw_lv_actual_m_h":    round(q_bw / filter_area_m2, 2),
+        "q_bw_design_m3h":     round(q_bw * bw_safety_factor, 2),
+        "q_air_m3h":           round(q_air, 2),
+        "q_air_design_m3h":    round(q_air * bw_safety_factor, 2),
+        "p_blower_est_kw":     round(p_blower, 2),
+        "bw_rate_m_h":         bw_rate_m_h,
+        "air_scour_rate_m_h":  air_scour_rate_m_h,
+        "filter_area_m2":      round(filter_area_m2, 3),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 2. BED EXPANSION  —  Richardson-Zaki
+# ═══════════════════════════════════════════════════════════════════════════
+
+def layer_expansion(
+    depth_m: float,
+    epsilon0: float,
+    d10_mm: float,
+    rho_p: float,
+    bw_velocity_m_h: float,
+    cu: float            = 1.0,
+    water_temp_c: float  = 27.0,
+    rho_water: float     = _RHO_WATER_DEF,
+) -> dict:
+    """
+    Richardson-Zaki bed expansion for one media layer.
+
+    Methodology (Wen & Yu 1966 / Dharmarajah & Cleasby 1986):
+    1. Ar    = d10^3 * rho_f * (rho_p - rho_f) * g / mu^2
+    2. Re_mf = sqrt(33.7^2 + 0.0408*Ar) - 33.7
+    3. u_mf  = Re_mf * mu / (rho_f * d10)
+    4. n     = R-Z at Re_mf  (proxy for Re_t, calibrated to filter media)
+    5. u_t   = Allen formula with d50 = d10 * sqrt(CU)
+    6. eps_f = (u_bw / u_t)^(1/n)
+    7. Expansion: L_exp = L0*(1-eps0)/(1-eps_f) if eps_f > eps0 else L0
+    """
+    if d10_mm <= 0 or epsilon0 <= 0 or depth_m <= 0:
+        return {
+            "depth_settled_m": round(depth_m, 3), "epsilon0": epsilon0,
+            "d10_mm": d10_mm, "d50_mm": 0.0, "Ar": 0.0, "Re_mf": 0.0,
+            "mu_pa_s": 0.0, "u_mf_m_h": 0.0, "n_rz": 0.0,
+            "u_t_m_h": 0.0, "u_bw_m_h": bw_velocity_m_h,
+            "eps_f": 0.0, "fluidised": False, "elutriation_risk": False,
+            "depth_expanded_m": round(depth_m, 3), "expansion_pct": 0.0,
+            "warning": "Incomplete media data — d10, epsilon0, or depth is zero.",
+        }
+
+    mu  = _viscosity(water_temp_c)
+    d10 = d10_mm / 1000.0
+
+    # 1-4: Wen & Yu u_mf and n
+    Ar    = _archimedes(d10, rho_p, rho_water, mu)
+    Re_mf = math.sqrt(33.7**2 + 0.0408 * Ar) - 33.7
+    Re_mf = max(Re_mf, 0.0)
+    u_mf  = Re_mf * mu / (rho_water * d10)
+    n_rz  = _rz_exponent(Re_mf)
+
+    # 5: u_t with d50 = d10 * sqrt(CU)
+    cu_safe = max(cu, 1.0)
+    d50     = d10 * cu_safe ** 0.5
+    u_t     = _terminal_velocity(d50, rho_p, rho_water, mu)
+
+    # 6: voidage from R-Z
+    u_bw  = bw_velocity_m_h / 3600.0
+    eps_f = (u_bw / u_t) ** (1.0 / n_rz) if u_t > 0 else 0.0
+
+    elutriation = u_bw >= u_t and u_t > 0
+    fluidised   = eps_f > epsilon0 and not elutriation
+
+    if elutriation:
+        depth_exp     = depth_m
+        expansion_pct = 0.0
+        warning = "WARNING: u_bw >= u_t — elutriation risk! Reduce BW rate."
+    elif fluidised:
+        depth_exp     = depth_m * (1.0 - epsilon0) / (1.0 - eps_f)
+        expansion_pct = (depth_exp / depth_m - 1.0) * 100.0
+        warning = ""
+    else:
+        depth_exp     = depth_m
+        expansion_pct = 0.0
+        warning = "u_bw {:.1f} m/h < u_mf {:.1f} m/h — bed rests on plate.".format(
+            bw_velocity_m_h, u_mf * 3600)
+
+    return {
+        "depth_settled_m":  round(depth_m,           3),
+        "epsilon0":         round(epsilon0,           3),
+        "d10_mm":           round(d10_mm,             2),
+        "d50_mm":           round(d50 * 1000,         3),
+        "Ar":               round(Ar,                 1),
+        "Re_mf":            round(Re_mf,              4),
+        "mu_pa_s":          round(mu,                 6),
+        "u_mf_m_h":         round(u_mf * 3600,        2),
+        "n_rz":             round(n_rz,               4),
+        "u_t_m_h":          round(u_t * 3600,         1),
+        "u_bw_m_h":         bw_velocity_m_h,
+        "eps_f":            round(eps_f,              4),
+        "fluidised":        fluidised,
+        "elutriation_risk": elutriation,
+        "depth_expanded_m": round(depth_exp,          3),
+        "expansion_pct":    round(expansion_pct,      1),
+        "warning":          warning,
+    }
+
+
+def bed_expansion(
+    layers: list,
+    bw_velocity_m_h: float,
+    water_temp_c: float = 27.0,
+    rho_water: float    = _RHO_WATER_DEF,
+) -> dict:
+    """Expand all layers; return per-layer results and totals."""
+    results        = []
+    total_settled  = 0.0
+    total_expanded = 0.0
+
+    for L in layers:
+        r = layer_expansion(
+            depth_m=L.get("Depth",     0.5),
+            epsilon0=L.get("epsilon0", 0.42),
+            d10_mm=L.get("d10",        1.0),
+            rho_p=L.get("rho_p_eff",   2650),
+            bw_velocity_m_h=bw_velocity_m_h,
+            cu=L.get("cu",             1.0),
+            water_temp_c=water_temp_c,
+            rho_water=rho_water,
+        )
+        r["media_type"] = L.get("Type", "—")
+        results.append(r)
+        total_settled  += L.get("Depth", 0.0)
+        total_expanded += r["depth_expanded_m"]
+
+    exp_pct = (total_expanded / total_settled - 1) * 100 if total_settled > 0 else 0.0
+    any_warn = any(r["warning"] for r in results)
+
+    return {
+        "layers":               results,
+        "total_settled_m":      round(total_settled,  3),
+        "total_expanded_m":     round(total_expanded, 3),
+        "total_expansion_pct":  round(exp_pct,        1),
+        "bw_velocity_m_h":      bw_velocity_m_h,
+        "water_temp_c":         water_temp_c,
+        "any_warning":          any_warn,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 3. PRESSURE DROP  —  Ergun equation
+# ═══════════════════════════════════════════════════════════════════════════
+
+def _ergun_dp(depth_m, eps, d10_mm, cu, phi, u_m_h, rho_f, mu):
+    u   = u_m_h / 3600
+    d   = (d10_mm * cu if cu > 1.0 else d10_mm) / 1000   # m, use d60 for ΔP
+    if d <= 0 or eps <= 0 or depth_m <= 0:
+        return 0.0
+    A   = 150 * mu * (1 - eps)**2 * u / (phi**2 * d**2 * eps**3)
+    B   = 1.75 * rho_f * (1 - eps) * u**2 / (phi * d * eps**3)
+    return (A + B) * depth_m   # Pa
+
+
+def pressure_drop(
+    layers: list,
+    q_filter_m3h: float,
+    avg_area_m2: float,
+    solid_loading_kg_m2: float   = 1.5,
+    captured_density_kg_m3: float = 1020.0,
+    sphericity: float            = 0.85,
+    water_temp_c: float          = 27.0,
+    rho_water: float             = _RHO_WATER_DEF,
+) -> dict:
+    """
+    Ergun pressure drop: clean, moderate (half-loaded), dirty (full-loaded).
+
+    Solid loading reduces voidage: Δε = (load_per_layer / ρ_captured) / depth.
+    d_60 = d_10 × CU used as effective diameter for ΔP (coarser = more resistance).
+    """
+    mu    = _viscosity(water_temp_c)
+    u_m_h = q_filter_m3h / avg_area_m2
+    total_depth = sum(L.get("Depth", 0) for L in layers)
+
+    rows = []
+    dp_c = dp_m = dp_d = 0.0
+
+    for L in layers:
+        depth = L.get("Depth",    0.5)
+        eps0  = L.get("epsilon0", 0.42)
+        d10   = L.get("d10",      1.0)
+        cu    = L.get("cu",       1.5)
+
+        frac      = depth / total_depth if total_depth > 0 else 0
+        sol       = solid_loading_kg_m2 * frac
+        d_eps     = (sol / captured_density_kg_m3) / depth if depth > 0 else 0
+
+        e_clean = eps0
+        e_mod   = max(eps0 - 0.5 * d_eps, 0.05)
+        e_dirty = max(eps0 - d_eps,        0.05)
+
+        c = _ergun_dp(depth, e_clean, d10, cu, sphericity, u_m_h, rho_water, mu)
+        m = _ergun_dp(depth, e_mod,   d10, cu, sphericity, u_m_h, rho_water, mu)
+        d = _ergun_dp(depth, e_dirty, d10, cu, sphericity, u_m_h, rho_water, mu)
+        dp_c += c; dp_m += m; dp_d += d
+
+        rows.append({
+            "Media":              L.get("Type", "—"),
+            "Depth (m)":          round(depth,  3),
+            "LV (m/h)":           round(u_m_h,  2),
+            "ε clean":            round(e_clean, 3),
+            "ε moderate":         round(e_mod,   3),
+            "ε dirty":            round(e_dirty, 3),
+            "ΔP clean (bar)":     round(c / 1e5, 5),
+            "ΔP moderate (bar)":  round(m / 1e5, 5),
+            "ΔP dirty (bar)":     round(d / 1e5, 5),
+        })
+
+    rg = rho_water * GRAVITY
+    return {
+        "layers":           rows,
+        "u_m_h":            round(u_m_h,       2),
+        "solid_loading":    solid_loading_kg_m2,
+        "dp_clean_bar":     round(dp_c / 1e5,   5),
+        "dp_moderate_bar":  round(dp_m / 1e5,   5),
+        "dp_dirty_bar":     round(dp_d / 1e5,   5),
+        "dp_clean_mwc":     round(dp_c / rg,    3),
+        "dp_moderate_mwc":  round(dp_m / rg,    3),
+        "dp_dirty_mwc":     round(dp_d / rg,    3),
+        "dp_clean_kpa":     round(dp_c / 1e3,   3),
+        "dp_moderate_kpa":  round(dp_m / 1e3,   3),
+        "dp_dirty_kpa":     round(dp_d / 1e3,   3),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 3b. COLLECTOR HEIGHT CHECK — media loss guard
+# ═══════════════════════════════════════════════════════════════════════════
+
+def collector_check(
+    layers: list,
+    nozzle_plate_h_m: float,
+    collector_h_m: float,
+    bw_velocity_m_h: float,
+    water_temp_c: float = 27.0,
+    rho_water: float    = _RHO_WATER_DEF,
+) -> dict:
+    """
+    Check whether the expanded media bed reaches the BW outlet collector.
+
+    The BW outlet collector is positioned at a fixed height from the vessel
+    bottom. If the top of the expanded bed reaches or exceeds the collector
+    height, media will be carried out — a critical operational failure.
+
+    The maximum safe BW velocity is found by binary search: the highest
+    u_bw at which the expanded top-of-bed stays below the collector with
+    at least 100mm freeboard.
+
+    Parameters
+    ----------
+    layers          : Media layer list (same format as bed_expansion)
+    nozzle_plate_h_m: Height of nozzle plate from vessel bottom, m
+    collector_h_m   : Height of BW outlet collector from vessel bottom, m
+    bw_velocity_m_h : Proposed BW velocity, m/h
+    water_temp_c    : BW water temperature, °C
+    rho_water       : BW water density, kg/m³
+
+    Returns
+    -------
+    dict:
+        expanded_top_m        top of expanded bed from vessel bottom, m
+        collector_h_m         collector height, m
+        freeboard_m           collector_h - expanded_top, m
+        freeboard_pct         freeboard as % of settled bed depth
+        media_loss_risk       True if expanded top >= collector
+        max_safe_bw_m_h       maximum BW velocity with ≥100mm freeboard
+        proposed_bw_m_h       the velocity that was checked
+        status                "OK", "WARNING", or "CRITICAL"
+        per_layer             expansion results per layer
+    """
+    # Compute expansion at proposed velocity
+    exp = bed_expansion(layers, bw_velocity_m_h, water_temp_c, rho_water)
+
+    total_settled  = exp["total_settled_m"]
+    total_expanded = exp["total_expanded_m"]
+
+    # Top of expanded bed = nozzle plate + expanded media
+    expanded_top = nozzle_plate_h_m + total_expanded
+
+    freeboard   = collector_h_m - expanded_top
+    freq_pct    = freeboard / total_settled * 100 if total_settled > 0 else 0
+
+    media_loss  = expanded_top >= collector_h_m
+    warning     = freeboard < 0.15  # < 150mm freeboard
+
+    # Binary search for max safe BW velocity (≥ 100mm freeboard)
+    lo, hi = 0.0, 200.0
+    for _ in range(40):
+        mid = (lo + hi) / 2
+        exp_test = bed_expansion(layers, mid, water_temp_c, rho_water)
+        top_test = nozzle_plate_h_m + exp_test["total_expanded_m"]
+        if collector_h_m - top_test >= 0.10:
+            lo = mid
+        else:
+            hi = mid
+    max_safe_bw = round(lo, 1)
+
+    if media_loss:
+        status = "CRITICAL — media loss risk"
+    elif warning:
+        status = "WARNING — freeboard < 150 mm"
+    else:
+        status = "OK"
+
+    return {
+        "nozzle_plate_h_m":   round(nozzle_plate_h_m, 3),
+        "collector_h_m":      round(collector_h_m,     3),
+        "settled_top_m":      round(nozzle_plate_h_m + total_settled,  3),
+        "expanded_top_m":     round(expanded_top,      3),
+        "freeboard_m":        round(freeboard,         3),
+        "freeboard_pct":      round(freq_pct,          1),
+        "media_loss_risk":    media_loss,
+        "max_safe_bw_m_h":    max_safe_bw,
+        "proposed_bw_m_h":    bw_velocity_m_h,
+        "status":             status,
+        "per_layer":          exp["layers"],
+        "total_settled_m":    round(total_settled,     3),
+        "total_expanded_m":   round(total_expanded,    3),
+        "total_expansion_pct": exp["total_expansion_pct"],
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 4. BACKWASH SEQUENCE  —  waste volumes & TSS
+# ═══════════════════════════════════════════════════════════════════════════
+
+# Each tuple: (step_name, dur_low_min, dur_avg_min, dur_high_min,
+#              water_rate_m_h, source_label)
+# water_rate_m_h = 0 for air-only steps.
+DEFAULT_BW_SEQUENCE = [
+    ("Partial drainage",      10, 10, 10,  5.0, "Filter drainage"),
+    ("Air scour only",         1,  2,  3,  0.0, "Air"),
+    ("Air + low water rate",   3,  5,  7, 12.5, "Air + brine"),
+    ("High water rate",       10, 10, 10, 30.0, "Brine"),
+    ("Rinse — raw water",     20, 20, 20, 12.5, "Raw water"),
+]
+
+
+def bw_sequence(
+    filter_area_m2: float,
+    tss_scenarios: list         = None,
+    sequence: list              = None,
+    n_filters_total: int        = 16,
+    bw_per_day_per_filter: int  = 1,
+    rho_water: float            = _RHO_WATER_DEF,
+) -> dict:
+    """
+    BW step schedule: per-step volumes, daily plant waste, and TSS scenarios.
+
+    Volume per step = water_rate_m_h × filter_area × duration_h.
+    Air-only steps (water_rate = 0) contribute no water volume.
+    Rinse volume is tracked separately (returned to process, not wasted).
+    """
+    if tss_scenarios is None:
+        tss_scenarios = [5.0, 10.0, 20.0]
+    if sequence is None:
+        sequence = DEFAULT_BW_SEQUENCE
+
+    tss_low, tss_avg, tss_high = tss_scenarios
+
+    steps = []
+    total_low = total_avg = total_high = 0.0
+    rinse_vol = 0.0
+    dur_total = 0
+
+    for name, dl, da, dh, rate, source in sequence:
+        q_m3h  = rate * filter_area_m2          # m³/h  (0 for air-only)
+        vl = q_m3h * dl / 60
+        va = q_m3h * da / 60
+        vh = q_m3h * dh / 60
+
+        total_low  += vl
+        total_avg  += va
+        total_high += vh
+        dur_total  += da
+
+        if "Rinse" in name:
+            rinse_vol = va
+
+        steps.append({
+            "Step":                 name,
+            "Dur low (min)":        dl,
+            "Dur avg (min)":        da,
+            "Dur high (min)":       dh,
+            "Water rate (m/h)":     rate,
+            "Source":               source,
+            "Flow (m³/h)":          round(q_m3h, 1),
+            "Vol low (m³)":         round(vl,    1),
+            "Vol avg (m³)":         round(va,    1),
+            "Vol high (m³)":        round(vh,    1),
+        })
+
+    waste_avg   = total_avg - rinse_vol
+    waste_daily = waste_avg * n_filters_total * bw_per_day_per_filter
+    rinse_daily = rinse_vol * n_filters_total * bw_per_day_per_filter
+
+    # TSS of waste stream: approximate — show feed TSS scenarios
+    # Detailed mass balance requires filtration run time (handled in app)
+    return {
+        "steps":                  steps,
+        "dur_total_avg_min":      dur_total,
+        # Per filter per cycle
+        "total_vol_low_m3":       round(total_low,   1),
+        "total_vol_avg_m3":       round(total_avg,   1),
+        "total_vol_high_m3":      round(total_high,  1),
+        "waste_vol_avg_m3":       round(waste_avg,   1),
+        "rinse_vol_avg_m3":       round(rinse_vol,   1),
+        # Plant daily
+        "waste_vol_daily_m3":     round(waste_daily, 1),
+        "rinse_vol_daily_m3":     round(rinse_daily, 1),
+        "n_filters_total":        n_filters_total,
+        "bw_per_day_per_filter":  bw_per_day_per_filter,
+        # TSS
+        "tss_low_mg_l":           tss_low,
+        "tss_avg_mg_l":           tss_avg,
+        "tss_high_mg_l":          tss_high,
+        "filter_area_m2":         round(filter_area_m2, 3),
+    }
