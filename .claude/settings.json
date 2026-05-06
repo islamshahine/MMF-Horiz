@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(git commit -m ' *)",
+      "Bash(git commit -m 'Fix NameError: replace removed _DP_DIRTY_FACTOR in cartridge_optimise with DP_REPLACEMENT_BAR *)",
+      "Bash(git commit -m 'Fix ModuleNotFoundError: replace plotly chart with st.line_chart *)",
+      "Bash(streamlit run *)",
+      "Bash(pip install *)",
+      "Bash(pkill -f \"streamlit run\")",
+      "Bash(streamlit run app.py --server.port 8501 --server.headless true > /tmp/mmf_streamlit.log 2>&1 & *)",
+      "Read(//tmp/**)",
+      "Bash(git push *)"
+    ]
+  }
+}
