@@ -1297,15 +1297,48 @@ with main:
             ec2.metric("Expanded bed",  f"{exp_combined['total_expanded_m']:.3f} m")
             ec3.metric("Net expansion", f"{exp_combined['total_expansion_pct']:.1f} %")
 
+            # Dynamic note: built from actual per-layer u_mf results
+            _wbw_lines = []
+            for _L in bw_col["per_layer"]:
+                _umf  = _L["u_mf_m_h"]
+                _name = _L["media_type"]
+                if _L["fluidised"]:
+                    _wbw_lines.append(
+                        f"**{_name}** (d10={_L['d10_mm']} mm, u_mf={_umf} m/h): "
+                        f"✅ fluidised at {bw_velocity:.0f} m/h — "
+                        f"{_L['expansion_pct']:.0f} % bed expansion."
+                    )
+                else:
+                    _wbw_lines.append(
+                        f"**{_name}** (d10={_L['d10_mm']} mm, u_mf={_umf} m/h): "
+                        f"⚪ NOT fluidised at {bw_velocity:.0f} m/h "
+                        f"(need >{_umf:.0f} m/h water-only) — "
+                        f"bed rests on nozzle plate during water-only phase."
+                    )
+            _wbw_note = "  \n".join(_wbw_lines)
+
+            _any_not_fluidised = any(not _L["fluidised"] for _L in bw_col["per_layer"])
+            _all_fluidised     = all(_L["fluidised"]     for _L in bw_col["per_layer"])
+
+            if _all_fluidised:
+                _cleaning_note = (
+                    f"All layers are hydraulically fluidised at the water-only BW rate "
+                    f"({bw_velocity:.0f} m/h). Air scour ({air_scour_rate:.0f} m/h) "
+                    "provides additional mechanical agitation to release compacted cake."
+                )
+            elif _any_not_fluidised:
+                _cleaning_note = (
+                    f"One or more layers rest on the nozzle plate at the water-only BW rate "
+                    f"({bw_velocity:.0f} m/h). In horizontal MMF, gravity cannot transport "
+                    "dislodged solids upward — **air scour is essential** for agitation and "
+                    "gas-lift transport of solids to the outlet regardless of fluidisation state."
+                )
+
             st.caption(
-                "**Water-only BW** (pump sizing): at 30 m/h, fine sand (u_mf=38 m/h) "
-                "and anthracite (u_mf=42 m/h) are NOT hydraulically fluidised — "
-                "this is physically correct and typical for MMF design. "
-                "**Air scour** (55 m/h) provides the primary cleaning mechanism "
-                "through mechanical agitation. The collector check uses the "
-                "water-only pump rate as the worst-case hydraulic load on the bed. "
-                "The combined phase table shows what expansion occurs when air+water "
-                "act simultaneously."
+                f"**Water-only BW at {bw_velocity:.0f} m/h** (per-layer status):  \n"
+                + _wbw_note + "  \n  \n"
+                + _cleaning_note + "  \n"
+                "The combined phase table above shows expansion when air+water act simultaneously."
             )
 
             if bw_col["media_loss_risk"]:
