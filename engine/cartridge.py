@@ -114,6 +114,10 @@ _COST_USD_SS316L: dict = {
     ('70"', 1): 1130,  ('70"', 5):  890,  ('70"', 10):  675,
 }
 
+# Public aliases — used by app.py to build the editable price table
+COST_TABLE_POLYMER = _COST_USD
+COST_TABLE_SS316L  = _COST_USD_SS316L
+
 
 # ── Internal helpers ──────────────────────────────────────────────────────────
 

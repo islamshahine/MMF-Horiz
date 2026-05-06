@@ -50,6 +50,7 @@ from engine.cartridge import (
     HOUSING_CAPACITY_OPTIONS, DEFAULT_ELEMENTS_PER_HOUSING,
     MARKET_ROUNDS, DP_REPLACEMENT_BAR, DHC_G_PER_TIE,
     SAFETY_FACTOR_STD, SAFETY_FACTOR_CIP,
+    COST_TABLE_POLYMER, COST_TABLE_SS316L,
 )
 from engine.energy import hydraulic_profile, energy_summary
 
@@ -1886,21 +1887,59 @@ with main:
 
         # ── 5. Economics ──────────────────────────────────────────────────
         with st.expander("5 · Economics", expanded=True):
-            cc1, cc2, cc3 = st.columns(3)
-            cc1.metric("Replacement interval", f"{cart_result['replacement_freq_days']} days")
-            cc2.metric("Changes / year",        f"{cart_result['replacements_per_year']:.1f}")
-            cc3.metric("Annual element cost",   f"USD {cart_result['annual_cost_usd']:,.0f}")
-            st.table(pd.DataFrame([
-                ["Cost per element",      f"USD {cart_result['cost_per_element_usd']:,.0f}"],
-                ["Replacement interval",  f"{cart_result['replacement_freq_days']} days"],
-                ["Changes / year",        f"{cart_result['replacements_per_year']:.1f}"],
-                ["Total elements",        str(cart_result["n_elements"])],
-                ["Annual cost",           f"USD {cart_result['annual_cost_usd']:,.0f}"],
-            ], columns=["Item", "Value"]))
+            # Editable unit-price table — all element sizes × ratings
             st.caption(
-                "Cost estimates are mid-market indicative (2024). "
-                "Replacement frequency is indicative — adjust for actual TSS loading."
+                "Unit prices below are mid-market indicative (2024).  "
+                "**Edit any cell** to override — the active selection "
+                f"(**{cart_size} · {cart_rating} µm**) is highlighted."
             )
+            _base_table = COST_TABLE_SS316L if cart_cip else COST_TABLE_POLYMER
+            _price_rows = [
+                {
+                    "Element":     size,
+                    "1 µm (USD)":  int(_base_table.get((size, 1),  0)),
+                    "5 µm (USD)":  int(_base_table.get((size, 5),  0)),
+                    "10 µm (USD)": int(_base_table.get((size, 10), 0)),
+                }
+                for size in ELEMENT_SIZE_LABELS
+            ]
+            _edited_prices = st.data_editor(
+                pd.DataFrame(_price_rows),
+                key=f"cart_prices_{'cip' if cart_cip else 'std'}",
+                use_container_width=True,
+                hide_index=True,
+                column_config={
+                    "Element":     st.column_config.TextColumn("Element", disabled=True),
+                    "1 µm (USD)":  st.column_config.NumberColumn(
+                                       "1 µm (USD)",  min_value=0, step=1, format="$ %d"),
+                    "5 µm (USD)":  st.column_config.NumberColumn(
+                                       "5 µm (USD)",  min_value=0, step=1, format="$ %d"),
+                    "10 µm (USD)": st.column_config.NumberColumn(
+                                       "10 µm (USD)", min_value=0, step=1, format="$ %d"),
+                },
+            )
+
+            # Pull out price for the active (element_size, rating_um) selection
+            _rating_col  = f"{cart_rating} µm (USD)"
+            _sel_row     = _edited_prices[_edited_prices["Element"] == cart_size]
+            _unit_price  = (int(_sel_row[_rating_col].values[0])
+                            if not _sel_row.empty else cart_result["cost_per_element_usd"])
+            _annual_cost = cart_result["n_elements"] * cart_result["replacements_per_year"] * _unit_price
+
+            ce1, ce2, ce3 = st.columns(3)
+            ce1.metric("Cost / element",  f"USD {_unit_price:,.0f}",
+                       delta="active selection", delta_color="off")
+            ce2.metric("Changes / year",  f"{cart_result['replacements_per_year']:.2f}")
+            ce3.metric("Annual cost",     f"USD {_annual_cost:,.0f}")
+
+            st.table(pd.DataFrame([
+                ["Element",              f"{cart_size} · {cart_rating} µm"],
+                ["Cost / element",       f"USD {_unit_price:,.0f}"],
+                ["Replacement interval", f"{cart_result['replacement_freq_days']:.0f} days"],
+                ["Changes / year",       f"{cart_result['replacements_per_year']:.2f}"],
+                ["Total elements",       str(cart_result["n_elements"])],
+                ["Annual cost",          f"USD {_annual_cost:,.0f}"],
+            ], columns=["Item", "Value"]))
 
     # ─────────────────────────────────────────────────────────────────────
     # TAB 9 · ENERGY
