@@ -335,6 +335,15 @@ with ctx:
     # ── Energy & economics ─────────────────────────────────────────────────
     with st.expander("⚡ Energy & economics", expanded=False):
         st.caption("Hydraulic profile — filtration pump duty")
+        np_slot_dp   = st.number_input(
+            "Strainer nozzle plate ΔP at design LV (bar)", value=0.02,
+            step=0.005, min_value=0.0, format="%.3f", key="np_slot",
+            help=(
+                "Hydraulic ΔP through the strainer nozzle slots at filtration flow. "
+                "The 50 mm plate bore is for the nozzle body — ΔP is governed by "
+                "the fine slots on the nozzle head (manufacturer data). "
+                "Typical: 0.01–0.05 bar (0.1–0.5 mWC) at 8–12 m/h."
+            ))
         p_residual   = st.number_input(
             "Required downstream pressure (barg)", value=2.50, step=0.25,
             min_value=0.0, key="p_res",
@@ -696,15 +705,10 @@ cart_result = cartridge_design(
 )
 
 # ── Hydraulic profile & energy ────────────────────────────────────────────
-# Nozzle plate hydraulic ΔP during FILTRATION: orifice equation through bores
-# (q_dp_kpa is the structural BW load — not the filtration ΔP)
-_n_bores   = wt_np.get("n_bores", 1)
-_bore_a    = wt_np.get("bore_area_each_m2", 1e-4)
-_Cd_np     = 0.65                               # sharp-edged orifice / nozzle
-_q_filt_m3s = q_per_filter / 3600.0
-_v_bore    = (_q_filt_m3s / (_n_bores * _bore_a * _Cd_np)
-              if (_n_bores * _bore_a) > 0 else 0.0)
-_np_dp_bar = rho_feed * _v_bore**2 / 2.0 / 1e5  # Pa → bar
+# Strainer nozzle plate ΔP: user-specified at design LV (vendor data).
+# The plate bore (50 mm) is the nozzle body hole — actual ΔP is set by
+# the fine slots on the nozzle head, which vary by manufacturer.
+_np_dp_bar = np_slot_dp
 hyd_prof = hydraulic_profile(
     dp_media_clean_bar  = bw_dp["dp_clean_bar"],
     dp_media_dirty_bar  = bw_dp["dp_dirty_bar"],
