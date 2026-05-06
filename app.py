@@ -1781,7 +1781,7 @@ with main:
         with st.expander("3 · Element length optimisation", expanded=True):
             st.caption(
                 f"Comparing all standard lengths at **{cart_rating} µm** rating, "
-                f"μ = **{_cart_mu_cP:.2f} cP**, SF = {SAFETY_FACTOR}×.  "
+                f"μ = **{_cart_mu_cP:.2f} cP**, SF = {cart_result['safety_factor']}×.  "
                 "Market round = smallest standard housing size ≥ n_elements "
                 "(fits in 1 housing where possible).  "
                 "🏆 = recommended (fewest housings)."
