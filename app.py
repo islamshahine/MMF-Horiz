@@ -14,7 +14,6 @@ Block flow (matches calculation dependency order):
 import io
 import math
 import pandas as pd
-import plotly.graph_objects as go
 import streamlit as st
 
 try:
@@ -1806,27 +1805,11 @@ with main:
                 )
 
             # ΔP vs cake-mass curve
-            _dp_df = pd.DataFrame(cart_result["dp_curve"])
-            _dp_df["dp_mbar"] = _dp_df["dp_bar"] * 1000
-            _fig_dp = go.Figure()
-            _fig_dp.add_trace(go.Scatter(
-                x=_dp_df["mass_g"], y=_dp_df["dp_mbar"],
-                mode="lines+markers", name="ΔP",
-                line=dict(color="#4C9BE8", width=2),
-                marker=dict(size=7),
-            ))
-            _fig_dp.add_hline(
-                y=DP_REPLACEMENT_BAR * 1000, line_dash="dash",
-                line_color="red", annotation_text="EOL trigger (1000 mbar)",
-                annotation_position="bottom right",
-            )
-            _fig_dp.update_layout(
-                height=260, margin=dict(t=20, b=30, l=50, r=20),
-                xaxis_title="Accumulated cake mass per element (g)",
-                yaxis_title="ΔP (mbar)",
-                showlegend=False,
-            )
-            st.plotly_chart(_fig_dp, use_container_width=True)
+            _dp_df = pd.DataFrame(cart_result["dp_curve"]).set_index("mass_g")
+            _dp_df["ΔP (mbar)"]       = _dp_df["dp_bar"] * 1000
+            _dp_df["EOL trigger (mbar)"] = DP_REPLACEMENT_BAR * 1000
+            st.caption("ΔP progression — accumulated cake mass per element (g) vs differential pressure (mbar)")
+            st.line_chart(_dp_df[["ΔP (mbar)", "EOL trigger (mbar)"]])
 
         # ── 3. TSS loading & replacement interval ─────────────────────────
         with st.expander("3 · TSS loading & replacement interval", expanded=True):
