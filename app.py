@@ -14,6 +14,7 @@ Block flow (matches calculation dependency order):
 import io
 import math
 import pandas as pd
+import plotly.graph_objects as go
 import streamlit as st
 
 try:
