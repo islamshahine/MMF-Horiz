@@ -359,7 +359,7 @@ def cartridge_optimise(
         q_flow_elem   = design_flow_m3h / n_elem
         q_lpm         = q_flow_elem * 1000.0 / 60.0
         dp_clean_mbar = _dp_mbar(q_lpm, size_label, rating_um)
-        dp_eol_mbar   = dp_clean_mbar * _DP_DIRTY_FACTOR
+        dp_eol_mbar   = DP_REPLACEMENT_BAR * 1000.0   # EOL = replacement trigger
         fill_pct      = 100.0 * n_elem / (n_housings * best_round)
         dhc_g         = dhc_per_tie * ties
 
