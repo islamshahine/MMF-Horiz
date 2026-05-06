@@ -334,32 +334,48 @@ with ctx:
 
     # ── Energy & economics ─────────────────────────────────────────────────
     with st.expander("⚡ Energy & economics", expanded=False):
-        elec_tariff  = st.number_input(
-            "Electricity tariff (USD/kWh)", value=0.10, step=0.01,
-            min_value=0.01, key="elec_t",
-            help="Blended electricity cost including demand charges")
+        st.caption("Hydraulic profile — filtration pump duty")
+        p_residual   = st.number_input(
+            "Required downstream pressure (barg)", value=2.50, step=0.25,
+            min_value=0.0, key="p_res",
+            help="Residual pressure at downstream tie-in (e.g. RO feed header). "
+                 "Typically 2–4 barg for SWRO pre-treatment.")
+        dp_inlet_pipe = st.number_input(
+            "Inlet piping losses (bar)", value=0.30, step=0.05,
+            min_value=0.0, key="dp_in",
+            help="Feed nozzle + inlet pipe + isolation valve + flow meter + fittings. "
+                 "Typical 0.2–0.5 bar depending on pipe sizing and layout.")
+        dp_dist      = st.number_input(
+            "Inlet distributor ΔP (bar)", value=0.02, step=0.01,
+            min_value=0.0, key="dp_dist",
+            help="Perforated header-lateral or distributor nozzles. Typical 0.01–0.05 bar.")
+        dp_outlet_pipe= st.number_input(
+            "Outlet piping losses (bar)", value=0.20, step=0.05,
+            min_value=0.0, key="dp_out",
+            help="Outlet nozzle + pipe + isolation valve + fittings. Typical 0.1–0.3 bar.")
+        static_head  = st.number_input(
+            "Static elevation head (m)", value=0.0, step=0.5, key="stat_h",
+            help="Filter elevation above pump centre-line (positive = pumping uphill).")
+        st.caption("Equipment efficiencies")
         pump_eta     = st.number_input(
-            "Filtration pump efficiency η", value=0.75, step=0.01,
+            "Filtration pump η", value=0.75, step=0.01,
             min_value=0.30, max_value=0.95, key="pump_e")
         bw_pump_eta  = st.number_input(
-            "BW pump efficiency η",         value=0.72, step=0.01,
+            "BW pump η",         value=0.72, step=0.01,
             min_value=0.30, max_value=0.95, key="bwp_e")
         motor_eta    = st.number_input(
-            "Motor efficiency η",           value=0.95, step=0.01,
+            "Motor η (all motors)", value=0.95, step=0.01,
             min_value=0.70, max_value=0.99, key="mot_e")
         bw_head_mwc  = st.number_input(
-            "BW pump total head (mWC)",     value=15.0, step=1.0,
+            "BW pump total head (mWC)", value=15.0, step=1.0,
             min_value=1.0, key="bw_hd",
-            help="Typical 12–20 mWC; includes nozzle plate + bed resistance + pipe losses")
-        static_head  = st.number_input(
-            "Filtration delivery head (m)", value=0.0, step=0.5, key="stat_h",
-            help="Elevation difference + downstream back-pressure (m)")
-        pipe_loss_pct= st.number_input(
-            "Pipe friction allowance (%)",  value=15.0, step=5.0,
-            min_value=0.0, max_value=50.0, key="pipe_l",
-            help="Added on top of media + nozzle-plate ΔP as pipe-friction margin")
+            help="Typical 12–20 mWC; includes bed + nozzle plate + BW piping losses.")
+        st.caption("Economics")
+        elec_tariff  = st.number_input(
+            "Electricity tariff (USD/kWh)", value=0.10, step=0.01,
+            min_value=0.01, key="elec_t")
         op_hours_yr  = st.number_input(
-            "Operating hours / year",       value=8400, step=100,
+            "Operating hours / year", value=8400, step=100,
             min_value=1000, key="op_hr")
 
     # ── Performance thresholds ─────────────────────────────────────────────
@@ -680,14 +696,25 @@ cart_result = cartridge_design(
 )
 
 # ── Hydraulic profile & energy ────────────────────────────────────────────
-_np_dp_bar = wt_np.get("q_dp_kpa", 0.0) / 100.0   # kPa → bar
+# Nozzle plate hydraulic ΔP during FILTRATION: orifice equation through bores
+# (q_dp_kpa is the structural BW load — not the filtration ΔP)
+_n_bores   = wt_np.get("n_bores", 1)
+_bore_a    = wt_np.get("bore_area_each_m2", 1e-4)
+_Cd_np     = 0.65                               # sharp-edged orifice / nozzle
+_q_filt_m3s = q_per_filter / 3600.0
+_v_bore    = (_q_filt_m3s / (_n_bores * _bore_a * _Cd_np)
+              if (_n_bores * _bore_a) > 0 else 0.0)
+_np_dp_bar = rho_feed * _v_bore**2 / 2.0 / 1e5  # Pa → bar
 hyd_prof = hydraulic_profile(
-    dp_media_clean_bar = bw_dp["dp_clean_bar"],
-    dp_media_dirty_bar = bw_dp["dp_dirty_bar"],
-    np_dp_bar          = _np_dp_bar,
-    pipe_loss_pct      = pipe_loss_pct,
-    static_head_m      = static_head,
-    rho_feed_kg_m3     = rho_feed,
+    dp_media_clean_bar  = bw_dp["dp_clean_bar"],
+    dp_media_dirty_bar  = bw_dp["dp_dirty_bar"],
+    np_dp_filt_bar      = _np_dp_bar,
+    distributor_dp_bar  = dp_dist,
+    dp_inlet_pipe_bar   = dp_inlet_pipe,
+    dp_outlet_pipe_bar  = dp_outlet_pipe,
+    p_residual_bar      = p_residual,
+    static_head_m       = static_head,
+    rho_feed_kg_m3      = rho_feed,
 )
 
 # Design scenario N at design temp / avg TSS for energy basis
@@ -1717,31 +1744,29 @@ with main:
         # ── 1. Hydraulic head budget ──────────────────────────────────────
         with st.expander("1 · Filtration pump — head budget", expanded=True):
             st.caption(
-                f"Media ΔP: Ergun clean + Ruth cake dirty at M_max = {solid_loading:.2f} kg/m².  "
-                f"Nozzle plate ΔP from structural calc.  "
-                f"Pipe friction = {pipe_loss_pct:.0f}% of (media + NP).  "
-                f"Static delivery head = {static_head:.1f} m."
+                "Flow path: Pump → inlet piping → distributor → media → "
+                "strainer nozzle plate → outlet piping → downstream pressure.  "
+                f"Media: clean (Ergun) / dirty (cake at M_max = {solid_loading:.2f} kg/m²).  "
+                f"Downstream residual = {p_residual:.2f} barg."
             )
             hA, hB = st.columns(2)
             for col, state, bud in [
                 (hA, "Clean bed", hyd_prof["clean"]),
-                (hB, "Dirty bed (M_max, design case)", hyd_prof["dirty"]),
+                (hB, f"Dirty bed (M_max = {solid_loading:.2f} kg/m²)", hyd_prof["dirty"]),
             ]:
                 with col:
                     st.markdown(f"**{state}**")
-                    st.dataframe(pd.DataFrame([
-                        ["Media ΔP",            f"{bud['media_bar']:.4f} bar",
-                                                 f"{bud['media_mwc']:.2f} mWC"],
-                        ["Nozzle plate ΔP",     f"{bud['np_bar']:.4f} bar",
-                                                 f"{bud['np_mwc']:.2f} mWC"],
-                        ["Pipe friction",        f"{bud['pipe_bar']:.4f} bar",
-                                                 f"{bud['pipe_mwc']:.2f} mWC"],
-                        ["Static / delivery",    f"{bud['static_bar']:.4f} bar",
-                                                 f"{bud['static_mwc']:.2f} mWC"],
-                        ["**TOTAL pump head**",  f"**{bud['total_bar']:.4f} bar**",
-                                                 f"**{bud['total_mwc']:.2f} mWC**"],
-                    ], columns=["Component", "bar", "mWC"]),
-                    use_container_width=True, hide_index=True)
+                    rows = []
+                    for component, bar_val in bud["items_bar"].items():
+                        mwc_val = bud["items_mwc"][component]
+                        rows.append([component,
+                                     f"{bar_val:.4f} bar",
+                                     f"{mwc_val:.2f} mWC"])
+                    rows.append(["**TOTAL pump duty**",
+                                 f"**{bud['total_bar']:.4f} bar**",
+                                 f"**{bud['total_mwc']:.2f} mWC**"])
+                    st.dataframe(pd.DataFrame(rows, columns=["Component", "bar", "mWC"]),
+                                 use_container_width=True, hide_index=True)
 
         # ── 2. Power summary ─────────────────────────────────────────────
         with st.expander("2 · Power — per consumer", expanded=True):
@@ -2106,11 +2131,7 @@ with main:
 ### Energy & hydraulic profile
 | Component | Clean bed | Dirty bed (M_max) |
 |---|---|---|
-| Media ΔP | {hyd_prof['clean']['media_bar']:.4f} bar / {hyd_prof['clean']['media_mwc']:.2f} mWC | {hyd_prof['dirty']['media_bar']:.4f} bar / {hyd_prof['dirty']['media_mwc']:.2f} mWC |
-| Nozzle plate ΔP | {hyd_prof['clean']['np_bar']:.4f} bar | {hyd_prof['dirty']['np_bar']:.4f} bar |
-| Pipe friction ({pipe_loss_pct:.0f}%) | {hyd_prof['clean']['pipe_bar']:.4f} bar | {hyd_prof['dirty']['pipe_bar']:.4f} bar |
-| Static head | {hyd_prof['clean']['static_mwc']:.1f} mWC | {hyd_prof['dirty']['static_mwc']:.1f} mWC |
-| **Total pump head** | **{hyd_prof['clean']['total_mwc']:.2f} mWC** | **{hyd_prof['dirty']['total_mwc']:.2f} mWC** |
+{"".join(f"| {k} | {hyd_prof['clean']['items_bar'][k]:.4f} bar / {hyd_prof['clean']['items_mwc'][k]:.2f} mWC | {hyd_prof['dirty']['items_bar'][k]:.4f} bar / {hyd_prof['dirty']['items_mwc'][k]:.2f} mWC |" + chr(10) for k in hyd_prof['clean']['items_bar'])}| **Total pump duty** | **{hyd_prof['clean']['total_bar']:.4f} bar / {hyd_prof['clean']['total_mwc']:.2f} mWC** | **{hyd_prof['dirty']['total_bar']:.4f} bar / {hyd_prof['dirty']['total_mwc']:.2f} mWC** |
 
 | KPI | Value |
 |---|---|

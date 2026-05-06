@@ -3,8 +3,15 @@ engine/energy.py
 ────────────────
 Energy & hydraulic budget for horizontal MMF systems.
 
-Hydraulic profile (head budget):
-  H_total = H_media + H_nozzle_plate + H_piping + H_static_delivery
+Hydraulic profile — real filter flow path (filtration direction):
+
+  Pump → inlet piping (valves/fittings) → inlet distributor
+       → media bed (clean or dirty)
+       → strainer nozzle plate
+       → outlet piping (valves/fittings) → residual pressure downstream
+
+  P_pump = P_residual + ΔP_outlet_pipe + ΔP_np_filt + ΔP_media
+         + ΔP_distributor + ΔP_inlet_pipe + ρg·ΔZ_static
 
 Energy consumers:
   1. Filtration feed pump  (continuous)
@@ -39,54 +46,84 @@ def _pump_power_kw(flow_m3h: float, head_mwc: float,
 # ═══════════════════════════════════════════════════════════════════════════
 
 def hydraulic_profile(
+    # Media
     dp_media_clean_bar: float,
     dp_media_dirty_bar: float,
-    np_dp_bar: float,
-    pipe_loss_pct: float   = 15.0,
-    static_head_m: float   = 0.0,
-    rho_feed_kg_m3: float  = 1025.0,
+    # Strainer nozzle plate (filtration direction, orifice ΔP)
+    np_dp_filt_bar: float,
+    # Inlet distribution header / laterals
+    distributor_dp_bar: float  = 0.02,
+    # Inlet piping: feed nozzle + pipe + valves + flow meter
+    dp_inlet_pipe_bar: float   = 0.30,
+    # Outlet piping: outlet nozzle + pipe + valves
+    dp_outlet_pipe_bar: float  = 0.20,
+    # Required residual pressure at downstream tie-in point
+    p_residual_bar: float      = 2.50,
+    # Static head: filter elevation above pump datum (positive = pump pumps up)
+    static_head_m: float       = 0.0,
+    rho_feed_kg_m3: float      = 1025.0,
 ) -> dict:
     """
-    Build the filtration pump head budget.
+    Full hydraulic head budget for the filtration feed pump.
+
+    Flow path (all resistances add to pump duty):
+
+      [Pump] ──► inlet piping ──► distributor ──► media ──► NP ──► outlet piping ──► [P_residual]
+
+    P_pump = P_residual + ΔP_outlet_pipe + ΔP_np + ΔP_media
+           + ΔP_distributor + ΔP_inlet_pipe + ρg·ΔZ
 
     Parameters
     ----------
-    dp_media_clean_bar  : Ergun clean-bed ΔP (bar)
-    dp_media_dirty_bar  : Cake model dirty-bed ΔP at M_max (bar)
-    np_dp_bar           : Nozzle-plate hydraulic ΔP (bar)
-    pipe_loss_pct       : Piping friction as % of (media + NP) ΔP
-    static_head_m       : Elevation / delivery static head (m)
+    dp_media_clean_bar  : Clean-bed ΔP, Ergun (bar)
+    dp_media_dirty_bar  : Dirty-bed ΔP at M_max, Ergun + cake (bar)
+    np_dp_filt_bar      : Strainer nozzle plate orifice ΔP at filtration flow (bar)
+    distributor_dp_bar  : Inlet distribution header/laterals ΔP (bar); default 0.02
+    dp_inlet_pipe_bar   : Inlet piping losses — nozzle, pipe, valves, flow meter (bar)
+    dp_outlet_pipe_bar  : Outlet piping losses — pipe, valves, outlet nozzle (bar)
+    p_residual_bar      : Required downstream pressure (barg); default 2.5
+    static_head_m       : Elevation of filter above pump datum (m)
     rho_feed_kg_m3      : Feed water density (kg/m³)
 
     Returns
     -------
-    dict — head budget (clean & dirty) in both bar and mWC
+    dict — itemised head budget for clean and dirty bed, in bar and mWC
     """
-    def _budget(media_bar):
-        np_bar    = np_dp_bar
-        sub_bar   = media_bar + np_bar
-        pipe_bar  = sub_bar * pipe_loss_pct / 100.0
-        stat_bar  = _mwc_to_bar(static_head_m, rho_feed_kg_m3)
-        total_bar = sub_bar + pipe_bar + stat_bar
+    stat_bar = _mwc_to_bar(static_head_m, rho_feed_kg_m3)
+
+    def _budget(media_bar: float) -> dict:
+        items = {
+            "Inlet piping (valves/fittings)": dp_inlet_pipe_bar,
+            "Inlet distributor":              distributor_dp_bar,
+            "Media bed":                      media_bar,
+            "Strainer nozzle plate":          np_dp_filt_bar,
+            "Outlet piping (valves/fittings)":dp_outlet_pipe_bar,
+            "Downstream residual pressure":   p_residual_bar,
+            "Static head":                    stat_bar,
+        }
+        total_bar = sum(items.values())
         return {
-            "media_bar":      round(media_bar,  4),
-            "np_bar":         round(np_bar,     4),
-            "pipe_bar":       round(pipe_bar,   4),
-            "static_bar":     round(stat_bar,   4),
-            "total_bar":      round(total_bar,  4),
-            "media_mwc":      round(_bar_to_mwc(media_bar,  rho_feed_kg_m3), 2),
-            "np_mwc":         round(_bar_to_mwc(np_bar,     rho_feed_kg_m3), 2),
-            "pipe_mwc":       round(_bar_to_mwc(pipe_bar,   rho_feed_kg_m3), 2),
-            "static_mwc":     round(static_head_m, 2),
-            "total_mwc":      round(_bar_to_mwc(total_bar,  rho_feed_kg_m3), 2),
+            "items_bar":   {k: round(v, 4) for k, v in items.items()},
+            "items_mwc":   {k: round(_bar_to_mwc(v, rho_feed_kg_m3), 2)
+                            for k, v in items.items()},
+            "total_bar":   round(total_bar, 4),
+            "total_mwc":   round(_bar_to_mwc(total_bar, rho_feed_kg_m3), 2),
+            # quick-access keys
+            "media_bar":   round(media_bar,        4),
+            "np_bar":      round(np_dp_filt_bar,   4),
+            "media_mwc":   round(_bar_to_mwc(media_bar,      rho_feed_kg_m3), 2),
+            "np_mwc":      round(_bar_to_mwc(np_dp_filt_bar, rho_feed_kg_m3), 2),
         }
 
     return {
-        "clean": _budget(dp_media_clean_bar),
-        "dirty": _budget(dp_media_dirty_bar),
-        "pipe_loss_pct":    pipe_loss_pct,
-        "static_head_m":    static_head_m,
-        "np_dp_bar":        round(np_dp_bar, 4),
+        "clean":               _budget(dp_media_clean_bar),
+        "dirty":               _budget(dp_media_dirty_bar),
+        "np_dp_filt_bar":      round(np_dp_filt_bar,    4),
+        "distributor_dp_bar":  round(distributor_dp_bar, 4),
+        "dp_inlet_pipe_bar":   round(dp_inlet_pipe_bar,  4),
+        "dp_outlet_pipe_bar":  round(dp_outlet_pipe_bar, 4),
+        "p_residual_bar":      round(p_residual_bar,     4),
+        "static_head_m":       static_head_m,
     }
 
 
