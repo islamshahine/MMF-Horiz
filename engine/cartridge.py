@@ -79,18 +79,18 @@ _DP_OVERRIDE: dict = {
 }
 
 DP_REPLACEMENT_BAR = 1.00   # EOL ΔP trigger (vendor range 0.69–1.00 bar)
-_DP_DIRTY_FACTOR   = 2.0    # EOL / clean ratio (approximate)
 
 # ── Dirt holding capacity ─────────────────────────────────────────────────────
 DHC_G_PER_TIE        = 30.0   # g/TIE — polymer (standard) — Table 10
 DHC_G_PER_TIE_SS316L = 45.0   # g/TIE — SS 316L metal media (higher void volume)
 
-# ── Replacement / CIP frequency — indicative (days) ──────────────────────────
-# Polymer: elements discarded when plugged.
-_FREQ_DAYS: dict = {1: 30, 5: 60, 10: 90}
-# SS 316L: CIP regenerates elements; "replacement" means full element swap
-# after many CIP cycles, typically 1–2 years.
-_FREQ_DAYS_SS316L: dict = {1: 180, 5: 365, 10: 730}
+# ── Fallback replacement interval when TSS loading is zero (days) ─────────────
+# Used only by cartridge_optimise() which has no TSS inputs.
+_FREQ_DAYS_FALLBACK: dict = {1: 30, 5: 60, 10: 90}
+_FREQ_DAYS_SS316L:   dict = {1: 180, 5: 365, 10: 730}
+
+# ── Maximum practical replacement interval ────────────────────────────────────
+_MAX_INTERVAL_DAYS = 5 * 365   # 5 years — cap for near-zero TSS loading
 
 # ── Element unit cost USD — mid-market industrial (2024) ──────────────────────
 # Polymer (disposable, pleated)
@@ -173,28 +173,43 @@ def _nearest_market_round(n_elements: int) -> int:
 
 def cartridge_design(
     design_flow_m3h: float,
-    element_size: str       = '40"',
-    rating_um: int          = 5,
-    mu_cP: float            = 1.0,
-    n_elem_per_housing: int = DEFAULT_ELEMENTS_PER_HOUSING,
-    is_CIP_system: bool     = False,
+    element_size: str        = '40"',
+    rating_um: int           = 5,
+    mu_cP: float             = 1.0,
+    n_elem_per_housing: int  = DEFAULT_ELEMENTS_PER_HOUSING,
+    is_CIP_system: bool      = False,
+    cf_inlet_tss_mg_l: float = 2.0,
+    cf_outlet_tss_mg_l: float = 0.5,
 ) -> dict:
     """
     Size a cartridge polishing filter bank.
 
     Parameters
     ----------
-    design_flow_m3h    : Total flow to the cartridge station, m³/h
-    element_size       : '20"' | '30"' | '40"' | '50"' | '60"' | '70"'
-    rating_um          : 1 | 5 | 10  (µm absolute)
-    mu_cP              : Feed water dynamic viscosity, cP (1.0 cP = water @20 °C)
-    n_elem_per_housing : Elements per housing vessel (choose from MARKET_ROUNDS)
-    is_CIP_system      : True → SS 316L regenerable elements; SF=1.2, higher DHC,
-                         longer replacement interval, SS unit costs applied.
+    design_flow_m3h     : Total flow to the cartridge station, m³/h
+    element_size        : '20"' | '30"' | '40"' | '50"' | '60"' | '70"'
+    rating_um           : 1 | 5 | 10  (µm absolute)
+    mu_cP               : Feed water dynamic viscosity, cP
+    n_elem_per_housing  : Elements per housing vessel (from MARKET_ROUNDS)
+    is_CIP_system       : True → SS 316L elements; SF=1.2, higher DHC, SS costs
+    cf_inlet_tss_mg_l   : TSS entering the CF (= MMF effluent), mg/L
+    cf_outlet_tss_mg_l  : TSS target leaving the CF, mg/L (≤ cf_inlet_tss_mg_l)
+
+    Replacement interval
+    --------------------
+    Derived from mass balance:
+        loading [g/h/element] = (cf_inlet − cf_outlet) [g/m³] × q [m³/h/element]
+        interval [h]          = DHC [g] / loading [g/h]
+    Capped at _MAX_INTERVAL_DAYS. Falls back to rating-based table when loading = 0.
+
+    ΔP profile
+    ----------
+    Linear from ΔP_clean (BOL) to DP_REPLACEMENT_BAR (EOL = 1.0 bar) as
+    cake mass accumulates from 0 to DHC.  Average ΔP = (clean + 1.0) / 2.
 
     Returns
     -------
-    dict — sizing, ΔP, DHC, and economics results
+    dict — sizing, TSS loading, ΔP profile, DHC, and economics
     """
     if element_size not in ELEMENT_CATALOGUE:
         raise ValueError(f"Unknown element size: {element_size!r}")
@@ -217,55 +232,94 @@ def cartridge_design(
     actual_flow_m2   = actual_flow_elem / area
     q_lpm            = actual_flow_elem * 1000.0 / 60.0
 
-    dp_clean_mbar = _dp_mbar(q_lpm, element_size, rating_um)
-    dp_eol_mbar   = dp_clean_mbar * _DP_DIRTY_FACTOR
-    dp_clean_bar  = dp_clean_mbar / 1000.0
-    dp_eol_bar    = dp_eol_mbar   / 1000.0
+    # ── ΔP — clean (BOL) from vendor quadratic ────────────────────────────────
+    dp_clean_bar = _dp_mbar(q_lpm, element_size, rating_um) / 1000.0
+    # EOL is always the replacement trigger; linear cake progression
+    dp_eol_bar   = DP_REPLACEMENT_BAR
+    dp_avg_bar   = (dp_clean_bar + dp_eol_bar) / 2.0
+    dp_overloaded = dp_clean_bar >= DP_REPLACEMENT_BAR   # element already over-pressured at BOL
 
+    # 5-point ΔP vs accumulated-mass curve (fraction of DHC)
     dhc_per_tie = DHC_G_PER_TIE_SS316L if is_CIP_system else DHC_G_PER_TIE
     dhc_g       = dhc_per_tie * ties
+    dp_curve    = [
+        {
+            "mass_frac": f,
+            "mass_g":    round(f * dhc_g, 1),
+            "dp_bar":    round(dp_clean_bar + (dp_eol_bar - dp_clean_bar) * f, 4),
+        }
+        for f in [0.0, 0.25, 0.50, 0.75, 1.0]
+    ]
 
-    freq_table    = _FREQ_DAYS_SS316L if is_CIP_system else _FREQ_DAYS
-    cost_table    = _COST_USD_SS316L  if is_CIP_system else _COST_USD
-    freq_days     = freq_table[rating_um]
-    repl_per_year = 365.0 / freq_days
-    cost_each     = cost_table.get((element_size, rating_um), 200 if is_CIP_system else 120)
-    annual_cost   = n_elements * repl_per_year * cost_each
+    # ── TSS loading & replacement interval ───────────────────────────────────
+    cf_inlet  = max(0.0, cf_inlet_tss_mg_l)
+    cf_outlet = max(0.0, min(cf_outlet_tss_mg_l, cf_inlet))
+    tss_removed_mg_l = cf_inlet - cf_outlet           # g/m³ removed by CF
+    tss_removal_pct  = (tss_removed_mg_l / cf_inlet * 100.0) if cf_inlet > 0 else 0.0
+
+    # Loading rate per element [g/h] = [g/m³] × [m³/h]
+    loading_g_h = tss_removed_mg_l * actual_flow_elem
+
+    if loading_g_h > 1e-9:
+        interval_h = min(dhc_g / loading_g_h, _MAX_INTERVAL_DAYS * 24.0)
+    else:
+        # Zero loading (CF inlet = outlet): fall back to rating-based defaults
+        fb = _FREQ_DAYS_SS316L if is_CIP_system else _FREQ_DAYS_FALLBACK
+        interval_h = fb[rating_um] * 24.0
+
+    interval_days = interval_h / 24.0
+    repl_per_year = 8760.0 / interval_h
+
+    # ── Economics ─────────────────────────────────────────────────────────────
+    cost_table  = _COST_USD_SS316L if is_CIP_system else _COST_USD
+    cost_each   = cost_table.get((element_size, rating_um), 200 if is_CIP_system else 120)
+    annual_cost = n_elements * repl_per_year * cost_each
 
     return {
         # Inputs
-        "design_flow_m3h":          round(design_flow_m3h,   1),
+        "design_flow_m3h":          round(design_flow_m3h,     1),
         "element_size":             element_size,
         "element_area_m2":          area,
         "element_ties":             ties,
         "rating_um":                rating_um,
-        "mu_cP":                    round(mu_cP,             3),
+        "mu_cP":                    round(mu_cP,               3),
         "is_CIP_system":            is_CIP_system,
         "element_material":         material,
         # Capacity
         "cap_m3h_element_base":     round(BASE_FLOW_TIE[rating_um] * ties, 3),
-        "cap_m3h_element_visc":     round(cap_visc,          3),
-        "cap_m3h_element_rated":    round(cap_rated,         3),
+        "cap_m3h_element_visc":     round(cap_visc,            3),
+        "cap_m3h_element_rated":    round(cap_rated,           3),
         "safety_factor":            sf,
         # Sizing
         "n_elements":               n_elements,
         "n_elem_per_housing":       n_elem_per_housing,
         "n_housings":               n_housings,
-        "actual_flow_m3h_element":  round(actual_flow_elem,  3),
-        "actual_flow_m3h_m2":       round(actual_flow_m2,    3),
-        "q_lpm_element":            round(q_lpm,             1),
+        "actual_flow_m3h_element":  round(actual_flow_elem,    3),
+        "actual_flow_m3h_m2":       round(actual_flow_m2,      3),
+        "q_lpm_element":            round(q_lpm,               1),
         # ΔP
-        "dp_clean_bar":             round(dp_clean_bar,      4),
-        "dp_dirty_bar":             round(dp_eol_bar,        4),
-        "dp_eol_bar":               round(dp_eol_bar,        4),
+        "dp_clean_bar":             round(dp_clean_bar,        4),
+        "dp_dirty_bar":             round(dp_eol_bar,          4),   # alias for report compat.
+        "dp_eol_bar":               round(dp_eol_bar,          4),
+        "dp_avg_bar":               round(dp_avg_bar,          4),
         "dp_replacement_bar":       DP_REPLACEMENT_BAR,
+        "dp_overloaded":            dp_overloaded,
+        "dp_curve":                 dp_curve,
         # DHC
-        "dhc_g_element":            round(dhc_g,             1),
+        "dhc_g_element":            round(dhc_g,               1),
+        # TSS loading
+        "cf_inlet_tss_mg_l":        round(cf_inlet,            2),
+        "cf_outlet_tss_mg_l":       round(cf_outlet,           2),
+        "tss_removed_mg_l":         round(tss_removed_mg_l,    2),
+        "tss_removal_pct":          round(tss_removal_pct,     1),
+        "loading_g_h_element":      round(loading_g_h,         4),
+        # Replacement (mass-balance derived)
+        "interval_h":               round(interval_h,          1),
+        "replacement_freq_days":    round(interval_days,       1),
+        "replacements_per_year":    round(repl_per_year,       2),
         # Economics
-        "replacement_freq_days":    freq_days,
-        "replacements_per_year":    round(repl_per_year,     1),
         "cost_per_element_usd":     cost_each,
-        "annual_cost_usd":          round(annual_cost,       0),
+        "annual_cost_usd":          round(annual_cost,         0),
     }
 
 

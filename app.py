@@ -431,11 +431,30 @@ with ctx:
         else:
             cart_housing = int(cart_hsg_sel)
 
+        # TSS quality inputs
+        st.markdown("**TSS quality**")
+        _cf_inlet_max  = float(tss_avg)
+        _cf_outlet_max = round(0.15 * tss_avg, 2)
+        cf_inlet_tss = st.number_input(
+            "CF inlet TSS — MMF effluent (mg/L)",
+            min_value=0.0, max_value=_cf_inlet_max,
+            value=min(2.0, _cf_inlet_max),
+            step=0.1, format="%.2f", key="cf_inlet_tss",
+            help="TSS entering the cartridge filter = MMF effluent quality.  "
+                 "Will be auto-calculated when the MMF performance model is added.  "
+                 f"Max = MMF feed TSS ({tss_avg:.1f} mg/L).")
+        cf_outlet_tss = st.number_input(
+            "CF outlet TSS — target (mg/L)",
+            min_value=0.0, max_value=_cf_outlet_max,
+            value=min(0.5, _cf_outlet_max),
+            step=0.05, format="%.2f", key="cf_outlet_tss",
+            help=f"Target effluent TSS from cartridge filter.  "
+                 f"Max = 15 % of MMF feed TSS = {_cf_outlet_max:.2f} mg/L.")
+
         _sf_label = f"SF = {SAFETY_FACTOR_CIP}" if cart_cip else f"SF = {SAFETY_FACTOR_STD}"
         st.caption(
-            f"{'🔩 SS 316L CIP mode — ' + _sf_label if cart_cip else '🔵 Polymer standard — ' + _sf_label}.  "
-            "Capacity = TIE × BASE_FLOW_TIE / μ_feed.  "
-            "Feed viscosity from temperature & salinity inputs.")
+            f"{'🔩 SS 316L CIP — ' + _sf_label if cart_cip else '🔵 Polymer standard — ' + _sf_label}.  "
+            "Replacement interval calculated from DHC ÷ TSS loading rate.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PRE-COMPUTE — all calculations in dependency order
@@ -734,6 +753,8 @@ cart_result = cartridge_design(
     mu_cP=_cart_mu_cP,
     n_elem_per_housing=cart_housing,
     is_CIP_system=cart_cip,
+    cf_inlet_tss_mg_l=cf_inlet_tss,
+    cf_outlet_tss_mg_l=cf_outlet_tss,
 )
 
 cart_optim = cartridge_optimise(
@@ -1761,23 +1782,92 @@ with main:
         # ── 2. ΔP & performance ───────────────────────────────────────────
         with st.expander("2 · ΔP & performance", expanded=True):
             cb1, cb2, cb3, cb4 = st.columns(4)
-            cb1.metric("ΔP clean (BOL)",  f"{cart_result['dp_clean_bar']:.4f} bar")
-            cb2.metric("ΔP EOL",          f"{cart_result['dp_eol_bar']:.4f} bar")
-            cb3.metric("Replace at",      f"{cart_result['dp_replacement_bar']:.2f} bar")
+            cb1.metric("ΔP clean (BOL)",  f"{cart_result['dp_clean_bar']*1000:.1f} mbar")
+            cb2.metric("ΔP average",      f"{cart_result['dp_avg_bar']*1000:.0f} mbar")
+            cb3.metric("ΔP EOL",          f"{cart_result['dp_eol_bar']:.2f} bar")
             cb4.metric("DHC / element",   f"{cart_result['dhc_g_element']:.0f} g")
 
-            _dp_pct = (cart_result['dp_clean_bar'] / DP_REPLACEMENT_BAR * 100
-                       if DP_REPLACEMENT_BAR > 0 else 0)
-            _dp_ok  = cart_result['dp_clean_bar'] < DP_REPLACEMENT_BAR * 0.5
-            st.caption(
-                f"ΔP model: vendor quadratic (lpm/element basis, 40\" reference + TIE scaling).  "
-                f"Clean ΔP = {cart_result['dp_clean_bar']*1000:.1f} mbar at "
-                f"{cart_result['q_lpm_element']:.1f} lpm/element.  "
-                f"EOL ΔP ≈ 2× clean.  "
-                f"{'✅' if _dp_ok else '⚠️'} BOL ΔP is {_dp_pct:.0f} % of replacement trigger."
-            )
+            _dp_pct = cart_result['dp_clean_bar'] / DP_REPLACEMENT_BAR * 100
+            _dp_ok  = not cart_result['dp_overloaded']
+            if cart_result['dp_overloaded']:
+                st.error(
+                    f"⚠️ BOL ΔP ({cart_result['dp_clean_bar']:.3f} bar) already exceeds the "
+                    f"replacement trigger ({DP_REPLACEMENT_BAR:.2f} bar). "
+                    "Increase number of elements or choose a longer element."
+                )
+            else:
+                st.caption(
+                    f"ΔP model: vendor quadratic (40\" reference + TIE-ratio scaling).  "
+                    f"BOL = {cart_result['dp_clean_bar']*1000:.1f} mbar at "
+                    f"{cart_result['q_lpm_element']:.1f} lpm/element "
+                    f"({_dp_pct:.0f} % of EOL trigger).  "
+                    f"ΔP grows linearly with cake mass → {DP_REPLACEMENT_BAR:.2f} bar at DHC."
+                )
 
-        # ── 3. Length optimisation table ──────────────────────────────────
+            # ΔP vs cake-mass curve
+            _dp_df = pd.DataFrame(cart_result["dp_curve"])
+            _dp_df["dp_mbar"] = _dp_df["dp_bar"] * 1000
+            _fig_dp = go.Figure()
+            _fig_dp.add_trace(go.Scatter(
+                x=_dp_df["mass_g"], y=_dp_df["dp_mbar"],
+                mode="lines+markers", name="ΔP",
+                line=dict(color="#4C9BE8", width=2),
+                marker=dict(size=7),
+            ))
+            _fig_dp.add_hline(
+                y=DP_REPLACEMENT_BAR * 1000, line_dash="dash",
+                line_color="red", annotation_text="EOL trigger (1000 mbar)",
+                annotation_position="bottom right",
+            )
+            _fig_dp.update_layout(
+                height=260, margin=dict(t=20, b=30, l=50, r=20),
+                xaxis_title="Accumulated cake mass per element (g)",
+                yaxis_title="ΔP (mbar)",
+                showlegend=False,
+            )
+            st.plotly_chart(_fig_dp, use_container_width=True)
+
+        # ── 3. TSS loading & replacement interval ─────────────────────────
+        with st.expander("3 · TSS loading & replacement interval", expanded=True):
+            cd1, cd2, cd3, cd4 = st.columns(4)
+            cd1.metric("CF inlet TSS",   f"{cart_result['cf_inlet_tss_mg_l']:.2f} mg/L")
+            cd2.metric("CF outlet TSS",  f"{cart_result['cf_outlet_tss_mg_l']:.2f} mg/L",
+                       delta=f"{cart_result['tss_removal_pct']:.0f} % removal",
+                       delta_color="off")
+            cd3.metric("Loading rate",   f"{cart_result['loading_g_h_element']:.4f} g/h/elem")
+            cd4.metric("Replacement",    f"{cart_result['replacement_freq_days']:.0f} days",
+                       delta=f"{cart_result['replacements_per_year']:.2f}/yr",
+                       delta_color="off")
+
+            _zero_load = cart_result['loading_g_h_element'] < 1e-9
+            st.caption(
+                f"Mass balance: ({cart_result['cf_inlet_tss_mg_l']:.2f} − "
+                f"{cart_result['cf_outlet_tss_mg_l']:.2f}) mg/L × "
+                f"{cart_result['actual_flow_m3h_element']:.3f} m³/h/element = "
+                f"{cart_result['loading_g_h_element']:.4f} g/h per element.  "
+                f"DHC {cart_result['dhc_g_element']:.0f} g ÷ loading → "
+                + ("fallback (zero TSS removed — rating-table used)."
+                   if _zero_load else
+                   f"{cart_result['replacement_freq_days']:.0f} days replacement interval.")
+            )
+            st.table(pd.DataFrame([
+                ["CF inlet TSS",         f"{cart_result['cf_inlet_tss_mg_l']:.2f} mg/L",
+                 "MMF effluent entering CF"],
+                ["CF outlet TSS",        f"{cart_result['cf_outlet_tss_mg_l']:.2f} mg/L",
+                 "Quality target"],
+                ["TSS removed",          f"{cart_result['tss_removed_mg_l']:.2f} mg/L",
+                 f"{cart_result['tss_removal_pct']:.0f} %"],
+                ["Loading rate",         f"{cart_result['loading_g_h_element']:.4f} g/h/element",
+                 "Per element at design flow"],
+                ["DHC per element",      f"{cart_result['dhc_g_element']:.0f} g",
+                 f"{'45 g/TIE (SS 316L)' if cart_result['is_CIP_system'] else '30 g/TIE (polymer)'}"],
+                ["Replacement interval", f"{cart_result['replacement_freq_days']:.0f} days",
+                 f"= {cart_result['interval_h']:.0f} h"],
+                ["Replacements/year",    f"{cart_result['replacements_per_year']:.2f}",
+                 "All elements"],
+            ], columns=["Parameter", "Value", "Note"]))
+
+        # ── 4. Length optimisation table ──────────────────────────────────
         with st.expander("3 · Element length optimisation", expanded=True):
             st.caption(
                 f"Comparing all standard lengths at **{cart_rating} µm** rating, "
@@ -1810,8 +1900,8 @@ with main:
                 hide_index=True,
             )
 
-        # ── 4. Economics ──────────────────────────────────────────────────
-        with st.expander("4 · Economics", expanded=True):
+        # ── 5. Economics ──────────────────────────────────────────────────
+        with st.expander("5 · Economics", expanded=True):
             cc1, cc2, cc3 = st.columns(3)
             cc1.metric("Replacement interval", f"{cart_result['replacement_freq_days']} days")
             cc2.metric("Changes / year",        f"{cart_result['replacements_per_year']:.1f}")
