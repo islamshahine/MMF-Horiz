@@ -133,9 +133,22 @@ def _dp_coeffs(size_label: str, rating_um: int) -> tuple:
 
 
 def _dp_mbar(q_lpm_element: float, size_label: str, rating_um: int) -> float:
-    """Clean-element ΔP in mbar at actual flow q_lpm_element (lpm/element)."""
+    """
+    Clean-element ΔP in mbar at actual flow q_lpm_element (lpm/element).
+
+    Vendor quadratic overrides have negative intercepts (regression fit over a
+    high-flow measurement range).  When the polynomial evaluates ≤ 0 — i.e. the
+    operating point is below the calibrated range — fall back to the TIE-scaled
+    40" base curve, which is always positive at practical design flows.
+    """
     a, b, c = _dp_coeffs(size_label, rating_um)
-    return max(0.0, a * q_lpm_element ** 2 + b * q_lpm_element + c)
+    result = a * q_lpm_element ** 2 + b * q_lpm_element + c
+    if result <= 0 and (size_label, rating_um) in _DP_OVERRIDE:
+        ties   = ELEMENT_CATALOGUE[size_label]["ties"]
+        k      = 4.0 / ties
+        a0, b0, c0 = _DP_BASE_40[rating_um]
+        result = a0 * k * k * q_lpm_element ** 2 + b0 * k * q_lpm_element + c0
+    return max(0.0, result)
 
 
 def _cap_m3h_element(size_label: str, rating_um: int, mu_cP: float) -> float:
