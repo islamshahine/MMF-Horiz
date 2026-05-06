@@ -45,9 +45,10 @@ from engine.backwash import (
 )
 from engine.collector_ext import collector_check_ext
 from engine.cartridge import (
-    cartridge_design,
-    ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS, RECOMMENDED_FLUX,
+    cartridge_design, cartridge_optimise,
+    ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS,
     HOUSING_CAPACITY_OPTIONS, DEFAULT_ELEMENTS_PER_HOUSING,
+    MARKET_ROUNDS, DP_REPLACEMENT_BAR, DHC_G_PER_TIE,
 )
 from engine.energy import hydraulic_profile, energy_summary
 
@@ -394,27 +395,25 @@ with ctx:
 
     # ── Block 7: Cartridge filter ───────────────────────────────────────────
     with st.expander("🔷 Cartridge filter", expanded=False):
-        cart_flow    = st.number_input(
+        cart_flow   = st.number_input(
             "Design flow (m³/h)", value=float(total_flow),
             step=100.0, key="cart_flow",
             help="Total flow to the cartridge station (usually = plant flow)")
-        cart_size    = st.selectbox(
-            "Element length", ELEMENT_SIZE_LABELS, index=1, key="cart_size",
-            help="All elements are 2.5\" (63.5 mm) OD; longer = more area per element")
-        cart_rating  = st.selectbox(
-            "Rating (μm)", RATING_UM_OPTIONS, index=1, key="cart_rating")
+        cart_size   = st.selectbox(
+            "Element length", ELEMENT_SIZE_LABELS, index=2, key="cart_size",
+            help="All elements are 2.5\" (63.5 mm) OD. "
+                 "Longer elements = more TIEs = higher capacity per housing.")
+        cart_rating = st.selectbox(
+            "Rating (μm absolute)", RATING_UM_OPTIONS, index=1, key="cart_rating")
         cart_housing = st.selectbox(
-            "Elements per housing", HOUSING_CAPACITY_OPTIONS,
+            "Elements per housing (market round)", HOUSING_CAPACITY_OPTIONS,
             index=HOUSING_CAPACITY_OPTIONS.index(DEFAULT_ELEMENTS_PER_HOUSING),
             key="cart_hsg",
-            help="Multi-round housing capacity: 6 (small/lab) · 12/18/24 (mid-industrial) "
-                 "· 36/48/72 (large industrial). Choose to match vendor offering.")
-        _rlo, _rhi   = RECOMMENDED_FLUX[cart_size]
-        cart_flux    = st.number_input(
-            "Target flux (m³/h / element)",
-            value=round((_rlo + _rhi) / 2.0, 2),
-            step=0.01, min_value=0.01, key="cart_flux",
-            help=f"Recommended {_rlo}–{_rhi} m³/h per element for {cart_size}")
+            help="Standard market housing rounds: 1·3·5·7·12·18·21·28·36·52·75·100 elements. "
+                 "Use the optimisation table in the Cartridge tab to find the best fit.")
+        st.caption(
+            "Capacity basis: TIE (Ten Inch Equivalent) × BASE_FLOW_TIE / μ_feed.  "
+            "Feed viscosity is taken from the feed temperature & salinity inputs above.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PRE-COMPUTE — all calculations in dependency order
@@ -704,12 +703,20 @@ for _x, _nact, _q in _load_data_cyc:
             )
 
 # ── Cartridge design ──────────────────────────────────────────────────────
+_cart_mu_cP = mu_feed * 1000.0   # Pa·s → cP
+
 cart_result = cartridge_design(
     design_flow_m3h=cart_flow,
     element_size=cart_size,
     rating_um=cart_rating,
-    target_flux_m3h_element=cart_flux,
+    mu_cP=_cart_mu_cP,
     n_elem_per_housing=cart_housing,
+)
+
+cart_optim = cartridge_optimise(
+    design_flow_m3h=cart_flow,
+    rating_um=cart_rating,
+    mu_cP=_cart_mu_cP,
 )
 
 # ── Hydraulic profile & energy ────────────────────────────────────────────
@@ -1685,66 +1692,114 @@ with main:
     with tab_cart:
         st.subheader("Cartridge (polishing) filter sizing")
 
-        with st.expander("1 · Sizing", expanded=True):
-            ca1, ca2, ca3 = st.columns(3)
+        # ── 1. Key metrics ────────────────────────────────────────────────
+        with st.expander("1 · Sizing — selected configuration", expanded=True):
+            ca1, ca2, ca3, ca4 = st.columns(4)
             ca1.metric("Elements required",  str(cart_result["n_elements"]))
             ca2.metric("Housings required",
                        str(cart_result["n_housings"]),
                        delta=f"{cart_result['n_elem_per_housing']} elem./housing",
                        delta_color="off")
-            ca3.metric("Actual flux",
-                       f"{cart_result['actual_flux_m3h_element']:.3f} m³/h/elem",
-                       delta=f"{cart_result['actual_flux_m3h_m2']:.2f} m³/h/m²",
+            ca3.metric("Flow / element",
+                       f"{cart_result['actual_flow_m3h_element']:.3f} m³/h",
+                       delta=f"{cart_result['q_lpm_element']:.1f} lpm",
                        delta_color="off")
+            ca4.metric("Dirt hold / element",
+                       f"{cart_result['dhc_g_element']:.0f} g",
+                       delta=f"{cart_result['element_ties']} TIE",
+                       delta_color="off")
+
             st.caption(
-                f"Element: **{cart_size}**  |  Rating: **{cart_rating} µm**  |  "
-                f"Area/element: {cart_result['element_area_m2']} m²  |  "
-                f"Recommended flux: "
-                f"{cart_result['recommended_flux_lo']}–"
-                f"{cart_result['recommended_flux_hi']} m³/h/element"
+                f"Element: **{cart_size}** ({cart_result['element_ties']} TIE)  |  "
+                f"Rating: **{cart_rating} µm absolute**  |  "
+                f"Area: {cart_result['element_area_m2']} m²/element  |  "
+                f"Feed viscosity: {_cart_mu_cP:.2f} cP  |  "
+                f"Safety factor: {cart_result['safety_factor']}×"
             )
             st.table(pd.DataFrame([
-                ["Design flow",         f"{cart_result['design_flow_m3h']:,.1f} m³/h"],
-                ["Element size",        cart_result["element_size"]],
-                ["Element area",        f"{cart_result['element_area_m2']} m²"],
-                ["Rating",              f"{cart_result['rating_um']} µm absolute"],
-                ["Target flux",         f"{cart_result['target_flux_m3h_element']:.3f} m³/h/element"],
-                ["Elements required",   str(cart_result["n_elements"])],
-                ["Housings required",   str(cart_result["n_housings"])],
-                ["Elem./housing",       str(cart_result["n_elem_per_housing"])],
-                ["Actual flux",         f"{cart_result['actual_flux_m3h_element']:.3f} m³/h/element"],
-                ["Flux density",        f"{cart_result['actual_flux_m3h_m2']:.3f} m³/h/m²"],
+                ["Design flow",                f"{cart_result['design_flow_m3h']:,.1f} m³/h"],
+                ["Element size",               cart_result["element_size"]],
+                ["Element area",               f"{cart_result['element_area_m2']} m²"],
+                ["Rating",                     f"{cart_result['rating_um']} µm absolute"],
+                ["Base capacity (1 cP)",       f"{cart_result['cap_m3h_element_base']:.3f} m³/h/element"],
+                ["Capacity (derated @ μ)",     f"{cart_result['cap_m3h_element_visc']:.3f} m³/h/element"],
+                ["Capacity (rated w/ 1.5 SF)", f"{cart_result['cap_m3h_element_rated']:.3f} m³/h/element"],
+                ["Elements required",          str(cart_result["n_elements"])],
+                ["Elements per housing",       str(cart_result["n_elem_per_housing"])],
+                ["Housings required",          str(cart_result["n_housings"])],
+                ["Actual flow / element",      f"{cart_result['actual_flow_m3h_element']:.3f} m³/h"],
+                ["Actual flux density",        f"{cart_result['actual_flow_m3h_m2']:.3f} m³/h/m²"],
+                ["Flow / element",             f"{cart_result['q_lpm_element']:.1f} lpm"],
             ], columns=["Parameter", "Value"]))
 
+        # ── 2. ΔP & performance ───────────────────────────────────────────
         with st.expander("2 · ΔP & performance", expanded=True):
-            cb1, cb2, cb3 = st.columns(3)
-            cb1.metric("ΔP clean",   f"{cart_result['dp_clean_bar']:.4f} bar")
-            cb2.metric("ΔP dirty",   f"{cart_result['dp_dirty_bar']:.4f} bar")
-            cb3.metric("Replace at", f"{cart_result['dp_replacement_bar']:.2f} bar")
+            cb1, cb2, cb3, cb4 = st.columns(4)
+            cb1.metric("ΔP clean (BOL)",  f"{cart_result['dp_clean_bar']:.4f} bar")
+            cb2.metric("ΔP EOL",          f"{cart_result['dp_eol_bar']:.4f} bar")
+            cb3.metric("Replace at",      f"{cart_result['dp_replacement_bar']:.2f} bar")
+            cb4.metric("DHC / element",   f"{cart_result['dhc_g_element']:.0f} g")
+
+            _dp_pct = (cart_result['dp_clean_bar'] / DP_REPLACEMENT_BAR * 100
+                       if DP_REPLACEMENT_BAR > 0 else 0)
+            _dp_ok  = cart_result['dp_clean_bar'] < DP_REPLACEMENT_BAR * 0.5
             st.caption(
-                "ΔP model: empirical power-law calibrated to Pall/Parker/3M data.  "
-                "Clean ΔP at actual flux density; dirty ΔP ≈ 4 × clean "
-                "(fully plugged element end-of-life).  "
-                "Replace elements when differential pressure exceeds "
-                f"{cart_result['dp_replacement_bar']:.2f} bar."
+                f"ΔP model: vendor quadratic (lpm/element basis, 40\" reference + TIE scaling).  "
+                f"Clean ΔP = {cart_result['dp_clean_bar']*1000:.1f} mbar at "
+                f"{cart_result['q_lpm_element']:.1f} lpm/element.  "
+                f"EOL ΔP ≈ 2× clean.  "
+                f"{'✅' if _dp_ok else '⚠️'} BOL ΔP is {_dp_pct:.0f} % of replacement trigger."
             )
 
-        with st.expander("3 · Economics", expanded=True):
+        # ── 3. Length optimisation table ──────────────────────────────────
+        with st.expander("3 · Element length optimisation", expanded=True):
+            st.caption(
+                f"Comparing all standard lengths at **{cart_rating} µm** rating, "
+                f"μ = **{_cart_mu_cP:.2f} cP**, SF = {SAFETY_FACTOR}×.  "
+                "Market round = smallest standard housing size ≥ n_elements "
+                "(fits in 1 housing where possible).  "
+                "🏆 = recommended (fewest housings)."
+            )
+            _opt_rows = []
+            for r in cart_optim:
+                flag = "🏆" if r["is_recommended"] else ""
+                sel  = " ◀" if r["size"] == cart_size else ""
+                _opt_rows.append({
+                    "":              flag,
+                    "Length":        r["size"] + sel,
+                    "TIE":           r["ties"],
+                    "Cap. (m³/h/el)": f"{r['cap_m3h_elem']:.3f}",
+                    "Elements":      r["n_elements"],
+                    "Market round":  r["market_round"],
+                    "Housings":      r["n_housings"],
+                    "Fill %":        f"{r['fill_pct']:.0f} %",
+                    "lpm/element":   f"{r['q_lpm_element']:.1f}",
+                    "ΔP clean (bar)": f"{r['dp_clean_bar']:.4f}",
+                    "ΔP EOL (bar)":  f"{r['dp_eol_bar']:.4f}",
+                    "DHC/el (g)":    f"{r['dhc_g']:.0f}",
+                })
+            st.dataframe(
+                pd.DataFrame(_opt_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
+
+        # ── 4. Economics ──────────────────────────────────────────────────
+        with st.expander("4 · Economics", expanded=True):
             cc1, cc2, cc3 = st.columns(3)
             cc1.metric("Replacement interval", f"{cart_result['replacement_freq_days']} days")
             cc2.metric("Changes / year",        f"{cart_result['replacements_per_year']:.1f}")
             cc3.metric("Annual element cost",   f"USD {cart_result['annual_cost_usd']:,.0f}")
             st.table(pd.DataFrame([
-                ["Cost per element",    f"USD {cart_result['cost_per_element_usd']:,.0f}"],
-                ["Replacement interval", f"{cart_result['replacement_freq_days']} days"],
-                ["Changes / year",      f"{cart_result['replacements_per_year']:.1f}"],
-                ["Total elements",      str(cart_result["n_elements"])],
-                ["Annual cost",         f"USD {cart_result['annual_cost_usd']:,.0f}"],
+                ["Cost per element",      f"USD {cart_result['cost_per_element_usd']:,.0f}"],
+                ["Replacement interval",  f"{cart_result['replacement_freq_days']} days"],
+                ["Changes / year",        f"{cart_result['replacements_per_year']:.1f}"],
+                ["Total elements",        str(cart_result["n_elements"])],
+                ["Annual cost",           f"USD {cart_result['annual_cost_usd']:,.0f}"],
             ], columns=["Item", "Value"]))
             st.caption(
-                "Cost estimates are mid-market indicative values (2024). "
-                "Replacement frequency based on typical TSS loading — "
-                "adjust for actual feed quality."
+                "Cost estimates are mid-market indicative (2024). "
+                "Replacement frequency is indicative — adjust for actual TSS loading."
             )
 
     # ─────────────────────────────────────────────────────────────────────
@@ -1972,12 +2027,14 @@ with main:
             _tbl([
                 ("Design flow",          f"{cart_result['design_flow_m3h']:,.1f} m³/h"),
                 ("Element size",         cart_result["element_size"]),
-                ("Rating",               f"{cart_result['rating_um']} µm"),
+                ("Rating",               f"{cart_result['rating_um']} µm absolute"),
+                ("Feed viscosity",       f"{cart_result['mu_cP']:.2f} cP"),
                 ("Elements required",    str(cart_result["n_elements"])),
                 ("Housings required",    str(cart_result["n_housings"])),
-                ("Actual flux",          f"{cart_result['actual_flux_m3h_element']:.3f} m³/h/element"),
-                ("ΔP clean",        f"{cart_result['dp_clean_bar']:.4f} bar"),
-                ("ΔP dirty",        f"{cart_result['dp_dirty_bar']:.4f} bar"),
+                ("Flow / element",       f"{cart_result['actual_flow_m3h_element']:.3f} m³/h ({cart_result['q_lpm_element']:.1f} lpm)"),
+                ("ΔP clean (BOL)",       f"{cart_result['dp_clean_bar']:.4f} bar"),
+                ("ΔP EOL",               f"{cart_result['dp_eol_bar']:.4f} bar"),
+                ("DHC / element",        f"{cart_result['dhc_g_element']:.0f} g"),
                 ("Annual element cost",  f"USD {cart_result['annual_cost_usd']:,.0f}"),
             ])
             doc.add_paragraph("")
@@ -2136,8 +2193,12 @@ with main:
 | Parameter | Value |
 |---|---|
 | Design flow | {cart_result['design_flow_m3h']:,.1f} m³/h |
-| Element | {cart_result['element_size']} · {cart_result['rating_um']} µm |
-| Elements / Housings | {cart_result['n_elements']} elem. / {cart_result['n_housings']} housings |
+| Element | {cart_result['element_size']} ({cart_result['element_ties']} TIE) · {cart_result['rating_um']} µm |
+| Feed viscosity | {cart_result['mu_cP']:.2f} cP |
+| Elements / Housings | {cart_result['n_elements']} elem. / {cart_result['n_housings']} housings ({cart_result['n_elem_per_housing']} per housing) |
+| Flow per element | {cart_result['actual_flow_m3h_element']:.3f} m³/h ({cart_result['q_lpm_element']:.1f} lpm) |
+| ΔP clean / EOL | {cart_result['dp_clean_bar']:.4f} / {cart_result['dp_eol_bar']:.4f} bar |
+| DHC per element | {cart_result['dhc_g_element']:.0f} g |
 | Annual element cost | USD {cart_result['annual_cost_usd']:,.0f} |
 
 ### Energy & hydraulic profile
