@@ -47,7 +47,7 @@ from engine.collector_ext import collector_check_ext
 from engine.cartridge import (
     cartridge_design,
     ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS, RECOMMENDED_FLUX,
-    MAX_ELEMENTS_PER_HOUSING,
+    HOUSING_CAPACITY_OPTIONS, DEFAULT_ELEMENTS_PER_HOUSING,
 )
 from engine.energy import hydraulic_profile, energy_summary
 
@@ -394,16 +394,23 @@ with ctx:
 
     # ── Block 7: Cartridge filter ───────────────────────────────────────────
     with st.expander("🔷 Cartridge filter", expanded=False):
-        cart_flow   = st.number_input(
+        cart_flow    = st.number_input(
             "Design flow (m³/h)", value=float(total_flow),
             step=100.0, key="cart_flow",
             help="Total flow to the cartridge station (usually = plant flow)")
-        cart_size   = st.selectbox(
-            "Element size", ELEMENT_SIZE_LABELS, index=1, key="cart_size")
-        cart_rating = st.selectbox(
+        cart_size    = st.selectbox(
+            "Element length", ELEMENT_SIZE_LABELS, index=1, key="cart_size",
+            help="All elements are 2.5\" (63.5 mm) OD; longer = more area per element")
+        cart_rating  = st.selectbox(
             "Rating (μm)", RATING_UM_OPTIONS, index=1, key="cart_rating")
-        _rlo, _rhi  = RECOMMENDED_FLUX[cart_size]
-        cart_flux   = st.number_input(
+        cart_housing = st.selectbox(
+            "Elements per housing", HOUSING_CAPACITY_OPTIONS,
+            index=HOUSING_CAPACITY_OPTIONS.index(DEFAULT_ELEMENTS_PER_HOUSING),
+            key="cart_hsg",
+            help="Multi-round housing capacity: 6 (small/lab) · 12/18/24 (mid-industrial) "
+                 "· 36/48/72 (large industrial). Choose to match vendor offering.")
+        _rlo, _rhi   = RECOMMENDED_FLUX[cart_size]
+        cart_flux    = st.number_input(
             "Target flux (m³/h / element)",
             value=round((_rlo + _rhi) / 2.0, 2),
             step=0.01, min_value=0.01, key="cart_flux",
@@ -702,6 +709,7 @@ cart_result = cartridge_design(
     element_size=cart_size,
     rating_um=cart_rating,
     target_flux_m3h_element=cart_flux,
+    n_elem_per_housing=cart_housing,
 )
 
 # ── Hydraulic profile & energy ────────────────────────────────────────────
@@ -1682,7 +1690,7 @@ with main:
             ca1.metric("Elements required",  str(cart_result["n_elements"]))
             ca2.metric("Housings required",
                        str(cart_result["n_housings"]),
-                       delta=f"{MAX_ELEMENTS_PER_HOUSING} elem./housing max",
+                       delta=f"{cart_result['n_elem_per_housing']} elem./housing",
                        delta_color="off")
             ca3.metric("Actual flux",
                        f"{cart_result['actual_flux_m3h_element']:.3f} m³/h/elem",
@@ -1703,7 +1711,7 @@ with main:
                 ["Target flux",         f"{cart_result['target_flux_m3h_element']:.3f} m³/h/element"],
                 ["Elements required",   str(cart_result["n_elements"])],
                 ["Housings required",   str(cart_result["n_housings"])],
-                ["Max elem./housing",   str(MAX_ELEMENTS_PER_HOUSING)],
+                ["Elem./housing",       str(cart_result["n_elem_per_housing"])],
                 ["Actual flux",         f"{cart_result['actual_flux_m3h_element']:.3f} m³/h/element"],
                 ["Flux density",        f"{cart_result['actual_flux_m3h_m2']:.3f} m³/h/m²"],
             ], columns=["Parameter", "Value"]))
