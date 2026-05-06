@@ -49,6 +49,7 @@ from engine.cartridge import (
     ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS,
     HOUSING_CAPACITY_OPTIONS, DEFAULT_ELEMENTS_PER_HOUSING,
     MARKET_ROUNDS, DP_REPLACEMENT_BAR, DHC_G_PER_TIE,
+    SAFETY_FACTOR_STD, SAFETY_FACTOR_CIP,
 )
 from engine.energy import hydraulic_profile, energy_summary
 
@@ -405,15 +406,36 @@ with ctx:
                  "Longer elements = more TIEs = higher capacity per housing.")
         cart_rating = st.selectbox(
             "Rating (μm absolute)", RATING_UM_OPTIONS, index=1, key="cart_rating")
-        cart_housing = st.selectbox(
-            "Elements per housing (market round)", HOUSING_CAPACITY_OPTIONS,
-            index=HOUSING_CAPACITY_OPTIONS.index(DEFAULT_ELEMENTS_PER_HOUSING),
-            key="cart_hsg",
-            help="Standard market housing rounds: 1·3·5·7·12·18·21·28·36·52·75·100 elements. "
+
+        cart_cip = st.toggle(
+            "CIP system (SS 316L elements)",
+            value=False, key="cart_cip",
+            help="CIP (Clean-In-Place): regenerable stainless-steel 316L elements.  "
+                 "Applies SF=1.2 (vs 1.5 for disposable polymer), higher DHC (45 g/TIE), "
+                 "longer replacement interval, and SS 316L unit costs.")
+
+        # Housing size: standard market rounds + optional custom value
+        _hsg_options = [str(r) for r in HOUSING_CAPACITY_OPTIONS] + ["Custom…"]
+        _hsg_default_idx = HOUSING_CAPACITY_OPTIONS.index(DEFAULT_ELEMENTS_PER_HOUSING)
+        cart_hsg_sel = st.selectbox(
+            "Elements per housing (market round)", _hsg_options,
+            index=_hsg_default_idx, key="cart_hsg_sel",
+            help="Standard market rounds: 1·3·5·7·12·18·21·28·36·52·75·100·160·200.  "
+                 "Select 'Custom…' to enter any value up to 500.  "
                  "Use the optimisation table in the Cartridge tab to find the best fit.")
+        if cart_hsg_sel == "Custom…":
+            cart_housing = st.number_input(
+                "Custom elements per housing", min_value=1, max_value=500,
+                value=100, step=1, key="cart_hsg_custom",
+                help="Enter a non-standard housing capacity (e.g. 120, 144, 180).")
+        else:
+            cart_housing = int(cart_hsg_sel)
+
+        _sf_label = f"SF = {SAFETY_FACTOR_CIP}" if cart_cip else f"SF = {SAFETY_FACTOR_STD}"
         st.caption(
-            "Capacity basis: TIE (Ten Inch Equivalent) × BASE_FLOW_TIE / μ_feed.  "
-            "Feed viscosity is taken from the feed temperature & salinity inputs above.")
+            f"{'🔩 SS 316L CIP mode — ' + _sf_label if cart_cip else '🔵 Polymer standard — ' + _sf_label}.  "
+            "Capacity = TIE × BASE_FLOW_TIE / μ_feed.  "
+            "Feed viscosity from temperature & salinity inputs.")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PRE-COMPUTE — all calculations in dependency order
@@ -711,12 +733,14 @@ cart_result = cartridge_design(
     rating_um=cart_rating,
     mu_cP=_cart_mu_cP,
     n_elem_per_housing=cart_housing,
+    is_CIP_system=cart_cip,
 )
 
 cart_optim = cartridge_optimise(
     design_flow_m3h=cart_flow,
     rating_um=cart_rating,
     mu_cP=_cart_mu_cP,
+    is_CIP_system=cart_cip,
 )
 
 # ── Hydraulic profile & energy ────────────────────────────────────────────
@@ -1709,7 +1733,9 @@ with main:
                        delta=f"{cart_result['element_ties']} TIE",
                        delta_color="off")
 
+            _cip_badge = "🔩 SS 316L — CIP" if cart_result["is_CIP_system"] else "🔵 Polymer — standard"
             st.caption(
+                f"{_cip_badge}  |  "
                 f"Element: **{cart_size}** ({cart_result['element_ties']} TIE)  |  "
                 f"Rating: **{cart_rating} µm absolute**  |  "
                 f"Area: {cart_result['element_area_m2']} m²/element  |  "
@@ -2026,8 +2052,10 @@ with main:
             doc.add_heading("8. Cartridge Filter", 2)
             _tbl([
                 ("Design flow",          f"{cart_result['design_flow_m3h']:,.1f} m³/h"),
+                ("Element material",     cart_result["element_material"]),
                 ("Element size",         cart_result["element_size"]),
                 ("Rating",               f"{cart_result['rating_um']} µm absolute"),
+                ("Safety factor",        f"{cart_result['safety_factor']}×"),
                 ("Feed viscosity",       f"{cart_result['mu_cP']:.2f} cP"),
                 ("Elements required",    str(cart_result["n_elements"])),
                 ("Housings required",    str(cart_result["n_housings"])),
@@ -2193,7 +2221,9 @@ with main:
 | Parameter | Value |
 |---|---|
 | Design flow | {cart_result['design_flow_m3h']:,.1f} m³/h |
+| Material | {cart_result['element_material']} |
 | Element | {cart_result['element_size']} ({cart_result['element_ties']} TIE) · {cart_result['rating_um']} µm |
+| Safety factor | {cart_result['safety_factor']}× |
 | Feed viscosity | {cart_result['mu_cP']:.2f} cP |
 | Elements / Housings | {cart_result['n_elements']} elem. / {cart_result['n_housings']} housings ({cart_result['n_elem_per_housing']} per housing) |
 | Flow per element | {cart_result['actual_flow_m3h_element']:.3f} m³/h ({cart_result['q_lpm_element']:.1f} lpm) |

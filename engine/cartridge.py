@@ -10,8 +10,10 @@ Sizing basis
     q_cap_m3h_element = BASE_FLOW_TIE[rating_um] × ties
 • Viscosity derating (seawater typically 1.0–1.8 cP):
     q_derated = q_cap_m3h_element / mu_cP
-• Design sizing with 1.5× safety factor:
-    n_elements = ceil(Q_design / (q_derated / SAFETY_FACTOR))
+• Design sizing with safety factor (SF):
+    n_elements = ceil(Q_design / (q_derated / SF))
+    SF = 1.5  for standard (disposable) polymer elements
+    SF = 1.2  for CIP systems (SS 316L regenerable elements — cleaning is frequent)
 • ΔP model: vendor quadratic  ΔP[mbar] = a·q² + b·q + c
   where q = lpm per element.  Base curves measured on 40" element:
     1 µm absolute : a=0.0002,  b=0.304,  c=−5.539
@@ -19,7 +21,9 @@ Sizing basis
   Other lengths derived via TIE-ratio scaling (k = 4/N_TIE):
     a_N = a_40 × k²,  b_N = b_40 × k,  c_N = c_40
   Direct vendor override: 60" @ 5 µm  (a=0.0002, b=0.1025, c=−6.3865).
-• Dirt holding capacity (DHC): 30 g/TIE per element (Table 10, absolute).
+• Dirt holding capacity (DHC):
+    Polymer (standard) : 30 g/TIE per element (Table 10)
+    SS 316L (CIP)      : 45 g/TIE per element (metal media holds more solids)
 • End-of-life trigger: ΔP ≥ 1.0 bar (vendor range 0.69–1.0 bar).
 • Optimisation: iterate all standard element lengths; map n_elements to nearest
   MARKET_ROUND ≥ n_elements; fewest housings = recommended configuration.
@@ -34,7 +38,9 @@ BASE_FLOW_TIE: dict = {
     10: 0.90,   # m³/h / TIE @ 10 µm — estimated ~20 % above 5 µm
 }
 
-SAFETY_FACTOR = 1.5   # applied to capacity when computing n_elements
+SAFETY_FACTOR_STD = 1.5   # standard disposable polymer elements
+SAFETY_FACTOR_CIP = 1.2   # CIP / SS 316L regenerable elements (more frequent cleaning)
+SAFETY_FACTOR     = SAFETY_FACTOR_STD   # default alias
 
 # ── Element catalogue (all 2.5" / 63.5 mm OD pleated) ───────────────────────
 ELEMENT_CATALOGUE: dict = {
@@ -55,7 +61,7 @@ ALL_ELEMENT_LENGTHS  = ['10"', '20"', '30"', '40"', '50"', '60"', '70"']
 RATING_UM_OPTIONS    = [1, 5, 10]
 
 # ── Market housing rounds (elements per housing, standard catalogue sizes) ────
-MARKET_ROUNDS                = [1, 3, 5, 7, 12, 18, 21, 28, 36, 52, 75, 100]
+MARKET_ROUNDS                = [1, 3, 5, 7, 12, 18, 21, 28, 36, 52, 75, 100, 160, 200]
 DEFAULT_ELEMENTS_PER_HOUSING = 36
 HOUSING_CAPACITY_OPTIONS     = MARKET_ROUNDS   # alias used in app.py selectors
 
@@ -76,12 +82,18 @@ DP_REPLACEMENT_BAR = 1.00   # EOL ΔP trigger (vendor range 0.69–1.00 bar)
 _DP_DIRTY_FACTOR   = 2.0    # EOL / clean ratio (approximate)
 
 # ── Dirt holding capacity ─────────────────────────────────────────────────────
-DHC_G_PER_TIE = 30.0   # g per TIE per element (absolute rating — Table 10)
+DHC_G_PER_TIE        = 30.0   # g/TIE — polymer (standard) — Table 10
+DHC_G_PER_TIE_SS316L = 45.0   # g/TIE — SS 316L metal media (higher void volume)
 
-# ── Replacement frequency — indicative (days) ─────────────────────────────────
+# ── Replacement / CIP frequency — indicative (days) ──────────────────────────
+# Polymer: elements discarded when plugged.
 _FREQ_DAYS: dict = {1: 30, 5: 60, 10: 90}
+# SS 316L: CIP regenerates elements; "replacement" means full element swap
+# after many CIP cycles, typically 1–2 years.
+_FREQ_DAYS_SS316L: dict = {1: 180, 5: 365, 10: 730}
 
 # ── Element unit cost USD — mid-market industrial (2024) ──────────────────────
+# Polymer (disposable, pleated)
 _COST_USD: dict = {
     ('10"', 1):  55,  ('10"', 5):  42,  ('10"', 10):  32,
     ('20"', 1):  85,  ('20"', 5):  65,  ('20"', 10):  50,
@@ -90,6 +102,16 @@ _COST_USD: dict = {
     ('50"', 1): 195,  ('50"', 5): 155,  ('50"', 10): 118,
     ('60"', 1): 230,  ('60"', 5): 180,  ('60"', 10): 138,
     ('70"', 1): 265,  ('70"', 5): 210,  ('70"', 10): 160,
+}
+# SS 316L (regenerable; higher upfront, lower annualised replacement cost)
+_COST_USD_SS316L: dict = {
+    ('10"', 1):  210,  ('10"', 5):  165,  ('10"', 10):  125,
+    ('20"', 1):  360,  ('20"', 5):  280,  ('20"', 10):  210,
+    ('30"', 1):  510,  ('30"', 5):  400,  ('30"', 10):  305,
+    ('40"', 1):  660,  ('40"', 5):  520,  ('40"', 10):  395,
+    ('50"', 1):  820,  ('50"', 5):  645,  ('50"', 10):  490,
+    ('60"', 1):  975,  ('60"', 5):  765,  ('60"', 10):  585,
+    ('70"', 1): 1130,  ('70"', 5):  890,  ('70"', 10):  675,
 }
 
 
@@ -142,6 +164,7 @@ def cartridge_design(
     rating_um: int          = 5,
     mu_cP: float            = 1.0,
     n_elem_per_housing: int = DEFAULT_ELEMENTS_PER_HOUSING,
+    is_CIP_system: bool     = False,
 ) -> dict:
     """
     Size a cartridge polishing filter bank.
@@ -153,6 +176,8 @@ def cartridge_design(
     rating_um          : 1 | 5 | 10  (µm absolute)
     mu_cP              : Feed water dynamic viscosity, cP (1.0 cP = water @20 °C)
     n_elem_per_housing : Elements per housing vessel (choose from MARKET_ROUNDS)
+    is_CIP_system      : True → SS 316L regenerable elements; SF=1.2, higher DHC,
+                         longer replacement interval, SS unit costs applied.
 
     Returns
     -------
@@ -167,8 +192,11 @@ def cartridge_design(
     ties = cat["ties"]
     area = cat["area_m2"]
 
+    sf       = SAFETY_FACTOR_CIP if is_CIP_system else SAFETY_FACTOR_STD
+    material = "SS 316L" if is_CIP_system else "Polymer"
+
     cap_visc  = _cap_m3h_element(element_size, rating_um, mu_cP)
-    cap_rated = cap_visc / SAFETY_FACTOR
+    cap_rated = cap_visc / sf
 
     n_elements       = max(1, math.ceil(design_flow_m3h / cap_rated))
     n_housings       = math.ceil(n_elements / n_elem_per_housing)
@@ -181,11 +209,14 @@ def cartridge_design(
     dp_clean_bar  = dp_clean_mbar / 1000.0
     dp_eol_bar    = dp_eol_mbar   / 1000.0
 
-    dhc_g = DHC_G_PER_TIE * ties
+    dhc_per_tie = DHC_G_PER_TIE_SS316L if is_CIP_system else DHC_G_PER_TIE
+    dhc_g       = dhc_per_tie * ties
 
-    freq_days     = _FREQ_DAYS[rating_um]
+    freq_table    = _FREQ_DAYS_SS316L if is_CIP_system else _FREQ_DAYS
+    cost_table    = _COST_USD_SS316L  if is_CIP_system else _COST_USD
+    freq_days     = freq_table[rating_um]
     repl_per_year = 365.0 / freq_days
-    cost_each     = _COST_USD.get((element_size, rating_um), 120)
+    cost_each     = cost_table.get((element_size, rating_um), 200 if is_CIP_system else 120)
     annual_cost   = n_elements * repl_per_year * cost_each
 
     return {
@@ -196,11 +227,13 @@ def cartridge_design(
         "element_ties":             ties,
         "rating_um":                rating_um,
         "mu_cP":                    round(mu_cP,             3),
+        "is_CIP_system":            is_CIP_system,
+        "element_material":         material,
         # Capacity
         "cap_m3h_element_base":     round(BASE_FLOW_TIE[rating_um] * ties, 3),
         "cap_m3h_element_visc":     round(cap_visc,          3),
         "cap_m3h_element_rated":    round(cap_rated,         3),
-        "safety_factor":            SAFETY_FACTOR,
+        "safety_factor":            sf,
         # Sizing
         "n_elements":               n_elements,
         "n_elem_per_housing":       n_elem_per_housing,
@@ -227,27 +260,31 @@ def cartridge_design(
 
 def cartridge_optimise(
     design_flow_m3h: float,
-    rating_um: int = 5,
-    mu_cP: float   = 1.0,
+    rating_um: int      = 5,
+    mu_cP: float        = 1.0,
+    is_CIP_system: bool = False,
 ) -> list:
     """
     Compare all standard element lengths to find the most efficient configuration.
 
     Algorithm (per element length):
-      1. n_elements = ceil(Q / cap_rated)  [1.5× SF + viscosity derating]
+      1. n_elements = ceil(Q / cap_rated)  [SF + viscosity derating]
+         SF = 1.2 for CIP, 1.5 for standard.
       2. nearest_round = smallest MARKET_ROUND ≥ n_elements (1 housing if fits)
       3. n_housings = ceil(n_elements / nearest_round)
 
     Returns list of dicts sorted by (n_housings ASC, n_elements ASC).
     The entry with is_recommended=True is the best choice.
     """
+    sf          = SAFETY_FACTOR_CIP if is_CIP_system else SAFETY_FACTOR_STD
+    dhc_per_tie = DHC_G_PER_TIE_SS316L if is_CIP_system else DHC_G_PER_TIE
+
     rows = []
     for size_label in ALL_ELEMENT_LENGTHS:
         cat  = ELEMENT_CATALOGUE[size_label]
         ties = cat["ties"]
-        area = cat["area_m2"]
 
-        cap_rated   = _cap_m3h_element(size_label, rating_um, mu_cP) / SAFETY_FACTOR
+        cap_rated   = _cap_m3h_element(size_label, rating_um, mu_cP) / sf
         n_elem      = max(1, math.ceil(design_flow_m3h / cap_rated))
         best_round  = _nearest_market_round(n_elem)
         n_housings  = math.ceil(n_elem / best_round)
@@ -257,7 +294,7 @@ def cartridge_optimise(
         dp_clean_mbar = _dp_mbar(q_lpm, size_label, rating_um)
         dp_eol_mbar   = dp_clean_mbar * _DP_DIRTY_FACTOR
         fill_pct      = 100.0 * n_elem / (n_housings * best_round)
-        dhc_g         = DHC_G_PER_TIE * ties
+        dhc_g         = dhc_per_tie * ties
 
         rows.append({
             "size":           size_label,
