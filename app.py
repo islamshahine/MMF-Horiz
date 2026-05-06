@@ -41,7 +41,7 @@ from engine.nozzles import (
 )
 from engine.backwash import (
     backwash_hydraulics, bed_expansion, pressure_drop,
-    bw_sequence,
+    bw_sequence, filtration_cycle,
 )
 from engine.collector_ext import collector_check_ext
 from engine.cartridge import (
@@ -203,6 +203,9 @@ with ctx:
     with st.expander("🧱 Media layers", expanded=True):
         nozzle_plate_h = st.number_input("Nozzle plate height (m)",
                                          value=1.0, step=0.05)
+        captured_solids_density = st.number_input(
+            "Captured solids density (kg/m³)", value=1020.0, step=10.0,
+            help="Density of TSS retained in media voids — typically 1010–1050 kg/m³")
         n_layers = int(st.selectbox("Layers", [1,2,3,4,5,6], index=2))
         layers = []
         default_types = ["Gravel", "Fine Sand", "Anthracite"]
@@ -218,6 +221,18 @@ with ctx:
             depth  = st.number_input("Depth (m)",
                                      value=preset["default_depth"],
                                      step=0.05, key=f"ld_{i}")
+            default_sup = (m_type == "Gravel")
+            is_sup = st.checkbox("Support media (no clogging)", value=default_sup,
+                                 key=f"sup_{i}")
+            if not is_sup:
+                cap_raw = st.number_input(
+                    "Capture weight", value=round(depth * 100, 0), step=5.0,
+                    min_value=0.0, key=f"cap_{i}",
+                    help="Relative TSS capture weight — auto-normalised across "
+                         "non-support layers. E.g., 30 + 70 → 30 %/70 %.")
+                cap_frac = cap_raw / 100.0
+            else:
+                cap_frac = 0.0
             data   = preset.copy()
             if m_type == "Custom":
                 data["d10"]       = st.number_input("d10 (mm)",  value=1.0,
@@ -228,7 +243,8 @@ with ctx:
                                                     key=f"ep_{i}")
                 data["rho_p_eff"] = st.number_input("Density (kg/m³)", value=2650,
                                                     key=f"rh_{i}")
-            layers.append({**data, "Type": m_type, "Depth": depth})
+            layers.append({**data, "Type": m_type, "Depth": depth,
+                           "is_support": is_sup, "capture_frac": cap_frac})
 
     # ── Block 5: Backwash ──────────────────────────────────────────────────
     with st.expander("🔄 Backwash design", expanded=False):
@@ -248,9 +264,38 @@ with ctx:
                                               value=1, min_value=1))
         solid_loading  = st.number_input("Solid loading before BW (kg/m²)",
                                          value=1.5, step=0.1)
+        dp_trigger_bar = st.number_input(
+            "BW initiation ΔP setpoint (bar)", value=1.0, step=0.1,
+            min_value=0.01, key="dp_trig",
+            help="Filter triggers BW when ΔP across media reaches this value")
+        alpha_9 = st.number_input(
+            "Specific cake resistance α (× 10⁹ m/kg)",
+            value=0.0, step=5.0, min_value=0.0, key="alpha_res",
+            help=(
+                "Resistance of deposited TSS cake per unit mass (Ruth model). "
+                "0 = auto-calibrate: α is set so that ΔP reaches the trigger "
+                "exactly at M_max (solid loading input above). "
+                "Typical ranges: coarse mineral / silt  0.1–10 · "
+                "seawater mixed TSS  10–50 · "
+                "organic-rich / algae  100–500 · "
+                "clay / fine colloids  1 000–10 000  (all × 10⁹ m/kg)."
+            ))
+        alpha_specific = alpha_9 * 1e9   # m/kg
         tss_low  = st.number_input("Feed TSS — low (mg/L)",  value=5.0,  step=1.0)
         tss_avg  = st.number_input("Feed TSS — avg (mg/L)",  value=10.0, step=1.0)
         tss_high = st.number_input("Feed TSS — high (mg/L)", value=20.0, step=1.0)
+        st.caption("Temperature range for filtration cycle matrix:")
+        temp_low  = st.number_input("Feed temp — min (°C)", value=15.0, step=1.0, key="t_low")
+        temp_high = st.number_input("Feed temp — max (°C)", value=35.0, step=1.0, key="t_high")
+        st.caption("BW step durations (editable):")
+        bw_s_drain  = st.number_input("① Gravity drain (min)",       value=10, step=1, min_value=0, key="bws1")
+        bw_s_air    = st.number_input("② Air scour only (min)",       value=1,  step=1, min_value=0, key="bws2")
+        bw_s_airw   = st.number_input("③ Air + low-rate water (min)", value=5,  step=1, min_value=0, key="bws3")
+        bw_s_hw     = st.number_input("④ High-rate water flush (min)",value=10, step=1, min_value=0, key="bws4")
+        bw_s_settle = st.number_input("⑤ Settling (min)",             value=2,  step=1, min_value=0, key="bws5")
+        bw_s_fill   = st.number_input("⑥ Fill & rinse (min)",         value=10, step=1, min_value=0, key="bws6")
+        bw_total_min = bw_s_drain + bw_s_air + bw_s_airw + bw_s_hw + bw_s_settle + bw_s_fill
+        st.metric("Total BW duration", f"{bw_total_min} min")
 
     # ── Block 3+6: Supports & nozzles ─────────────────────────────────────
     with st.expander("🔩 Nozzles & supports", expanded=False):
@@ -393,8 +438,11 @@ bw_dp = pressure_drop(
     q_filter_m3h=q_per_filter,
     avg_area_m2=avg_area,
     solid_loading_kg_m2=solid_loading,
+    captured_density_kg_m3=captured_solids_density,
     water_temp_c=feed_temp,
     rho_water=rho_feed,
+    alpha_m_kg=alpha_specific,
+    dp_trigger_bar=dp_trigger_bar,
 )
 # Use dirty ΔP as the nozzle plate design ΔP (auto-wired, no manual input needed)
 np_dp_auto = bw_dp["dp_dirty_bar"]
@@ -495,6 +543,102 @@ def _tss_bal(tss_mg_l):
 m_sol_low,  w_tss_low,  m_daily_low  = _tss_bal(tss_low)
 m_sol_avg,  w_tss_avg,  m_daily_avg  = _tss_bal(tss_avg)
 m_sol_high, w_tss_high, m_daily_high = _tss_bal(tss_high)
+
+# ── Filtration cycle (DP-trigger based, design temperature) ──────────────
+_load_data_cyc = filter_loading(total_flow, streams, n_filters, redundancy)
+filt_cycles: dict = {}
+for _x, _nact, _q in _load_data_cyc:
+    _sc = "N" if _x == 0 else f"N-{_x}"
+    filt_cycles[_sc] = filtration_cycle(
+        layers=layers,
+        q_filter_m3h=_q,
+        avg_area_m2=avg_area,
+        solid_loading_kg_m2=solid_loading,
+        captured_density_kg_m3=captured_solids_density,
+        water_temp_c=feed_temp,
+        rho_water=rho_feed,
+        dp_trigger_bar=dp_trigger_bar,
+        alpha_m_kg=alpha_specific,
+        tss_mg_l_list=[tss_low, tss_avg, tss_high],
+    )
+
+# ── Filtration cycle matrix: TSS × temperature, α fixed at design value ──
+# α is locked to the design-temperature calibration so that temperature
+# variation reflects real viscosity effect on cycle duration.
+_alpha_fixed  = filt_cycles["N"]["alpha_used_m_kg"] if filt_cycles else 0.0
+_tss_labels   = [f"Low ({tss_low:.0f} mg/L)",
+                 f"Avg ({tss_avg:.0f} mg/L)",
+                 f"High ({tss_high:.0f} mg/L)"]
+_tss_vals     = [tss_low, tss_avg, tss_high]
+_temp_vals    = [temp_low, feed_temp, temp_high]
+_temp_labels  = [f"Min ({temp_low:.0f}°C)",
+                 f"Design ({feed_temp:.0f}°C)",
+                 f"Max ({temp_high:.0f}°C)"]
+# cycle_matrix[sc_label][temp_label] = filtration_cycle result
+cycle_matrix: dict = {}
+for _x, _nact, _q in _load_data_cyc:
+    _sc = "N" if _x == 0 else f"N-{_x}"
+    cycle_matrix[_sc] = {}
+    for _tv, _tl in zip(_temp_vals, _temp_labels):
+        cycle_matrix[_sc][_tl] = filtration_cycle(
+            layers=layers,
+            q_filter_m3h=_q,
+            avg_area_m2=avg_area,
+            solid_loading_kg_m2=solid_loading,
+            captured_density_kg_m3=captured_solids_density,
+            water_temp_c=_tv,
+            rho_water=rho_feed,
+            dp_trigger_bar=dp_trigger_bar,
+            alpha_m_kg=_alpha_fixed,
+            tss_mg_l_list=_tss_vals,
+        )
+
+# ── BW scheduling & feasibility ──────────────────────────────────────────
+import math as _math
+_bw_dur_h = bw_total_min / 60.0   # BW duration in hours
+
+# feasibility_matrix[sc_label][temp_label][tss_label] = dict of KPIs
+def _feas_kpis(t_cycle_h, bw_dur_h, n_active_filters):
+    """Return operational KPIs for one (cycle_time, BW_duration, n_filters) set."""
+    t_total   = t_cycle_h + bw_dur_h          # full filtration + BW period
+    avail_pct = t_cycle_h / t_total * 100 if t_total > 0 else 0.0
+    bw_per_day = 24.0 / t_total if t_total > 0 else 0.0
+    # steady-state fraction of filters in BW at any moment
+    sim_demand = n_active_filters * bw_dur_h / t_total if t_total > 0 else 0.0
+    bw_trains  = max(1, _math.ceil(sim_demand))
+
+    # Feasibility score
+    if avail_pct >= 90 and bw_trains <= 1 and t_cycle_h >= 6:
+        score, flag = "🟢 Good", "OK"
+    elif avail_pct >= 80 and bw_trains <= 2 and t_cycle_h >= 3:
+        score, flag = "🟡 Caution", "Review"
+    else:
+        score, flag = "🔴 Critical", "Redesign"
+
+    return {
+        "t_cycle_h":   round(t_cycle_h,   2),
+        "avail_pct":   round(avail_pct,    1),
+        "bw_per_day":  round(bw_per_day,   1),
+        "sim_demand":  round(sim_demand,   2),
+        "bw_trains":   bw_trains,
+        "score":       score,
+        "flag":        flag,
+    }
+
+feasibility_matrix: dict = {}
+for _x, _nact, _q in _load_data_cyc:
+    _sc = "N" if _x == 0 else f"N-{_x}"
+    feasibility_matrix[_sc] = {}
+    for _t_lbl in _temp_labels:
+        feasibility_matrix[_sc][_t_lbl] = {}
+        for _tss_lbl, _tss_v in zip(_tss_labels, _tss_vals):
+            _cyc_t = cycle_matrix[_sc][_t_lbl]
+            _tr    = next((r for r in _cyc_t["tss_results"]
+                           if r["TSS (mg/L)"] == _tss_v), None)
+            _t_cyc = _tr["Cycle duration (h)"] if _tr else 0.0
+            feasibility_matrix[_sc][_t_lbl][_tss_lbl] = _feas_kpis(
+                _t_cyc, _bw_dur_h, _nact
+            )
 
 # ── Cartridge design ──────────────────────────────────────────────────────
 cart_result = cartridge_design(
@@ -800,11 +944,15 @@ with main:
                 "epsilon0":"ε₀","d10":"d10 (mm)","cu":"CU"})
             st.dataframe(df_med, use_container_width=True, hide_index=True)
 
-        with st.expander("3 · Pressure drop — Ergun (all scenarios)", expanded=True):
+        with st.expander("3 · Pressure drop — clean/moderate/dirty (all scenarios)", expanded=True):
             st.caption(
-                f"Solid loading = {solid_loading:.2f} kg/m²  |  "
-                f"Feed water: ρ={rho_feed:.1f} kg/m³, μ={mu_feed*1000:.4f} cP  |  "
-                f"d60 = d10 × CU used as effective diameter (conservative)"
+                f"Clean ΔP: Ergun equation on virgin bed.  "
+                f"Moderate = 50% loaded · Dirty = 100% loaded — cake model (Ruth): "
+                f"ΔP_cake = α × μ × LV × M.  "
+                f"α ({bw_dp['alpha_source']}) = "
+                f"{bw_dp['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg  |  "
+                f"M_max = {solid_loading:.2f} kg/m²  |  "
+                f"Feed: ρ={rho_feed:.1f} kg/m³, μ={mu_feed*1000:.4f} cP"
             )
 
             # Compute ΔP for all redundancy scenarios
@@ -817,8 +965,11 @@ with main:
                     q_filter_m3h=q,
                     avg_area_m2=avg_area,
                     solid_loading_kg_m2=solid_loading,
+                    captured_density_kg_m3=captured_solids_density,
                     water_temp_c=feed_temp,
                     rho_water=rho_feed,
+                    alpha_m_kg=alpha_specific,
+                    dp_trigger_bar=dp_trigger_bar,
                 )
                 dp_summary.append({
                     "Scenario":        sc_label,
@@ -871,6 +1022,24 @@ with main:
             i3.metric("Per filter",
                       f"{total_mass/total_vessels/1000:.2f} t"
                       if total_vessels else "—")
+
+        with st.expander("5 · Clogging analysis — N scenario", expanded=True):
+            st.caption(
+                f"Captured solids density: **{captured_solids_density:.0f} kg/m³**  |  "
+                f"Total solid loading: **{solid_loading:.2f} kg/m²**"
+            )
+            clog_cols = ["Media", "Support", "Capture (%)",
+                         "Solid load (kg/m²)", "Solid vol (m³/m²)",
+                         "ΔεF", "Clogging (%)", "ε clean",
+                         "Cake ΔP mod (bar)", "Cake ΔP dirty (bar)"]
+            clog_df = pd.DataFrame(bw_dp["layers"])[clog_cols]
+            st.dataframe(clog_df, use_container_width=True, hide_index=True)
+            st.caption(
+                "Support layers (e.g., Gravel) retain no solids. "
+                "Cake ΔP = α × μ × LV × M, distributed by capture fraction. "
+                "ΔεF shown for reference only — cake model, not voidage reduction, "
+                "drives moderate/dirty ΔP."
+            )
 
     # ─────────────────────────────────────────────────────────────────────
     # TAB 6 · BACKWASH
@@ -1041,6 +1210,236 @@ with main:
                 "Solids captured = TSS × Q_filter × run_time.  "
                 "Waste TSS = solids mass / waste volume (excl. rinse)."
             )
+
+        with st.expander("4 · Filtration cycle matrix — TSS × temperature", expanded=True):
+            if filt_cycles and cycle_matrix:
+                first_cyc   = next(iter(filt_cycles.values()))
+                _alpha_src  = first_cyc["alpha_source"]
+                _alpha_used = first_cyc["alpha_used_m_kg"]
+                _alpha_cal  = first_cyc["alpha_calibrated_m_kg"]
+
+                st.info(
+                    f"**Ruth cake model** · BW setpoint {dp_trigger_bar:.2f} bar · "
+                    f"M_max {solid_loading:.2f} kg/m² · "
+                    f"α ({_alpha_src}) = {_alpha_used/1e9:.1f} × 10⁹ m/kg "
+                    f"(auto-cal at design temp = {_alpha_cal/1e9:.1f} × 10⁹ m/kg) · "
+                    f"Temperature range {temp_low:.0f} – {feed_temp:.0f} – {temp_high:.0f} °C"
+                )
+
+                # ── Matrix tables: one per redundancy scenario ────────────
+                for sc_lbl, sc_temps in cycle_matrix.items():
+                    _lv = filt_cycles[sc_lbl]["lv_m_h"]
+                    st.markdown(
+                        f"**Scenario {sc_lbl} · LV = {_lv:.1f} m/h**  "
+                        f"— Cycle duration (h) to reach {dp_trigger_bar:.2f} bar ΔP"
+                    )
+                    # Build matrix: rows = TSS label, cols = temp label
+                    mat_rows = []
+                    for tss_lbl, tss_v in zip(_tss_labels, _tss_vals):
+                        row = {"Feed TSS": tss_lbl}
+                        for t_lbl in _temp_labels:
+                            cyc_t = sc_temps[t_lbl]
+                            # find the matching TSS row in tss_results
+                            tr = next(
+                                (r for r in cyc_t["tss_results"]
+                                 if r["TSS (mg/L)"] == tss_v), None)
+                            row[t_lbl] = f"{tr['Cycle duration (h)']:.1f} h" if tr else "—"
+                        mat_rows.append(row)
+                    mat_df = pd.DataFrame(mat_rows).set_index("Feed TSS")
+                    st.dataframe(mat_df, use_container_width=True)
+
+                    # Sub-caption: ΔP clean at each temperature for this scenario
+                    dp_clean_str = "  ·  ".join(
+                        f"{t_lbl}: ΔP_clean = {sc_temps[t_lbl]['dp_clean_bar']:.4f} bar"
+                        for t_lbl in _temp_labels
+                    )
+                    st.caption(
+                        f"M* (load at trigger): "
+                        + "  ·  ".join(
+                            f"{t_lbl}: {sc_temps[t_lbl]['loading_at_trigger_kg_m2']:.2f} kg/m²"
+                            for t_lbl in _temp_labels
+                        )
+                        + f"  |  {dp_clean_str}"
+                    )
+
+                # ── ΔP vs solid load curve (N, design temp) ───────────────
+                with st.expander("ΔP vs M curve — N scenario, design temperature", expanded=False):
+                    st.dataframe(pd.DataFrame(first_cyc["dp_curve"]),
+                                 use_container_width=True, hide_index=True)
+
+                st.caption(
+                    "ΔP_total = ΔP_clean (Ergun) + α × μ(T) × LV × M.  "
+                    "α fixed at design-temperature calibration; temperature effect enters "
+                    "through μ(T) — colder water → higher viscosity → shorter cycle.  "
+                    "α = 0 → auto-calibrated so dirty ΔP = trigger at M_max and design temp."
+                )
+
+                with st.expander("Reference: typical α by TSS type", expanded=False):
+                    st.dataframe(pd.DataFrame([
+                        {"TSS type": "Coarse mineral / silt",        "α (× 10⁹ m/kg)": "0.1 – 10"},
+                        {"TSS type": "Seawater mixed TSS (typical)", "α (× 10⁹ m/kg)": "10 – 50"},
+                        {"TSS type": "Organic-rich / algae-laden",   "α (× 10⁹ m/kg)": "100 – 500"},
+                        {"TSS type": "Clay / fine colloids",          "α (× 10⁹ m/kg)": "1 000 – 10 000"},
+                    ]), use_container_width=True, hide_index=True)
+            else:
+                st.info("No filtration cycle data available.")
+
+        with st.expander("5 · BW scheduling & system feasibility", expanded=True):
+            _bw_steps = [
+                ("① Gravity drain",        bw_s_drain),
+                ("② Air scour only",       bw_s_air),
+                ("③ Air + low-rate water", bw_s_airw),
+                ("④ High-rate water",      bw_s_hw),
+                ("⑤ Settling",             bw_s_settle),
+                ("⑥ Fill & rinse",         bw_s_fill),
+            ]
+            # BW step summary
+            cum = 0
+            step_rows = []
+            for nm, dur in _bw_steps:
+                cum += dur
+                step_rows.append({"Step": nm, "Duration (min)": dur,
+                                   "Cumulative (min)": cum})
+            step_rows.append({"Step": "TOTAL", "Duration (min)": bw_total_min,
+                               "Cumulative (min)": bw_total_min})
+            cA, cB = st.columns([1, 2])
+            with cA:
+                st.markdown("**BW step breakdown**")
+                st.dataframe(pd.DataFrame(step_rows),
+                             use_container_width=True, hide_index=True)
+
+            with cB:
+                st.markdown(
+                    f"**BW duration: {bw_total_min} min ({_bw_dur_h*60:.0f} min)**  \n"
+                    f"Filter cycle + BW = cycle time + {bw_total_min} min.  \n"
+                    f"Availability = cycle time / (cycle + BW time) × 100 %."
+                )
+
+            if feasibility_matrix:
+                for sc_lbl, sc_temps in feasibility_matrix.items():
+                    _lv  = filt_cycles[sc_lbl]["lv_m_h"]
+                    _nact_f = next(
+                        n for x, n, q in _load_data_cyc
+                        if ("N" if x == 0 else f"N-{x}") == sc_lbl)
+                    st.markdown(
+                        f"---\n**Scenario {sc_lbl} · {_nact_f} active filters · "
+                        f"LV = {_lv:.1f} m/h**"
+                    )
+
+                    # ── Availability % matrix ─────────────────────────────
+                    st.markdown("*Availability (%) = filtration time / total period*")
+                    avail_rows = []
+                    for tss_lbl in _tss_labels:
+                        row = {"Feed TSS": tss_lbl}
+                        for t_lbl in _temp_labels:
+                            kpi = sc_temps[t_lbl][tss_lbl]
+                            row[t_lbl] = f"{kpi['avail_pct']:.1f} %"
+                        avail_rows.append(row)
+                    st.dataframe(
+                        pd.DataFrame(avail_rows).set_index("Feed TSS"),
+                        use_container_width=True)
+
+                    # ── BW per day matrix ─────────────────────────────────
+                    st.markdown("*BW cycles per filter per day*")
+                    bwday_rows = []
+                    for tss_lbl in _tss_labels:
+                        row = {"Feed TSS": tss_lbl}
+                        for t_lbl in _temp_labels:
+                            kpi = sc_temps[t_lbl][tss_lbl]
+                            row[t_lbl] = f"{kpi['bw_per_day']:.1f}"
+                        bwday_rows.append(row)
+                    st.dataframe(
+                        pd.DataFrame(bwday_rows).set_index("Feed TSS"),
+                        use_container_width=True)
+
+                    # ── Simultaneity matrix ───────────────────────────────
+                    st.markdown(
+                        "*Peak simultaneous BW demand "
+                        "(expected filters in BW at the same time)*"
+                    )
+                    sim_rows = []
+                    for tss_lbl in _tss_labels:
+                        row = {"Feed TSS": tss_lbl}
+                        for t_lbl in _temp_labels:
+                            kpi = sc_temps[t_lbl][tss_lbl]
+                            row[t_lbl] = (
+                                f"{kpi['sim_demand']:.2f} "
+                                f"→ {kpi['bw_trains']} BW train(s)"
+                            )
+                        sim_rows.append(row)
+                    st.dataframe(
+                        pd.DataFrame(sim_rows).set_index("Feed TSS"),
+                        use_container_width=True)
+
+                    # ── Feasibility scorecard ─────────────────────────────
+                    st.markdown("*Feasibility score*")
+                    score_rows = []
+                    for tss_lbl in _tss_labels:
+                        row = {"Feed TSS": tss_lbl}
+                        for t_lbl in _temp_labels:
+                            kpi = sc_temps[t_lbl][tss_lbl]
+                            row[t_lbl] = kpi["score"]
+                        score_rows.append(row)
+                    st.dataframe(
+                        pd.DataFrame(score_rows).set_index("Feed TSS"),
+                        use_container_width=True)
+
+                # ── Design guidance ───────────────────────────────────────
+                st.markdown("---")
+                st.markdown("**Design guidance**")
+
+                # Find worst-case cell (design scenario N, design temp, high TSS)
+                _n_kpi = feasibility_matrix.get("N", {}).get(
+                    f"Design ({feed_temp:.0f}°C)", {}).get(
+                    f"High ({tss_high:.0f} mg/L)", {})
+                if _n_kpi:
+                    _flag = _n_kpi["flag"]
+                    _trains = _n_kpi["bw_trains"]
+                    _avail  = _n_kpi["avail_pct"]
+                    _bwday  = _n_kpi["bw_per_day"]
+                    _tcyc   = _n_kpi["t_cycle_h"]
+
+                    guidance = []
+                    if _flag == "OK":
+                        guidance.append(
+                            f"🟢 Design is feasible at high TSS / design temp: "
+                            f"availability {_avail:.1f} %, "
+                            f"{_bwday:.1f} BW cycles/filter/day, "
+                            f"1 BW train sufficient."
+                        )
+                    else:
+                        if _trains > 1:
+                            guidance.append(
+                                f"🔴 **{_trains} simultaneous BW trains required** "
+                                f"at high TSS ({tss_high:.0f} mg/L) / design temp — "
+                                f"consider: (a) add a dedicated BW pump/blower per stream, "
+                                f"(b) staggered BW scheduling with time-lock logic, or "
+                                f"(c) increase filter area to extend cycle > 6 h."
+                            )
+                        if _tcyc < 4:
+                            guidance.append(
+                                f"⚠️ Cycle time {_tcyc:.1f} h at worst case — "
+                                f"BW occupies {bw_total_min} min every "
+                                f"{_tcyc*60:.0f} min: consider increasing "
+                                f"filter area or adding redundancy to extend cycle."
+                            )
+                        if _avail < 80:
+                            guidance.append(
+                                f"🔴 Availability {_avail:.1f} % — "
+                                f"the system spends > 20 % of time in BW; "
+                                f"net production capacity is significantly reduced."
+                            )
+
+                    for g in guidance:
+                        st.markdown(g)
+
+                st.caption(
+                    "Scoring: 🟢 Good = avail ≥ 90 %, BW trains ≤ 1, cycle ≥ 6 h  |  "
+                    "🟡 Caution = avail 80–90 %, trains ≤ 2, cycle ≥ 3 h  |  "
+                    "🔴 Critical = avail < 80 %, trains > 2, or cycle < 3 h.  "
+                    "Simultaneity = n_active × BW_dur / (cycle + BW_dur).  "
+                    "BW trains needed = ⌈simultaneity⌉."
+                )
 
     # ─────────────────────────────────────────────────────────────────────
     # TAB 7 · WEIGHT

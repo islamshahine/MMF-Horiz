@@ -292,75 +292,276 @@ def pressure_drop(
     layers: list,
     q_filter_m3h: float,
     avg_area_m2: float,
-    solid_loading_kg_m2: float   = 1.5,
+    solid_loading_kg_m2: float    = 1.5,
     captured_density_kg_m3: float = 1020.0,
-    sphericity: float            = 0.85,
-    water_temp_c: float          = 27.0,
-    rho_water: float             = _RHO_WATER_DEF,
+    sphericity: float             = 0.85,
+    water_temp_c: float           = 27.0,
+    rho_water: float              = _RHO_WATER_DEF,
+    alpha_m_kg: float             = 0.0,
+    dp_trigger_bar: float         = 1.0,
 ) -> dict:
     """
-    Ergun pressure drop: clean, moderate (half-loaded), dirty (full-loaded).
+    Filtration ΔP: clean (Ergun) / moderate (50% loaded) / dirty (100% loaded).
 
-    Solid loading reduces voidage: Δε = (load_per_layer / ρ_captured) / depth.
-    d_60 = d_10 × CU used as effective diameter for ΔP (coarser = more resistance).
+    Clean ΔP uses Ergun equation on the virgin bed.
+    Moderate and dirty add cake filtration (Ruth model):
+        ΔP_cake = α × μ × LV × M   where M = solid loading [kg/m²]
+    alpha_m_kg = 0 → auto-calibrated so dirty ΔP equals dp_trigger_bar at M_max.
+    alpha_m_kg > 0 → user-specified value.
+
+    Solid capture per layer:
+    • is_support=True  → no clogging.
+    • capture_frac key → explicit weight (auto-normalised across non-support layers).
+    • Neither          → depth-proportional among non-support layers.
     """
     mu    = _viscosity(water_temp_c)
     u_m_h = q_filter_m3h / avg_area_m2
-    total_depth = sum(L.get("Depth", 0) for L in layers)
+
+    # ── Resolve & normalise capture fractions ─────────────────────────────
+    non_sup_depth = sum(
+        L.get("Depth", 0) for L in layers if not L.get("is_support", False)
+    )
+    raw = []
+    for L in layers:
+        if L.get("is_support", False):
+            raw.append(0.0)
+        elif L.get("capture_frac") is not None:
+            raw.append(float(L["capture_frac"]))
+        else:
+            d = L.get("Depth", 0)
+            raw.append(d / non_sup_depth if non_sup_depth > 0 else 0.0)
+
+    non_sup_sum = sum(f for f, L in zip(raw, layers)
+                      if not L.get("is_support", False))
+    fracs = [
+        0.0 if L.get("is_support", False)
+        else (f / non_sup_sum if non_sup_sum > 0 else 0.0)
+        for f, L in zip(raw, layers)
+    ]
 
     rows = []
-    dp_c = dp_m = dp_d = 0.0
+    dp_c = 0.0
 
-    for L in layers:
-        depth = L.get("Depth",    0.5)
-        eps0  = L.get("epsilon0", 0.42)
-        d10   = L.get("d10",      1.0)
-        cu    = L.get("cu",       1.5)
+    for L, frac in zip(layers, fracs):
+        depth  = L.get("Depth",    0.5)
+        eps0   = L.get("epsilon0", 0.42)
+        d10    = L.get("d10",      1.0)
+        cu     = L.get("cu",       1.5)
+        is_sup = L.get("is_support", False)
 
-        frac      = depth / total_depth if total_depth > 0 else 0
-        sol       = solid_loading_kg_m2 * frac
-        d_eps     = (sol / captured_density_kg_m3) / depth if depth > 0 else 0
+        sol     = solid_loading_kg_m2 * frac
+        sol_vol = sol / captured_density_kg_m3 if captured_density_kg_m3 > 0 else 0.0
+        d_eps   = sol_vol / depth if depth > 0 else 0.0
+        clog    = sol_vol / (depth * eps0) * 100 if (depth * eps0) > 0 else 0.0
 
-        e_clean = eps0
-        e_mod   = max(eps0 - 0.5 * d_eps, 0.05)
-        e_dirty = max(eps0 - d_eps,        0.05)
-
-        c = _ergun_dp(depth, e_clean, d10, cu, sphericity, u_m_h, rho_water, mu)
-        m = _ergun_dp(depth, e_mod,   d10, cu, sphericity, u_m_h, rho_water, mu)
-        d = _ergun_dp(depth, e_dirty, d10, cu, sphericity, u_m_h, rho_water, mu)
-        dp_c += c; dp_m += m; dp_d += d
+        c = _ergun_dp(depth, eps0, d10, cu, sphericity, u_m_h, rho_water, mu)
+        dp_c += c
 
         rows.append({
-            "Media":              L.get("Type", "—"),
-            "Depth (m)":          round(depth,  3),
-            "LV (m/h)":           round(u_m_h,  2),
-            "ε clean":            round(e_clean, 3),
-            "ε moderate":         round(e_mod,   3),
-            "ε dirty":            round(e_dirty, 3),
-            "ΔP clean (bar)":     round(c / 1e5, 5),
-            "ΔP moderate (bar)":  round(m / 1e5, 5),
-            "ΔP dirty (bar)":     round(d / 1e5, 5),
+            "Media":               L.get("Type", "—"),
+            "Support":             "✓" if is_sup else "",
+            "Capture (%)":         "—" if is_sup else f"{frac * 100:.1f}",
+            "Solid load (kg/m²)":  round(sol,     3),
+            "Solid vol (m³/m²)":   round(sol_vol, 5),
+            "ΔεF":                 round(d_eps,   4),
+            "Clogging (%)":        "—" if is_sup else round(clog, 1),
+            "Depth (m)":           round(depth,   3),
+            "LV (m/h)":            round(u_m_h,   2),
+            "ε clean":             round(eps0,    3),
+            "ΔP clean (bar)":      round(c / 1e5, 5),
+            # cake columns filled after α is resolved (below)
+            "_frac":               frac,
         })
+
+    # ── Cake model: moderate (50% M_max) and dirty (100% M_max) ─────────────
+    lv_ms  = u_m_h / 3600.0
+    M_max  = solid_loading_kg_m2
+    dp_c_bar = dp_c / 1e5
+
+    dp_avail_pa = max(dp_trigger_bar - dp_c_bar, 0.0) * 1e5
+    if alpha_m_kg <= 0:
+        if M_max > 0 and lv_ms > 0 and mu > 0:
+            alpha_used = dp_avail_pa / (mu * lv_ms * M_max)
+        else:
+            alpha_used = 0.0
+        alpha_src = "auto-calibrated"
+    else:
+        alpha_used = alpha_m_kg
+        alpha_src  = "user-specified"
+
+    cake_mod_pa  = alpha_used * mu * lv_ms * (0.5 * M_max)   # 50% loaded
+    cake_dir_pa  = alpha_used * mu * lv_ms * M_max            # 100% loaded
+    dp_m_pa      = dp_c + cake_mod_pa
+    dp_d_pa      = dp_c + cake_dir_pa
+
+    # Distribute cake ΔP to rows by capture fraction
+    for row in rows:
+        f = row.pop("_frac")
+        row["Cake ΔP mod (bar)"]   = round(f * cake_mod_pa / 1e5, 5)
+        row["Cake ΔP dirty (bar)"] = round(f * cake_dir_pa / 1e5, 5)
+        row["ΔP mod total (bar)"]  = round(row["ΔP clean (bar)"] + row["Cake ΔP mod (bar)"],   5)
+        row["ΔP dirty total (bar)"]= round(row["ΔP clean (bar)"] + row["Cake ΔP dirty (bar)"], 5)
 
     rg = rho_water * GRAVITY
     return {
-        "layers":           rows,
-        "u_m_h":            round(u_m_h,       2),
-        "solid_loading":    solid_loading_kg_m2,
-        "dp_clean_bar":     round(dp_c / 1e5,   5),
-        "dp_moderate_bar":  round(dp_m / 1e5,   5),
-        "dp_dirty_bar":     round(dp_d / 1e5,   5),
-        "dp_clean_mwc":     round(dp_c / rg,    3),
-        "dp_moderate_mwc":  round(dp_m / rg,    3),
-        "dp_dirty_mwc":     round(dp_d / rg,    3),
-        "dp_clean_kpa":     round(dp_c / 1e3,   3),
-        "dp_moderate_kpa":  round(dp_m / 1e3,   3),
-        "dp_dirty_kpa":     round(dp_d / 1e3,   3),
+        "layers":                rows,
+        "fracs":                 fracs,
+        "u_m_h":                 round(u_m_h,           2),
+        "solid_loading":         solid_loading_kg_m2,
+        "captured_density":      captured_density_kg_m3,
+        "alpha_used_m_kg":       alpha_used,
+        "alpha_source":          alpha_src,
+        "dp_clean_bar":          round(dp_c_bar,         5),
+        "dp_moderate_bar":       round(dp_m_pa / 1e5,    5),
+        "dp_dirty_bar":          round(dp_d_pa / 1e5,    5),
+        "dp_clean_mwc":          round(dp_c    / rg,     3),
+        "dp_moderate_mwc":       round(dp_m_pa / rg,     3),
+        "dp_dirty_mwc":          round(dp_d_pa / rg,     3),
+        "dp_clean_kpa":          round(dp_c    / 1e3,    3),
+        "dp_moderate_kpa":       round(dp_m_pa / 1e3,    3),
+        "dp_dirty_kpa":          round(dp_d_pa / 1e3,    3),
     }
 
 
 # ═══════════════════════════════════════════════════════════════════════════
-# 3b. COLLECTOR HEIGHT CHECK — media loss guard
+# 3b. FILTRATION CYCLE — cake filtration model
+# ═══════════════════════════════════════════════════════════════════════════
+
+def filtration_cycle(
+    layers: list,
+    q_filter_m3h: float,
+    avg_area_m2: float,
+    solid_loading_kg_m2: float    = 1.5,
+    captured_density_kg_m3: float = 1020.0,
+    sphericity: float             = 0.85,
+    water_temp_c: float           = 27.0,
+    rho_water: float              = _RHO_WATER_DEF,
+    dp_trigger_bar: float         = 1.0,
+    alpha_m_kg: float             = 0.0,
+    tss_mg_l_list: list           = None,
+) -> dict:
+    """
+    Filtration cycle duration — cake filtration model (Ruth, 1935).
+
+    Physical basis
+    --------------
+    TSS particles (5–50 µm) are far smaller than media grains (0.8–1.3 mm).
+    They do NOT fill bulk voids — they deposit on grain surfaces and block pore
+    throats, forming a surface cake.  The resistance scales linearly with
+    deposited mass (unlike bulk voidage reduction which is negligible):
+
+        ΔP_total(M) = ΔP_clean_Ergun  +  α × μ × LV_m_s × M
+
+    where:
+        ΔP_clean_Ergun  clean-bed Ergun pressure drop  [Pa]
+        α               specific cake resistance        [m/kg]
+        μ               dynamic viscosity of feed water [Pa·s]
+        LV_m_s          superficial filtration velocity [m/s]
+        M               accumulated solid loading       [kg/m²]
+
+    Trigger condition (BW initiation):
+        M* = (DP_trigger − DP_clean) / (α × μ × LV_m_s)   [kg/m²]
+        → analytical solution, no iteration needed.
+
+    If alpha_m_kg ≤ 0 (auto-calibrate):
+        α is back-calculated so that M* = M_max (solid_loading_kg_m2),
+        i.e. the filter reaches the trigger exactly when fully loaded.
+        α_cal = (DP_trigger − DP_clean) / (μ × LV_m_s × M_max)
+
+    Typical α ranges [m/kg]:
+        coarse mineral / silt   1×10⁸ – 1×10¹⁰
+        seawater mixed TSS      1×10¹⁰ – 5×10¹⁰   ← default calibration target
+        organic-rich / algae    1×10¹¹ – 5×10¹¹
+        clay / fine colloids    1×10¹² – 1×10¹³
+    """
+    if tss_mg_l_list is None:
+        tss_mg_l_list = [5.0, 10.0, 20.0]
+
+    dp_res   = pressure_drop(
+        layers=layers,
+        q_filter_m3h=q_filter_m3h,
+        avg_area_m2=avg_area_m2,
+        solid_loading_kg_m2=solid_loading_kg_m2,
+        captured_density_kg_m3=captured_density_kg_m3,
+        sphericity=sphericity,
+        water_temp_c=water_temp_c,
+        rho_water=rho_water,
+    )
+    dp_clean_bar = dp_res["dp_clean_bar"]
+    lv_mh        = dp_res["u_m_h"]
+    lv_ms        = lv_mh / 3600.0
+    mu           = _viscosity(water_temp_c)
+
+    dp_avail_pa = max(dp_trigger_bar - dp_clean_bar, 0.0) * 1e5   # Pa
+
+    # ── Auto-calibrate α so M* = M_max ────────────────────────────────────
+    denom_cal = mu * lv_ms * solid_loading_kg_m2
+    alpha_cal = dp_avail_pa / denom_cal if denom_cal > 0 else 0.0
+
+    if alpha_m_kg <= 0:
+        alpha_used = alpha_cal
+        alpha_src  = "auto-calibrated"
+    else:
+        alpha_used = alpha_m_kg
+        alpha_src  = "user-specified"
+
+    # ── Analytical M* ─────────────────────────────────────────────────────
+    denom_trig = alpha_used * mu * lv_ms
+    if denom_trig > 0 and dp_avail_pa > 0:
+        m_trigger = min(dp_avail_pa / denom_trig, solid_loading_kg_m2)
+    else:
+        m_trigger = solid_loading_kg_m2
+
+    if dp_avail_pa <= 0:
+        note = "ΔP_clean ≥ trigger — check setpoint"
+    elif m_trigger >= solid_loading_kg_m2 * 0.9999:
+        note = "Trigger not reached by M_max — BW by schedule (α too low)"
+    else:
+        note = f"BW triggered by DP setpoint — cake model (α {alpha_src})"
+
+    # ── ΔP vs solid loading curve (0 → M_max, 5 points) ──────────────────
+    dp_curve = []
+    for frac in [0.0, 0.25, 0.50, 0.75, 1.0]:
+        m_pt          = solid_loading_kg_m2 * frac
+        dp_cake_bar   = (alpha_used * mu * lv_ms * m_pt) / 1e5
+        dp_total_bar  = dp_clean_bar + dp_cake_bar
+        dp_curve.append({
+            "M (kg/m²)":      round(m_pt,        3),
+            "ΔP cake (bar)":  round(dp_cake_bar,  4),
+            "ΔP total (bar)": round(dp_total_bar, 4),
+        })
+
+    # ── Per-TSS cycle durations ────────────────────────────────────────────
+    tss_rows = []
+    for tss in tss_mg_l_list:
+        acc_rate   = (tss / 1000.0) * lv_mh    # kg/(m²·h)
+        duration_h = m_trigger / acc_rate if acc_rate > 0 else float("inf")
+        tss_rows.append({
+            "TSS (mg/L)":              tss,
+            "Acc. rate (kg/m²·h)":     round(acc_rate,   4),
+            "Load @ trigger (kg/m²)":  round(m_trigger,  3),
+            "Cycle duration (h)":      round(duration_h, 2),
+        })
+
+    return {
+        "dp_clean_bar":              dp_clean_bar,
+        "dp_trigger_bar":            dp_trigger_bar,
+        "dp_avail_bar":              round(dp_avail_pa / 1e5, 5),
+        "alpha_used_m_kg":           alpha_used,
+        "alpha_calibrated_m_kg":     alpha_cal,
+        "alpha_source":              alpha_src,
+        "lv_m_h":                    lv_mh,
+        "mu_pa_s":                   round(mu, 6),
+        "loading_at_trigger_kg_m2":  round(m_trigger, 4),
+        "solid_loading_kg_m2":       solid_loading_kg_m2,
+        "note":                      note,
+        "dp_curve":                  dp_curve,
+        "tss_results":               tss_rows,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 3c. COLLECTOR HEIGHT CHECK — media loss guard
 # ═══════════════════════════════════════════════════════════════════════════
 
 def collector_check(
