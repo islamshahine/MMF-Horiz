@@ -1,6 +1,22 @@
 import math
 
 # =============================================================================
+# SADDLE CATALOGUE  (capacity t, section label, kg/m, piece length m, paint m²/m)
+# =============================================================================
+SADDLE_CATALOGUE = [
+    (  5, "L-65×65×6",     5.91,  1.0, 0.26),
+    ( 10, "L-75×75×9",     9.96,  1.0, 0.30),
+    ( 20, "L-90×90×10",   13.30,  1.0, 0.36),
+    ( 30, "L-100×100×10", 14.90,  1.0, 0.40),
+    ( 40, "H-125×6.5/9",  23.80,  1.5, 0.75),
+    ( 50, "H-150×7/10",   31.50,  1.5, 0.90),
+    ( 75, "H-200×8/12",   49.90,  1.6, 1.20),
+    (120, "H-250×9/14",   72.40,  1.8, 1.50),
+    (250, "H-300×10/15",  94.00,  2.1, 1.80),
+    (350, "H-350×12/19", 137.00,  2.3, 2.10),
+]
+
+# =============================================================================
 # MATERIAL LIBRARY
 # =============================================================================
 MATERIALS = {
@@ -588,7 +604,6 @@ def internals_weight(
     cyl_len_m: float            = 21.55,
     manhole_dn: str             = "DN 600",
     n_manholes: int             = 1,
-    density_kg_m3: float        = STEEL_DENSITY_KG_M3,
 ) -> dict:
     """
     Weight of internal components:
@@ -605,8 +620,6 @@ def internals_weight(
     cyl_len_m           : Vessel cylindrical length, m
     manhole_dn          : Manhole size key
     n_manholes          : Number of manholes per vessel
-    density_kg_m3       : Steel density (for header pipe)
-
     Returns
     -------
     dict with individual and total weights, kg and tonnes
@@ -662,7 +675,6 @@ _SADDLE_WIDTH_RATIO = 1 / 6      # saddle width ≈ OD / 6
 
 # Leg support: square hollow section or pipe leg — approximated as solid square bar
 # for weight estimation purposes
-_LEG_SOLID_FRACTION = 0.5        # hollow section ≈ 50 % of solid area (conservative)
 
 SUPPORT_TYPES = ["Saddle (2-support)",
                  "Saddle (3-support)",
@@ -672,7 +684,6 @@ SUPPORT_TYPES = ["Saddle (2-support)",
 
 def saddle_weight(
     vessel_od_m: float,
-    vessel_length_m: float,
     support_type: str                 = "Saddle (2-support)",
     saddle_height_m: float            = 0.8,
     leg_height_m: float               = 1.2,
@@ -808,4 +819,330 @@ def saddle_weight(
         "weight_all_supports_kg":   round(w_total, 1),
         "weight_all_supports_t":    round(w_total / 1000, 4),
         "notes":                    note,
+    }
+
+
+# =============================================================================
+# OPERATING (WORKING) WEIGHT
+# =============================================================================
+
+def operating_weight(
+    layers: list,
+    avg_area_m2: float,
+    vessel_id_m: float,
+    cyl_len_m: float,
+    h_dish_m: float,
+    end_type: str,
+    w_empty_kg: float,
+    n_supports: int,
+    rho_water_kg_m3: float = 1025.0,
+    w_lining_kg: float = 0.0,
+) -> dict:
+    """
+    Operating (working) weight of a filled horizontal MMF vessel.
+
+    Components
+    ----------
+    1. Empty vessel (steel structure)   — passed in as w_empty_kg
+    2. Internal lining / coating        — passed in as w_lining_kg
+    3. Media (dry solid mass)           — layer depth × area × rho_p × (1−ε₀)
+    4. Water                            — (total internal volume − media solid volume) × rho_water
+
+    Total internal volume
+    ---------------------
+    V_total = V_cylinder + V_two_heads
+            = π/4 × ID² × L_cyl  +  2 × dish_volume(ID, ID, h_dish, end_type)
+
+    Water volume (vessel running full, pressure)
+    ────────────────────────────────────────────
+    V_water = V_total − Σ(depth_i × area × (1−ε₀_i))
+
+    Support load
+    ─────────────
+    Operating load per support = (empty + lining + media + water) / n_supports
+    """
+    from engine.geometry import dish_volume
+
+    # ── Total internal volume ─────────────────────────────────────────────
+    v_cyl   = math.pi / 4.0 * vessel_id_m**2 * cyl_len_m
+    v_heads = dish_volume(vessel_id_m, vessel_id_m, h_dish_m, end_type) * 2.0
+    v_total = v_cyl + v_heads
+
+    # ── Media: solid volume and dry mass per layer ────────────────────────
+    media_rows = []
+    v_solid_total = 0.0
+    w_media_total = 0.0
+
+    for L in layers:
+        depth   = L.get("Depth",    0.0)
+        eps0    = L.get("epsilon0", 0.42)
+        rho_p   = L.get("rho_p_eff", 2650.0)
+        is_sup  = L.get("is_support", False)
+
+        v_bulk   = depth * avg_area_m2              # m³ bulk (solid + pores)
+        v_solid  = v_bulk * (1.0 - eps0)            # m³ pure solid
+        w_dry    = v_solid * rho_p                   # kg dry mass
+
+        v_solid_total += v_solid
+        w_media_total += w_dry
+
+        media_rows.append({
+            "Media":           L.get("Type", "—"),
+            "Support layer":   "✓" if is_sup else "",
+            "Depth (m)":       round(depth,  3),
+            "Area (m²)":       round(avg_area_m2, 2),
+            "V bulk (m³)":     round(v_bulk, 3),
+            "ε₀":              round(eps0,   3),
+            "ρ particle (kg/m³)": round(rho_p, 0),
+            "V solid (m³)":    round(v_solid, 4),
+            "Dry mass (kg)":   round(w_dry,  1),
+        })
+
+    # ── Water volume and mass ─────────────────────────────────────────────
+    v_water  = v_total - v_solid_total
+    w_water  = v_water * rho_water_kg_m3
+
+    # ── Operating totals ──────────────────────────────────────────────────
+    w_operating = w_empty_kg + w_lining_kg + w_media_total + w_water
+    load_per_support = w_operating / max(n_supports, 1)
+
+    return {
+        # volumes
+        "v_cylinder_m3":        round(v_cyl,          3),
+        "v_heads_m3":           round(v_heads,         3),
+        "v_total_internal_m3":  round(v_total,         3),
+        "v_solid_media_m3":     round(v_solid_total,   4),
+        "v_water_m3":           round(v_water,         3),
+        # masses
+        "w_empty_kg":           round(w_empty_kg,      1),
+        "w_lining_kg":          round(w_lining_kg,     1),
+        "w_media_kg":           round(w_media_total,   1),
+        "w_water_kg":           round(w_water,         1),
+        "w_operating_kg":       round(w_operating,     1),
+        "w_operating_t":        round(w_operating / 1000, 3),
+        # support loads
+        "n_supports":           n_supports,
+        "load_per_support_kg":  round(load_per_support, 1),
+        "load_per_support_t":   round(load_per_support / 1000, 3),
+        "load_per_support_kN":  round(load_per_support * 9.81 / 1000, 2),
+        # detail
+        "media_rows":           media_rows,
+        "rho_water_kg_m3":      rho_water_kg_m3,
+    }
+
+
+# =============================================================================
+# SADDLE DESIGN — positioning, section selection, structural estimate
+# =============================================================================
+
+def _n_ribs_from_width(piece_length_m: float, rib_pitch_m: float = 0.45) -> int:
+    """
+    Number of web stiffener ribs per saddle assembly.
+
+    Ribs are vertical stiffener plates spaced along the saddle width
+    (= piece_length_m, i.e. the saddle dimension along the vessel axis).
+    Pitch ~450 mm gives the best match to fabricated saddle weights in practice.
+    """
+    return max(2, round(piece_length_m / rib_pitch_m) + 1)
+
+
+def saddle_design(
+    total_length_m: float,
+    vessel_od_m: float,
+    vessel_id_m: float,
+    w_operating_kg: float,
+    n_saddles: int              = 2,
+    contact_angle_deg: float    = 120.0,
+    rib_plate_factor: float     = 1.10,
+) -> dict:
+    """
+    Zick-based saddle positioning, section selection, and structural weight.
+
+    Saddle spacing (fraction of total length from each head tangent)
+    ---------------------------------------------------------------
+    α = 0.25   if L/D < 3   (short vessel — heads carry significant load)
+    α = 0.22   if L/D < 5   (medium vessel — balanced bending)
+    α = 0.20   if L/D ≥ 5   (long vessel — minimise mid-span moment)
+
+    Zick parameter a/R
+    ------------------
+    a = α × L  (distance from tangent line to saddle centre)
+    R = vessel_id / 2
+    Recommended a/R ≤ 0.5 for shell stresses within limits (Zick, 1951).
+
+    Section selection
+    -----------------
+    Vertical reaction per saddle = W_operating / n_saddles (uniform distribution).
+    Smallest catalogue entry whose capacity [t] ≥ reaction is chosen.
+    If reaction exceeds the maximum catalogue entry (350 t), the maximum is
+    flagged and the engineer should verify with a bespoke saddle calculation.
+
+    Saddle structural weight estimate
+    -----------------------------------
+    The saddle assembly consists of:
+      • n_ribs vertical rib sections (one catalogue piece each)
+      • Wear plate + base plate (estimated as +10 % of rib mass → rib_plate_factor)
+    n_ribs = f(vessel_id): 2 / 4 / 6 / 8 / 10  for ID ≤ 1.5 / 2.5 / 4.0 / 5.5 / > 5.5 m
+    """
+    # ── Spacing factor ────────────────────────────────────────────────────
+    ld_ratio = total_length_m / vessel_od_m if vessel_od_m > 0 else 0.0
+    if ld_ratio < 3.0:
+        alpha = 0.25
+    elif ld_ratio < 5.0:
+        alpha = 0.22
+    else:
+        alpha = 0.20
+
+    a_m         = alpha * total_length_m        # saddle to nearest head tangent
+    saddle_1_m  = a_m                            # from left tangent
+    saddle_2_m  = total_length_m - a_m          # from left tangent
+    saddle_gap_m = saddle_2_m - saddle_1_m       # span between saddles
+
+    R_m     = vessel_id_m / 2.0
+    a_over_R = a_m / R_m if R_m > 0 else 0.0
+
+    # ── Zick bending moment parameters ───────────────────────────────────
+    # Moment at saddle (approximation — full Zick requires shell stress calcs)
+    # M_saddle = (W/2) × A  (for symmetric 2-saddle arrangement, conservative)
+    reaction_kg  = w_operating_kg / max(n_saddles, 1)
+    reaction_t   = reaction_kg / 1000.0
+    reaction_kN  = reaction_kg * 9.81 / 1000.0
+
+    m_saddle_kNm = reaction_kN * a_m            # simplified saddle moment
+
+    # ── Contact arc ───────────────────────────────────────────────────────
+    arc_m = math.pi * R_m * contact_angle_deg / 180.0
+
+    # ── Section selection ─────────────────────────────────────────────────
+    selected = None
+    overstressed = False
+    for cap_t, section, kg_m, piece_len, paint_m2m in SADDLE_CATALOGUE:
+        if cap_t >= reaction_t:
+            selected = (cap_t, section, kg_m, piece_len, paint_m2m)
+            break
+    if selected is None:
+        selected = SADDLE_CATALOGUE[-1]   # use maximum available
+        overstressed = True
+
+    cap_t, section, kg_m, piece_len, paint_m2m = selected
+    piece_wt_kg  = kg_m * piece_len
+    piece_paint_m2 = paint_m2m * piece_len
+
+    n_ribs        = _n_ribs_from_width(piece_len)
+    w_ribs_kg     = n_ribs * piece_wt_kg
+    w_saddle_kg   = w_ribs_kg * rib_plate_factor    # +10% for wear plate & base plate
+    w_two_saddles_kg = w_saddle_kg * n_saddles
+
+    # ── Base plate bearing (informational) ───────────────────────────────
+    # Base plate width ≈ 0.8 × OD, length = piece_len (saddle width)
+    base_w_m    = min(vessel_od_m * 0.8, 3.0)
+    base_area_m2 = base_w_m * piece_len
+    bearing_kPa  = (reaction_kN / base_area_m2) if base_area_m2 > 0 else 0.0
+
+    # ── Alternatives: what changes if user switches n_saddles ────────────────
+    # For 3-saddle: α applies only to the outer two; centre saddle at L/2.
+    # Positions reported as list so display code can show them.
+    alternatives = []
+    max_catalogue_t = SADDLE_CATALOGUE[-1][0]
+    min_n_needed = math.ceil(w_operating_kg / 1000.0 / max_catalogue_t)
+    min_n_needed = max(min_n_needed, 1)
+
+    for alt_n in range(1, 6):
+        alt_reaction_t = w_operating_kg / alt_n / 1000.0
+        alt_sel = None
+        for c_t, c_sec, c_kgm, c_len, c_paint in SADDLE_CATALOGUE:
+            if c_t >= alt_reaction_t:
+                alt_sel = (c_t, c_sec, c_kgm, c_len, c_paint)
+                break
+        fits = alt_sel is not None
+        if not fits:
+            alt_sel = SADDLE_CATALOGUE[-1]
+
+        alt_cap_t, alt_sec, alt_kgm, alt_len, alt_paint = alt_sel
+        alt_pw   = alt_kgm * alt_len
+        alt_n_rib = _n_ribs_from_width(alt_len)
+        alt_w_ea  = alt_pw * alt_n_rib * rib_plate_factor
+
+        # Saddle positions for this alt_n
+        if alt_n == 1:
+            alt_positions = [round(total_length_m / 2.0, 3)]
+        elif alt_n == 2:
+            alt_positions = [round(a_m, 3), round(total_length_m - a_m, 3)]
+        else:
+            # Outer two at α×L from each end; remainder evenly spaced inside
+            outer = round(a_m, 3)
+            inner_gap = (total_length_m - 2 * a_m) / (alt_n - 1)
+            alt_positions = [round(a_m + i * inner_gap, 3) for i in range(alt_n)]
+
+        alternatives.append({
+            "n_saddles":      alt_n,
+            "reaction_t":     round(alt_reaction_t, 2),
+            "reaction_kN":    round(alt_reaction_t * 1000 * 9.81 / 1000, 0),
+            "fits_catalogue": fits,
+            "capacity_t":     alt_cap_t,
+            "section":        alt_sec,
+            "struct_wt_ea_kg": round(alt_w_ea, 0),
+            "struct_wt_total_kg": round(alt_w_ea * alt_n, 0),
+            "positions_m":    alt_positions,
+            "is_current":     alt_n == n_saddles,
+        })
+
+    # ── Per-saddle catalogue table (for BOM display) ──────────────────────
+    catalogue_rows = []
+    for c_t, c_sec, c_kgm, c_len, c_paint in SADDLE_CATALOGUE:
+        c_pw = c_kgm * c_len
+        c_n  = _n_ribs_from_width(c_len)
+        catalogue_rows.append({
+            "Capacity (t)":    c_t,
+            "Section":         c_sec,
+            "kg/m":            c_kgm,
+            "Piece L (m)":     c_len,
+            "Piece wt (kg)":   round(c_pw, 1),
+            "Ribs/saddle":     c_n,
+            "Struct. wt/saddle (kg)": round(c_pw * c_n * rib_plate_factor, 1),
+            "Paint m²/piece":  round(c_paint * c_len, 2),
+            "Selected":        "✅" if c_sec == section else "",
+        })
+
+    return {
+        # Geometry
+        "ld_ratio":             round(ld_ratio,   2),
+        "alpha":                alpha,
+        "alpha_pct":            int(alpha * 100),
+        "saddle_1_from_left_m": round(saddle_1_m,  3),
+        "saddle_2_from_left_m": round(saddle_2_m,  3),
+        "saddle_gap_m":         round(saddle_gap_m, 3),
+        "a_over_R":             round(a_over_R,    3),
+        "a_over_R_ok":          a_over_R <= 0.5,
+        "contact_angle_deg":    contact_angle_deg,
+        "arc_m":                round(arc_m,       3),
+        # Loads
+        "n_saddles":            n_saddles,
+        "w_operating_kg":       round(w_operating_kg, 1),
+        "reaction_kg":          round(reaction_kg,    1),
+        "reaction_t":           round(reaction_t,     3),
+        "reaction_kN":          round(reaction_kN,    1),
+        "m_saddle_kNm":         round(m_saddle_kNm,  1),
+        # Section
+        "capacity_t":           cap_t,
+        "section":              section,
+        "kg_per_m":             kg_m,
+        "piece_length_m":       piece_len,
+        "piece_weight_kg":      round(piece_wt_kg,  1),
+        "piece_paint_m2":       round(piece_paint_m2, 2),
+        "n_ribs":               n_ribs,
+        "overstressed":         overstressed,
+        # Saddle weight
+        "w_ribs_kg":            round(w_ribs_kg,        1),
+        "w_one_saddle_kg":      round(w_saddle_kg,      1),
+        "w_two_saddles_kg":     round(w_two_saddles_kg, 1),
+        # Base plate
+        "base_width_m":         round(base_w_m,     3),
+        "base_area_m2":         round(base_area_m2, 3),
+        "bearing_kPa":          round(bearing_kPa,  1),
+        # Tables
+        "catalogue_rows":       catalogue_rows,
+        # Alternatives
+        "alternatives":         alternatives,
+        "min_n_needed":         min_n_needed,
     }

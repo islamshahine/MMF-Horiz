@@ -294,7 +294,6 @@ def pressure_drop(
     avg_area_m2: float,
     solid_loading_kg_m2: float    = 1.5,
     captured_density_kg_m3: float = 1020.0,
-    sphericity: float             = 0.85,
     water_temp_c: float           = 27.0,
     rho_water: float              = _RHO_WATER_DEF,
     alpha_m_kg: float             = 0.0,
@@ -347,6 +346,7 @@ def pressure_drop(
         eps0   = L.get("epsilon0", 0.42)
         d10    = L.get("d10",      1.0)
         cu     = L.get("cu",       1.5)
+        phi    = L.get("psi",      0.85)   # per-layer sphericity
         is_sup = L.get("is_support", False)
 
         sol     = solid_loading_kg_m2 * frac
@@ -354,7 +354,7 @@ def pressure_drop(
         d_eps   = sol_vol / depth if depth > 0 else 0.0
         clog    = sol_vol / (depth * eps0) * 100 if (depth * eps0) > 0 else 0.0
 
-        c = _ergun_dp(depth, eps0, d10, cu, sphericity, u_m_h, rho_water, mu)
+        c = _ergun_dp(depth, eps0, d10, cu, phi, u_m_h, rho_water, mu)
         dp_c += c
 
         rows.append({
@@ -433,7 +433,6 @@ def filtration_cycle(
     avg_area_m2: float,
     solid_loading_kg_m2: float    = 1.5,
     captured_density_kg_m3: float = 1020.0,
-    sphericity: float             = 0.85,
     water_temp_c: float           = 27.0,
     rho_water: float              = _RHO_WATER_DEF,
     dp_trigger_bar: float         = 1.0,
@@ -483,7 +482,6 @@ def filtration_cycle(
         avg_area_m2=avg_area_m2,
         solid_loading_kg_m2=solid_loading_kg_m2,
         captured_density_kg_m3=captured_density_kg_m3,
-        sphericity=sphericity,
         water_temp_c=water_temp_c,
         rho_water=rho_water,
     )
@@ -769,4 +767,116 @@ def bw_sequence(
         "tss_avg_mg_l":           tss_avg,
         "tss_high_mg_l":          tss_high,
         "filter_area_m2":         round(filter_area_m2, 3),
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# 5. BW SYSTEM EQUIPMENT DATA SHEET
+# ═══════════════════════════════════════════════════════════════════════════
+
+def bw_system_sizing(
+    q_bw_design_m3h: float,
+    bw_head_mwc: float,
+    bw_pump_eta: float,
+    motor_eta: float,
+    q_air_design_m3h: float,
+    vessel_pressure_bar: float,
+    filter_id_m: float,
+    blower_inlet_temp_c: float,
+    blower_eta: float,
+    bw_vol_per_cycle_m3: float,
+    n_bw_systems: int,
+    tank_sf: float = 1.5,
+    rho_bw_kg_m3: float = 1025.0,
+) -> dict:
+    """
+    BW pump, air blower, and BW storage tank sizing.
+
+    Pump
+    ----
+        P_shaft = rho × g × Q × H / eta_pump
+        P_motor = P_shaft / eta_motor
+
+    Blower (adiabatic compression, gamma = 1.4)
+    -------------------------------------------
+        Submergence  ≈ filter_id / 2  (water depth above nozzle plate at BW mid-phase)
+        P2           = P_atm + dp_submergence + vessel_gauge_pressure
+        Ideal power  = gamma/(gamma-1) × P1 × Q1 × [(P2/P1)^((gamma-1)/gamma) − 1]
+        P_shaft      = ideal / blower_eta
+        P_motor      = P_shaft / motor_eta
+
+    Tank
+    ----
+        V_cycle  = bw_vol_per_cycle × n_simultaneous_systems × safety_factor
+        V_10min  = Q_bw_design / 6   (10 min at design flow)
+        V_tank   = max(V_cycle, V_10min)
+    """
+    g = GRAVITY
+
+    # ── BW pump ──────────────────────────────────────────────────────────────
+    q_bw_m3s       = q_bw_design_m3h / 3600.0
+    p_pump_ideal_kw = rho_bw_kg_m3 * g * q_bw_m3s * bw_head_mwc / 1000.0
+    p_pump_shaft_kw = p_pump_ideal_kw / max(bw_pump_eta, 0.01)
+    p_pump_motor_kw = p_pump_shaft_kw / max(motor_eta,   0.01)
+
+    # ── Air blower ────────────────────────────────────────────────────────────
+    gamma       = 1.4
+    exponent    = (gamma - 1.0) / gamma   # 0.2857
+    P1_pa       = 101_325.0               # atmospheric (sea level)
+    T1_K        = blower_inlet_temp_c + 273.15
+    h_sub       = filter_id_m / 2.0       # submergence ≈ vessel radius
+    dp_sub_pa   = rho_bw_kg_m3 * g * h_sub
+    dp_vessel_pa = vessel_pressure_bar * 1e5
+    P2_pa       = P1_pa + dp_sub_pa + dp_vessel_pa
+
+    rho_air_kg_m3 = P1_pa / (287.0 * T1_K)         # ideal gas, dry air
+    q_air_m3s     = q_air_design_m3h / 3600.0
+
+    p_ideal_kw  = (
+        (gamma / (gamma - 1.0))
+        * P1_pa * q_air_m3s
+        * ((P2_pa / P1_pa) ** exponent - 1.0)
+        / 1000.0
+    )
+    p_blower_shaft_kw = p_ideal_kw / max(blower_eta, 0.01)
+    p_blower_motor_kw = p_blower_shaft_kw / max(motor_eta, 0.01)
+
+    # ── BW tank ───────────────────────────────────────────────────────────────
+    v_cycle_m3  = bw_vol_per_cycle_m3 * n_bw_systems * tank_sf
+    v_10min_m3  = q_bw_design_m3h / 6.0     # 10 min at design flow
+    v_tank_m3   = max(v_cycle_m3, v_10min_m3)
+    tank_governs = "cycle-based" if v_cycle_m3 >= v_10min_m3 else "10-min rule"
+
+    return {
+        # Pump
+        "q_bw_design_m3h":       round(q_bw_design_m3h,   1),
+        "bw_head_mwc":           round(bw_head_mwc,        1),
+        "bw_head_bar":           round(bw_head_mwc / 10.2, 3),
+        "p_pump_ideal_kw":       round(p_pump_ideal_kw,    1),
+        "p_pump_shaft_kw":       round(p_pump_shaft_kw,    1),
+        "p_pump_motor_kw":       round(p_pump_motor_kw,    1),
+        "bw_pump_eta":           bw_pump_eta,
+        # Blower
+        "q_air_design_m3h":      round(q_air_design_m3h,   1),
+        "q_air_design_m3min":    round(q_air_design_m3h / 60.0, 2),
+        "h_submergence_m":       round(h_sub,               2),
+        "dp_sub_bar":            round(dp_sub_pa / 1e5,     3),
+        "vessel_pressure_bar":   vessel_pressure_bar,
+        "P1_pa":                 round(P1_pa,               0),
+        "P2_pa":                 round(P2_pa,               0),
+        "pressure_ratio":        round(P2_pa / P1_pa,       3),
+        "dp_total_bar":          round((P2_pa - P1_pa) / 1e5, 3),
+        "rho_air_kg_m3":         round(rho_air_kg_m3,       4),
+        "p_blower_ideal_kw":     round(p_ideal_kw,          1),
+        "p_blower_shaft_kw":     round(p_blower_shaft_kw,   1),
+        "p_blower_motor_kw":     round(p_blower_motor_kw,   1),
+        "blower_eta":            blower_eta,
+        # Tank
+        "bw_vol_per_cycle_m3":   round(bw_vol_per_cycle_m3, 1),
+        "n_bw_systems":          n_bw_systems,
+        "tank_sf":               tank_sf,
+        "v_cycle_m3":            round(v_cycle_m3,           0),
+        "v_10min_m3":            round(v_10min_m3,           0),
+        "v_tank_m3":             round(v_tank_m3,            0),
+        "tank_governs":          tank_governs,
     }

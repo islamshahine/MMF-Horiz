@@ -12,13 +12,12 @@ Block flow (matches calculation dependency order):
 """
 
 import io
-import math
 import pandas as pd
 import streamlit as st
 
 try:
     from docx import Document as _DocxDocument
-    from docx.shared import Pt as _Pt, Cm as _Cm
+
     from docx.enum.text import WD_ALIGN_PARAGRAPH as _WD_ALIGN
     _DOCX_OK = True
 except ImportError:
@@ -29,7 +28,8 @@ from engine.process    import filter_loading
 from engine.water      import water_properties, FEED_PRESETS, BW_PRESETS
 from engine.mechanical import (
     thickness, apply_thickness_override, empty_weight,
-    nozzle_plate_design, nozzle_plate_area, saddle_weight, internals_weight,
+    nozzle_plate_design, saddle_weight, internals_weight,
+    operating_weight, saddle_design,
     MATERIALS, RADIOGRAPHY_OPTIONS, JOINT_EFFICIENCY,
     STEEL_DENSITY_KG_M3, SUPPORT_TYPES,
     NOZZLE_DENSITY_MIN, NOZZLE_DENSITY_MAX, NOZZLE_DENSITY_DEFAULT,
@@ -41,18 +41,24 @@ from engine.nozzles import (
 )
 from engine.backwash import (
     backwash_hydraulics, bed_expansion, pressure_drop,
-    bw_sequence, filtration_cycle,
+    bw_sequence, filtration_cycle, bw_system_sizing,
 )
 from engine.collector_ext import collector_check_ext
+from engine.coating import (
+    internal_surface_areas, lining_cost,
+    PROTECTION_TYPES, RUBBER_TYPES, EPOXY_TYPES, CERAMIC_TYPES,
+    DEFAULT_LABOR_RUBBER_M2, DEFAULT_LABOR_EPOXY_M2, DEFAULT_LABOR_CERAMIC_M2,
+)
 from engine.cartridge import (
     cartridge_design, cartridge_optimise,
     ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS,
     HOUSING_CAPACITY_OPTIONS, DEFAULT_ELEMENTS_PER_HOUSING,
-    MARKET_ROUNDS, DP_REPLACEMENT_BAR, DHC_G_PER_TIE,
+    DP_REPLACEMENT_BAR,
     SAFETY_FACTOR_STD, SAFETY_FACTOR_CIP,
     COST_TABLE_POLYMER, COST_TABLE_SS316L,
 )
 from engine.energy import hydraulic_profile, energy_summary
+from engine.drawing import vessel_section_elevation, LAYER_COLORS as DRAWING_LAYER_COLORS
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -63,21 +69,70 @@ st.set_page_config(page_title="AQUASIGHT™ MMF", layout="wide",
 # ══════════════════════════════════════════════════════════════════════════════
 # MEDIA PRESETS  (default 3-layer: Gravel / Sand / Anthracite)
 # ══════════════════════════════════════════════════════════════════════════════
+def _eps0_from_psi(psi: float) -> float:
+    """Empirical estimate: ε₀ ≈ 0.4 + 0.1·(1−ψ)/ψ  (Kozeny-based, random packing)."""
+    return round(0.4 + 0.1 * (1.0 - psi) / max(psi, 0.01), 3)
+
+def _rho_eff_porous(rho_dry: float, eps_p: float, rho_water: float = 1025.0) -> float:
+    """Water-saturated particle density for porous media.
+    ρ_eff = ρ_dry + ρ_water × ε_p
+    where ρ_dry is apparent dry-particle density and ε_p is internal particle porosity.
+    """
+    return rho_dry + rho_water * eps_p
+
+# Fields: d10 (mm), cu (CU=d60/d10), epsilon0, rho_p_eff (kg/m³), d60 (mm),
+#         psi (sphericity), is_porous, default_depth (m)
 DEFAULT_MEDIA_PRESETS = {
-    "Gravel":      {"d10": 6.0,  "cu": 1.0, "epsilon0": 0.46,
-                    "rho_p_eff": 2600, "d60": 6.0,  "default_depth": 0.20},
-    "Fine Sand":   {"d10": 0.8,  "cu": 1.3, "epsilon0": 0.42,
-                    "rho_p_eff": 2650, "d60": 1.04, "default_depth": 0.80},
-    "Anthracite":  {"d10": 1.3,  "cu": 1.5, "epsilon0": 0.48,
-                    "rho_p_eff": 1450, "d60": 1.95, "default_depth": 0.80},
-    "Coarse Sand": {"d10": 1.35, "cu": 1.5, "epsilon0": 0.44,
-                    "rho_p_eff": 2650, "d60": 2.03, "default_depth": 0.60},
-    "Custom":      {"d10": 0.0,  "cu": 1.0, "epsilon0": 0.40,
-                    "rho_p_eff": 2650, "d60": 0.0,  "default_depth": 0.50},
+    "Gravel":            {"d10": 6.0,  "cu": 1.0, "epsilon0": 0.46, "psi": 0.90,
+                          "rho_p_eff": 2600, "d60": 6.00, "is_porous": False, "default_depth": 0.20},
+    "Coarse sand":       {"d10": 1.35, "cu": 1.5, "epsilon0": 0.44, "psi": 0.85,
+                          "rho_p_eff": 2650, "d60": 2.03, "is_porous": False, "default_depth": 0.60},
+    "Fine sand":         {"d10": 0.80, "cu": 1.3, "epsilon0": 0.42, "psi": 0.80,
+                          "rho_p_eff": 2650, "d60": 1.04, "is_porous": False, "default_depth": 0.80},
+    "Fine sand (extra)": {"d10": 0.50, "cu": 1.3, "epsilon0": 0.41, "psi": 0.75,
+                          "rho_p_eff": 2650, "d60": 0.65, "is_porous": False, "default_depth": 0.70},
+    "Anthracite":        {"d10": 1.30, "cu": 1.5, "epsilon0": 0.48, "psi": 0.70,
+                          "rho_p_eff": 1450, "d60": 2.25, "is_porous": False, "default_depth": 0.80},
+    "MnO₂":             {"d10": 1.00, "cu": 2.4, "epsilon0": 0.50, "psi": 0.65,
+                          "rho_p_eff": 4200, "d60": 2.40, "is_porous": False, "default_depth": 0.40},
+    "Medium GAC":        {"d10": 1.00, "cu": 1.6, "epsilon0": 0.55, "psi": 0.65,
+                          "rho_p_eff": 1000, "d60": 1.44, "is_porous": True,  "default_depth": 1.00},
+    "Biodagene":         {"d10": 2.50, "cu": 1.4, "epsilon0": 0.42, "psi": 0.80,
+                          "rho_p_eff": 1600, "d60": 3.50, "is_porous": False, "default_depth": 0.60},
+    "Schist":            {"d10": 3.30, "cu": 1.5, "epsilon0": 0.47, "psi": 0.65,
+                          "rho_p_eff": 1300, "d60": 4.95, "is_porous": False, "default_depth": 0.30},
+    "Limestone":         {"d10": 3.00, "cu": 1.4, "epsilon0": 0.55, "psi": 0.60,
+                          "rho_p_eff": 2700, "d60": 4.20, "is_porous": False, "default_depth": 0.50},
+    "Pumice":            {"d10": 1.50, "cu": 1.3, "epsilon0": 0.55, "psi": 0.55,
+                          "rho_p_eff":  900, "d60": 1.56, "is_porous": True,  "default_depth": 0.60},
+    "FILTRALITE clay":   {"d10": 1.20, "cu": 1.5, "epsilon0": 0.48, "psi": 0.50,
+                          "rho_p_eff": 1250, "d60": 1.80, "is_porous": True,  "default_depth": 0.80},
+    "Custom":            {"d10": 0.0,  "cu": 1.5, "epsilon0": 0.42, "psi": 0.80,
+                          "rho_p_eff": 2650, "d60": 0.0,  "is_porous": False, "default_depth": 0.50},
 }
 
-if "media_presets" not in st.session_state:
+# Always sync: add any new catalogue entries, remove renamed ones
+if "media_presets" not in st.session_state or set(
+        st.session_state.media_presets.keys()) != set(DEFAULT_MEDIA_PRESETS.keys()):
     st.session_state.media_presets = DEFAULT_MEDIA_PRESETS.copy()
+
+# ── Input panel navigation ─────────────────────────────────────────────────
+_PANELS = [
+    ("project",      "📋", "Project"),
+    ("process",      "💧", "Process"),
+    ("water",        "🌊", "Water"),
+    ("geometry",     "🏗️", "Geometry"),
+    ("mechanical",   "⚙️", "Mechanical"),
+    ("nozzle_plate", "🟫", "Nozzle plate"),
+    ("media",        "🧱", "Media"),
+    ("backwash",     "🔄", "Backwash"),
+    ("supports",     "🔩", "Supports"),
+    ("energy",       "⚡", "Energy"),
+    ("thresholds",   "⚠️", "Thresholds"),
+    ("cartridge",    "🔷", "Cartridge"),
+]
+if "active_panel" not in st.session_state:
+    st.session_state.active_panel = "project"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEADER
@@ -92,18 +147,36 @@ with h2:
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LAYOUT: context column | content tabs
+# LAYOUT: nav icons | input panel | output tabs
 # ══════════════════════════════════════════════════════════════════════════════
-ctx, main = st.columns([1, 4], gap="large")
+nav_col, inp_col, main_col = st.columns([0.55, 1.8, 4.5], gap="medium")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONTEXT PANEL
+# NAV COLUMN  ─ icon buttons, one per input panel
 # ─────────────────────────────────────────────────────────────────────────────
-with ctx:
-    st.markdown("#### Inputs")
+with nav_col:
+    st.markdown(" ")
+    for _pid, _icon, _lbl in _PANELS:
+        _active = st.session_state.active_panel == _pid
+        if st.button(
+            _icon,
+            key=f"nav_{_pid}",
+            help=_lbl,
+            use_container_width=True,
+            type="primary" if _active else "secondary",
+        ):
+            st.session_state.active_panel = _pid
+
+# ─────────────────────────────────────────────────────────────────────────────
+# INPUT PANEL
+# ─────────────────────────────────────────────────────────────────────────────
+with inp_col:
+    _ap = st.session_state.active_panel
+    _ap_label = next(l for p, i, l in _PANELS if p == _ap)
+    st.markdown(f"**{_ap_label}**")
 
     # ── Block 1: Project ───────────────────────────────────────────────────
-    with st.expander("📋 Project", expanded=True):
+    with st.expander("📋 Project", expanded=(_ap == "project")):
         project_name = st.text_input("Project",     value="NPC SWRO 60 000 m³/d")
         doc_number   = st.text_input("Doc. No.",    value="EXXXX-VWT-PCS-CAL-2001")
         revision     = st.text_input("Revision",    value="A1")
@@ -111,19 +184,23 @@ with ctx:
         engineer     = st.text_input("Prepared by", value="Islam Shahine")
 
     # ── Block 1: Process basis ─────────────────────────────────────────────
-    with st.expander("💧 Process basis", expanded=True):
+    with st.expander("💧 Process basis", expanded=(_ap == "process")):
         total_flow = st.number_input("Total plant flow (m³/h)",
                                      value=21000.0, step=100.0)
         streams    = int(st.number_input("Streams", value=1, min_value=1))
         n_filters  = int(st.number_input("Filters / stream",
                                           value=16, min_value=1))
-        redundancy = int(st.selectbox("Redundancy",
+        redundancy = int(st.selectbox("Redundancy (per stream)",
                                       [0, 1, 2, 3, 4], index=1))
         q_n = total_flow / streams / n_filters
-        st.caption(f"Flow / filter (N): **{q_n:.1f} m³/h**")
+        st.caption(
+            f"Flow / filter (N): **{q_n:.1f} m³/h**  \n"
+            f"Redundancy = {redundancy} standby filter(s) per stream  \n"
+            f"Total active filters (N scenario): **{streams * n_filters} plant-wide**"
+        )
 
     # ── Block 2: Water properties ──────────────────────────────────────────
-    with st.expander("💧 Water properties", expanded=False):
+    with st.expander("💧 Water properties", expanded=(_ap == "water")):
         st.markdown("**Feed water**")
         feed_preset = st.selectbox("Feed preset", list(FEED_PRESETS.keys()),
                                    index=2, key="feed_pre")
@@ -143,7 +220,7 @@ with ctx:
                                   step=1.0, key="b_tmp")
 
     # ── Block 3: Vessel geometry ───────────────────────────────────────────
-    with st.expander("🏗️ Vessel geometry", expanded=True):
+    with st.expander("🏗️ Vessel geometry", expanded=(_ap == "geometry")):
         nominal_id   = st.number_input("Nominal internal diameter (m)",
                                        value=5.5, step=0.1,
                                        help="The ID the vessel is sized to. "
@@ -154,17 +231,82 @@ with ctx:
                                     ["Elliptic 2:1", "Torispherical 10%"])
 
     # ── Block 3: Mechanical ────────────────────────────────────────────────
-    with st.expander("⚙️ Mechanical", expanded=False):
+    with st.expander("⚙️ Mechanical", expanded=(_ap == "mechanical")):
         material_name   = st.selectbox("Material", list(MATERIALS.keys()), index=3)
         mat_info        = MATERIALS[material_name]
         st.caption(f"*{mat_info['description']}*")
         design_pressure = st.number_input("Design pressure (bar)", value=7.0, step=0.5)
         design_temp     = st.number_input("Design temperature (°C)", value=50.0, step=5.0)
         corrosion       = st.number_input("Corrosion allowance (mm)", value=1.5, step=0.5)
-        lining_mm       = st.number_input("Rubber lining thickness (mm)", value=4.0,
-                                          step=0.5,
-                                          help="Subtracted from nominal ID to give "
-                                               "hydraulic ID used in all calculations.")
+
+        st.caption("Internal protection")
+        protection_type = st.selectbox(
+            "Protection type", PROTECTION_TYPES, index=1, key="prot_type",
+            help="Rubber lining: bonded sheet, reduces hydraulic ID by 2×thickness.  "
+                 "Epoxy / Ceramic coating: applied in coats (DFT in µm), negligible ID impact.")
+
+        if protection_type == "Rubber lining":
+            rubber_type_sel = st.selectbox(
+                "Rubber type", list(RUBBER_TYPES.keys()), index=1, key="rub_type")
+            lining_mm = st.number_input(
+                "Rubber thickness / layer (mm)", value=4.0, step=0.5,
+                min_value=0.5, key="rub_t",
+                help="Nominal ID reduced by 2 × thickness × layers.")
+            rubber_layers = st.number_input(
+                "Layers", value=2, min_value=1, max_value=6, key="rub_lay")
+            _rub_def_cost = RUBBER_TYPES[rubber_type_sel]["default_cost_m2"]
+            rubber_cost_m2 = st.number_input(
+                "Rubber material cost (USD/m²)", value=float(_rub_def_cost),
+                step=5.0, key="rub_cost")
+            rubber_labor_m2 = st.number_input(
+                "Application labour (USD/m²)", value=DEFAULT_LABOR_RUBBER_M2,
+                step=5.0, key="rub_lab")
+        else:
+            lining_mm = 0.0
+            rubber_type_sel = "EPDM"; rubber_layers = 2
+            rubber_cost_m2 = 0.0; rubber_labor_m2 = DEFAULT_LABOR_RUBBER_M2
+
+        if protection_type == "Epoxy coating":
+            epoxy_type_sel = st.selectbox(
+                "Epoxy type", list(EPOXY_TYPES.keys()), index=1, key="epx_type")
+            _epx_cat = EPOXY_TYPES[epoxy_type_sel]
+            epoxy_dft_um = st.number_input(
+                "DFT per coat (µm)", value=float(_epx_cat["default_dft_um"]),
+                step=25.0, min_value=50.0, key="epx_dft")
+            epoxy_coats = st.number_input(
+                "Number of coats", value=_epx_cat["default_coats"],
+                min_value=1, max_value=6, key="epx_coats")
+            epoxy_cost_m2 = st.number_input(
+                "Epoxy material cost (USD/m²)", value=float(_epx_cat["default_cost_m2"]),
+                step=2.0, key="epx_cost")
+            epoxy_labor_m2 = st.number_input(
+                "Application labour (USD/m²)", value=DEFAULT_LABOR_EPOXY_M2,
+                step=2.0, key="epx_lab")
+        else:
+            epoxy_type_sel = "High-build epoxy"; epoxy_dft_um = 350.0
+            epoxy_coats = 2; epoxy_cost_m2 = 0.0; epoxy_labor_m2 = DEFAULT_LABOR_EPOXY_M2
+
+        if protection_type == "Ceramic coating":
+            ceramic_type_sel = st.selectbox(
+                "Ceramic type", list(CERAMIC_TYPES.keys()), index=0, key="cer_type")
+            _cer_cat = CERAMIC_TYPES[ceramic_type_sel]
+            cc1, cc2 = st.columns(2)
+            ceramic_dft_um = cc1.number_input(
+                "DFT / coat (µm)", value=float(_cer_cat["default_dft_um"]),
+                step=50.0, min_value=100.0, key="cer_dft")
+            ceramic_coats = int(cc2.number_input(
+                "Coats", value=int(_cer_cat["default_coats"]),
+                step=1, min_value=1, max_value=6, key="cer_coats"))
+            ceramic_cost_m2 = st.number_input(
+                "Ceramic material cost (USD/m²)", value=float(_cer_cat["default_cost_m2"]),
+                step=10.0, key="cer_cost")
+            ceramic_labor_m2 = st.number_input(
+                "Application labour (USD/m²)", value=DEFAULT_LABOR_CERAMIC_M2,
+                step=5.0, key="cer_lab")
+        else:
+            ceramic_type_sel = "Ceramic-filled epoxy"
+            ceramic_dft_um = 500.0; ceramic_coats = 2
+            ceramic_cost_m2 = 0.0; ceramic_labor_m2 = DEFAULT_LABOR_CERAMIC_M2
         st.markdown("**Radiography (ASME UW-11)**")
         rc1, rc2 = st.columns(2)
         with rc1:
@@ -188,7 +330,7 @@ with ctx:
                                         help="7850 CS · 7900 SS 304/316")
 
     # ── Block 3: Nozzle plate ──────────────────────────────────────────────
-    with st.expander("🟫 Nozzle plate", expanded=False):
+    with st.expander("🟫 Nozzle plate", expanded=(_ap == "nozzle_plate")):
         np_bore_dia    = st.number_input("Bore diameter (mm)", value=50.0,
                                          step=5.0, min_value=10.0, key="np_bd")
         np_density     = st.number_input(
@@ -204,15 +346,16 @@ with ctx:
                                          value=0.0, step=1.0, key="np_ov")
 
     # ── Block 4: Media layers ──────────────────────────────────────────────
-    with st.expander("🧱 Media layers", expanded=True):
+    with st.expander("🧱 Media layers", expanded=(_ap == "media")):
         nozzle_plate_h = st.number_input("Nozzle plate height (m)",
                                          value=1.0, step=0.05)
         captured_solids_density = st.number_input(
             "Captured solids density (kg/m³)", value=1020.0, step=10.0,
             help="Density of TSS retained in media voids — typically 1010–1050 kg/m³")
         n_layers = int(st.selectbox("Layers", [1,2,3,4,5,6], index=2))
+        _rho_water_sidebar = water_properties(feed_temp, feed_sal)["density_kg_m3"]
         layers = []
-        default_types = ["Gravel", "Fine Sand", "Anthracite"]
+        default_types = ["Gravel", "Fine sand", "Anthracite"]
         for i in range(n_layers):
             st.markdown(f"**Layer {i+1}** (bottom → top)")
             def_type = default_types[i] if i < 3 else "Custom"
@@ -237,21 +380,56 @@ with ctx:
                 cap_frac = cap_raw / 100.0
             else:
                 cap_frac = 0.0
-            data   = preset.copy()
+            data = preset.copy()
             if m_type == "Custom":
-                data["d10"]       = st.number_input("d10 (mm)",  value=1.0,
-                                                    key=f"d10_{i}")
-                data["cu"]        = st.number_input("CU",        value=1.3,
-                                                    key=f"cu_{i}")
-                data["epsilon0"]  = st.number_input("Voidage ε₀", value=0.42,
-                                                    key=f"ep_{i}")
-                data["rho_p_eff"] = st.number_input("Density (kg/m³)", value=2650,
-                                                    key=f"rh_{i}")
+                _c1, _c2 = st.columns(2)
+                _d10 = _c1.number_input("d10 (mm)", value=1.0, step=0.05,
+                                        min_value=0.01, key=f"d10_{i}")
+                _cu  = _c2.number_input("CU (d60/d10)", value=1.5, step=0.05,
+                                        min_value=1.0, key=f"cu_{i}")
+                _psi = _c1.number_input("Sphericity ψ", value=0.80,
+                                        step=0.05, min_value=0.3, max_value=1.0,
+                                        key=f"psi_{i}",
+                                        help="1 = perfect sphere; 0.5–0.9 typical for filter media")
+                _eps0_est = _eps0_from_psi(_psi)
+                _eps0 = _c2.number_input(
+                    "Voidage ε₀", value=_eps0_est, step=0.01,
+                    min_value=0.25, max_value=0.70, key=f"ep_{i}",
+                    help=f"Estimated from ψ: {_eps0_est:.3f}  (Kozeny empirical — override if measured)")
+                _is_por = st.checkbox("Porous media (water fills particle pores)",
+                                      value=False, key=f"por_{i}",
+                                      help="GAC, Pumice, FILTRALITE, etc. — water soaks into "
+                                           "particle pores, increasing effective density vs dry")
+                if _is_por:
+                    _p1, _p2 = st.columns(2)
+                    _rho_dry = _p1.number_input(
+                        "Dry apparent density (kg/m³)", value=500.0, step=50.0,
+                        min_value=100.0, key=f"rhd_{i}",
+                        help="Mass of one dry particle ÷ its apparent volume (including pores)")
+                    _eps_p = _p2.number_input(
+                        "Particle internal porosity εₚ", value=0.50,
+                        step=0.05, min_value=0.0, max_value=0.95, key=f"epp_{i}",
+                        help="Pore volume ÷ total particle volume (not bed voidage ε₀)")
+                    _rho_eff = _rho_eff_porous(_rho_dry, _eps_p, _rho_water_sidebar)
+                    st.caption(f"ρ_eff (water-saturated) = {_rho_eff:.0f} kg/m³  "
+                               f"= {_rho_dry:.0f} + {_rho_water_sidebar:.0f}×{_eps_p:.2f}")
+                else:
+                    _rho_eff = st.number_input(
+                        "Particle density (kg/m³)", value=2650.0, step=50.0,
+                        min_value=100.0, key=f"rh_{i}",
+                        help="True solid particle density (non-porous media)")
+                data["d10"]       = _d10
+                data["cu"]        = _cu
+                data["d60"]       = round(_d10 * _cu, 3)
+                data["epsilon0"]  = _eps0
+                data["psi"]       = _psi
+                data["is_porous"] = _is_por
+                data["rho_p_eff"] = round(_rho_eff, 1)
             layers.append({**data, "Type": m_type, "Depth": depth,
                            "is_support": is_sup, "capture_frac": cap_frac})
 
     # ── Block 5: Backwash ──────────────────────────────────────────────────
-    with st.expander("🔄 Backwash design", expanded=False):
+    with st.expander("🔄 Backwash design", expanded=(_ap == "backwash")):
         collector_h    = st.number_input(
             "BW outlet collector height (m)", value=4.2, step=0.1,
             help="Height from vessel bottom to BW outlet collector / trough")
@@ -300,9 +478,26 @@ with ctx:
         bw_s_fill   = st.number_input("⑥ Fill & rinse (min)",         value=10, step=1, min_value=0, key="bws6")
         bw_total_min = bw_s_drain + bw_s_air + bw_s_airw + bw_s_hw + bw_s_settle + bw_s_fill
         st.metric("Total BW duration", f"{bw_total_min} min")
+        st.caption("Equipment sizing")
+        vessel_pressure_bar = st.number_input(
+            "Vessel operating pressure (bar g)", value=2.0, step=0.5,
+            min_value=0.0, key="ves_press",
+            help="Gauge pressure inside the filter vessel during BW. "
+                 "Adds to blower back-pressure alongside water submergence.")
+        blower_eta = st.number_input(
+            "Blower isentropic efficiency", value=0.70, step=0.01,
+            min_value=0.30, max_value=0.95, key="blower_eta")
+        blower_inlet_temp_c = st.number_input(
+            "Blower inlet air temperature (°C)", value=30.0, step=5.0,
+            min_value=-10.0, max_value=60.0, key="blower_t")
+        tank_sf = st.number_input(
+            "BW tank safety factor", value=1.5, step=0.1,
+            min_value=1.0, max_value=3.0, key="tank_sf",
+            help="Tank volume = BW vol/cycle × simultaneous systems × SF. "
+                 "Minimum is also checked against 10 min at design BW flow.")
 
     # ── Block 3+6: Supports & nozzles ─────────────────────────────────────
-    with st.expander("🔩 Nozzles & supports", expanded=False):
+    with st.expander("🔩 Nozzles & supports", expanded=(_ap == "supports")):
         default_rating  = st.selectbox("Flange rating", FLANGE_RATINGS, index=1)
         nozzle_stub_len = st.number_input("Nozzle stub length (mm)",
                                           value=350, step=50)
@@ -323,6 +518,11 @@ with ctx:
                                             step=2.0, key="sad_bp")
             gusset_t      = st.number_input("Gusset t (mm)",     value=12.0,
                                             step=2.0, key="sad_gt")
+            saddle_contact_angle = st.number_input(
+                "Saddle contact angle (°)", value=120.0, step=15.0,
+                min_value=90.0, max_value=180.0, key="sad_ang",
+                help="Arc of vessel shell in contact with saddle. "
+                     "120° is standard; 150° for heavy/thin-walled vessels.")
             leg_h = 1.2; leg_section = 150.0
         else:
             leg_h         = st.number_input("Leg height (m)",   value=1.2,
@@ -334,9 +534,10 @@ with ctx:
             gusset_t      = st.number_input("Gusset t (mm)",     value=12.0,
                                             step=2.0, key="leg_gt")
             saddle_h = 0.8
+            saddle_contact_angle = 120.0
 
     # ── Energy & economics ─────────────────────────────────────────────────
-    with st.expander("⚡ Energy & economics", expanded=False):
+    with st.expander("⚡ Energy & economics", expanded=(_ap == "energy")):
         st.caption("Hydraulic profile — filtration pump duty")
         np_slot_dp   = st.number_input(
             "Strainer nozzle plate ΔP at design LV (bar)", value=0.02,
@@ -391,12 +592,12 @@ with ctx:
             min_value=1000, key="op_hr")
 
     # ── Performance thresholds ─────────────────────────────────────────────
-    with st.expander("⚠️ Thresholds", expanded=False):
+    with st.expander("⚠️ Thresholds", expanded=(_ap == "thresholds")):
         velocity_threshold = st.number_input("Max LV (m/h)",   value=12.0)
         ebct_threshold     = st.number_input("Min EBCT (min)", value=5.0)
 
     # ── Block 7: Cartridge filter ───────────────────────────────────────────
-    with st.expander("🔷 Cartridge filter", expanded=False):
+    with st.expander("🔷 Cartridge filter", expanded=(_ap == "cartridge")):
         cart_flow   = st.number_input(
             "Design flow (m³/h)", value=float(total_flow),
             step=100.0, key="cart_flow",
@@ -581,7 +782,6 @@ nozzle_sched = estimate_nozzle_schedule(
 # ── Block 6: Supports ──────────────────────────────────────────────────────
 wt_sup = saddle_weight(
     vessel_od_m=mech["od_m"],
-    vessel_length_m=total_length,
     support_type=support_type,
     saddle_height_m=saddle_h,
     leg_height_m=leg_h,
@@ -631,7 +831,6 @@ wt_int = internals_weight(
     cyl_len_m=cyl_len,
     manhole_dn=manhole_dn,
     n_manholes=n_manholes,
-    density_kg_m3=steel_density,
 )
 
 # ── TSS mass balance ────────────────────────────────────────────────────────
@@ -702,13 +901,17 @@ import math as _math
 _bw_dur_h = bw_total_min / 60.0   # BW duration in hours
 
 # feasibility_matrix[sc_label][temp_label][tss_label] = dict of KPIs
-def _feas_kpis(t_cycle_h, bw_dur_h, n_active_filters):
-    """Return operational KPIs for one (cycle_time, BW_duration, n_filters) set."""
+def _feas_kpis(t_cycle_h, bw_dur_h, n_active_per_stream, n_streams):
+    """Return operational KPIs for one (cycle_time, BW_duration, n_filters) set.
+
+    BW trains are plant-wide; redundancy (standby filters) is per stream.
+    """
     t_total   = t_cycle_h + bw_dur_h          # full filtration + BW period
     avail_pct = t_cycle_h / t_total * 100 if t_total > 0 else 0.0
     bw_per_day = 24.0 / t_total if t_total > 0 else 0.0
-    # steady-state fraction of filters in BW at any moment
-    sim_demand = n_active_filters * bw_dur_h / t_total if t_total > 0 else 0.0
+    # Plant-wide simultaneous BW demand
+    n_active_total = n_active_per_stream * n_streams
+    sim_demand = n_active_total * bw_dur_h / t_total if t_total > 0 else 0.0
     bw_trains  = max(1, _math.ceil(sim_demand))
 
     # Feasibility score
@@ -720,13 +923,15 @@ def _feas_kpis(t_cycle_h, bw_dur_h, n_active_filters):
         score, flag = "🔴 Critical", "Redesign"
 
     return {
-        "t_cycle_h":   round(t_cycle_h,   2),
-        "avail_pct":   round(avail_pct,    1),
-        "bw_per_day":  round(bw_per_day,   1),
-        "sim_demand":  round(sim_demand,   2),
-        "bw_trains":   bw_trains,
-        "score":       score,
-        "flag":        flag,
+        "t_cycle_h":        round(t_cycle_h,        2),
+        "avail_pct":        round(avail_pct,         1),
+        "bw_per_day":       round(bw_per_day,        1),
+        "sim_demand":       round(sim_demand,         2),
+        "n_active_total":   n_active_total,
+        "n_active_stream":  n_active_per_stream,
+        "bw_trains":        bw_trains,
+        "score":            score,
+        "flag":             flag,
     }
 
 feasibility_matrix: dict = {}
@@ -741,7 +946,7 @@ for _x, _nact, _q in _load_data_cyc:
                            if r["TSS (mg/L)"] == _tss_v), None)
             _t_cyc = _tr["Cycle duration (h)"] if _tr else 0.0
             feasibility_matrix[_sc][_t_lbl][_tss_lbl] = _feas_kpis(
-                _t_cyc, _bw_dur_h, _nact
+                _t_cyc, _bw_dur_h, _nact, streams
             )
 
 # ── Cartridge design ──────────────────────────────────────────────────────
@@ -812,6 +1017,24 @@ energy = energy_summary(
     op_hours_per_year   = float(op_hours_yr),
 )
 
+# ── BW system equipment sizing ────────────────────────────────────────────
+_n_bw_systems = _n_feas.get("bw_trains", 1)
+bw_sizing = bw_system_sizing(
+    q_bw_design_m3h     = bw_hyd["q_bw_design_m3h"],
+    bw_head_mwc         = bw_head_mwc,
+    bw_pump_eta         = bw_pump_eta,
+    motor_eta           = motor_eta,
+    q_air_design_m3h    = bw_hyd["q_air_design_m3h"],
+    vessel_pressure_bar = vessel_pressure_bar,
+    filter_id_m         = real_id,
+    blower_inlet_temp_c = blower_inlet_temp_c,
+    blower_eta          = blower_eta,
+    bw_vol_per_cycle_m3 = bw_seq["total_vol_avg_m3"],
+    n_bw_systems        = _n_bw_systems,
+    tank_sf             = tank_sf,
+    rho_bw_kg_m3        = rho_bw,
+)
+
 # ── Consolidated weight ────────────────────────────────────────────────────
 nozzle_wt_total = sum(r.get("Total wt (kg)", 0) for r in nozzle_sched)
 w_body  = wt_body["weight_body_kg"]
@@ -821,39 +1044,90 @@ w_noz   = nozzle_wt_total
 w_int   = wt_int["weight_internals_kg"]
 w_total = w_body + w_np + w_sup + w_noz + w_int
 
+# ── Internal surface areas & lining / coating (needed before operating weight) ─
+vessel_areas = internal_surface_areas(
+    vessel_id_m          = real_id,
+    cyl_len_m            = cyl_len,
+    h_dish_m             = h_dish,
+    end_type             = end_geometry,
+    nozzle_plate_area_m2 = wt_np.get("area_total_m2", 0.0),
+)
+
+lining_result = lining_cost(
+    protection_type      = protection_type,
+    areas                = vessel_areas,
+    rubber_type          = rubber_type_sel,
+    rubber_thickness_mm  = lining_mm if lining_mm > 0 else 4.0,
+    rubber_layers        = rubber_layers,
+    rubber_cost_m2       = rubber_cost_m2,
+    rubber_labor_m2      = rubber_labor_m2,
+    epoxy_type           = epoxy_type_sel,
+    epoxy_dft_um         = epoxy_dft_um,
+    epoxy_coats          = epoxy_coats,
+    epoxy_cost_m2        = epoxy_cost_m2,
+    epoxy_labor_m2       = epoxy_labor_m2,
+    ceramic_type         = ceramic_type_sel,
+    ceramic_dft_um       = ceramic_dft_um,
+    ceramic_coats        = ceramic_coats,
+    ceramic_cost_m2      = ceramic_cost_m2,
+    ceramic_labor_m2     = ceramic_labor_m2,
+)
+
+wt_oper = operating_weight(
+    layers           = layers,
+    avg_area_m2      = avg_area,
+    vessel_id_m      = real_id,
+    cyl_len_m        = cyl_len,
+    h_dish_m         = h_dish,
+    end_type         = end_geometry,
+    w_empty_kg       = w_total,
+    n_supports       = wt_sup["n_supports"],
+    rho_water_kg_m3  = rho_feed,
+    w_lining_kg      = lining_result["weight_kg"],
+)
+
+wt_saddle = saddle_design(
+    total_length_m    = total_length,
+    vessel_od_m       = mech["od_m"],
+    vessel_id_m       = real_id,
+    w_operating_kg    = wt_oper["w_operating_kg"],
+    n_saddles         = wt_sup["n_supports"],
+    contact_angle_deg = saddle_contact_angle,
+)
+
 # ══════════════════════════════════════════════════════════════════════════════
-# STATUS BADGES
+# STATUS BADGES  (appended below inputs in the input panel column)
 # ══════════════════════════════════════════════════════════════════════════════
-with ctx:
+with inp_col:
     st.divider()
-    st.markdown("**Status**")
-    for label, done in {
+    _status_items = {
         "Project":    bool(project_name),
         "Process":    total_flow > 0 and n_filters > 0,
         "Water":      feed_sal >= 0 and feed_temp > 0,
         "Geometry":   nominal_id > 0 and total_length > 0,
         "Mechanical": design_pressure > 0,
-        "Media":      len(layers) > 0 and all(L["Depth"]>0 for L in layers),
+        "Media":      len(layers) > 0 and all(L["Depth"] > 0 for L in layers),
         "Backwash":   not bw_col["media_loss_risk"],
         "Weight":     w_total > 0,
-    }.items():
-        icon = "🟢" if done else ("🔴" if label=="Backwash" and
-                                  bw_col["media_loss_risk"] else "⚪")
-        st.markdown(f"{icon} &nbsp; {label}")
+    }
+    _cols_status = st.columns(2)
+    for i, (label, done) in enumerate(_status_items.items()):
+        icon = "🟢" if done else ("🔴" if label == "Backwash"
+                                   and bw_col["media_loss_risk"] else "⚪")
+        _cols_status[i % 2].markdown(f"{icon} {label}")
 
     if bw_col["media_loss_risk"]:
-        st.error(f"⚠️ Media loss risk!\nMax safe BW: "
+        st.error(f"⚠️ Media loss risk! Max safe BW: "
                  f"{bw_col['max_safe_bw_m_h']} m/h")
-
-    st.divider()
-    st.caption("AQUASIGHT™ | Proprietary Tool")
+    st.caption("AQUASIGHT™ | Proprietary")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONTENT TABS
 # ══════════════════════════════════════════════════════════════════════════════
-with main:
+with main_col:
     (tab_proj, tab_proc, tab_water, tab_vessel,
-     tab_media, tab_bw, tab_weight, tab_cart, tab_energy, tab_report) = st.tabs([
+     tab_media, tab_bw, tab_weight, tab_cart, tab_energy,
+     tab_section, tab_datasheet, tab_report) = st.tabs([
         "📋 Project",
         "💧 Process",
         "🌊 Water",
@@ -863,6 +1137,8 @@ with main:
         "⚖️ Weight",
         "🔷 Cartridge",
         "⚡ Energy",
+        "🖼️ Section",
+        "📋 Datasheet",
         "📄 Report",
     ])
 
@@ -1517,10 +1793,13 @@ with main:
                 for sc_lbl, sc_temps in feasibility_matrix.items():
                     _lv  = filt_cycles[sc_lbl]["lv_m_h"]
                     _nact_f = next(
-                        n for x, n, q in _load_data_cyc
+                        n for x, n, _ in _load_data_cyc
                         if ("N" if x == 0 else f"N-{x}") == sc_lbl)
+                    _nact_total = _nact_f * streams
                     st.markdown(
-                        f"---\n**Scenario {sc_lbl} · {_nact_f} active filters · "
+                        f"---\n**Scenario {sc_lbl} · "
+                        f"{_nact_f} active / stream × {streams} stream(s) "
+                        f"= {_nact_total} active filters plant-wide · "
                         f"LV = {_lv:.1f} m/h**"
                     )
 
@@ -1552,8 +1831,8 @@ with main:
 
                     # ── Simultaneity matrix ───────────────────────────────
                     st.markdown(
-                        "*Peak simultaneous BW demand "
-                        "(expected filters in BW at the same time)*"
+                        "*BW systems required (plant-wide) — "
+                        "simultaneous demand = active filters (plant-wide) × BW dur / total period*"
                     )
                     sim_rows = []
                     for tss_lbl in _tss_labels:
@@ -1562,7 +1841,7 @@ with main:
                             kpi = sc_temps[t_lbl][tss_lbl]
                             row[t_lbl] = (
                                 f"{kpi['sim_demand']:.2f} "
-                                f"→ {kpi['bw_trains']} BW train(s)"
+                                f"→ {kpi['bw_trains']} BW system(s)"
                             )
                         sim_rows.append(row)
                     st.dataframe(
@@ -1603,12 +1882,12 @@ with main:
                             f"🟢 Design is feasible at high TSS / design temp: "
                             f"availability {_avail:.1f} %, "
                             f"{_bwday:.1f} BW cycles/filter/day, "
-                            f"1 BW train sufficient."
+                            f"1 BW system (plant-wide) is sufficient."
                         )
                     else:
                         if _trains > 1:
                             guidance.append(
-                                f"🔴 **{_trains} simultaneous BW trains required** "
+                                f"🔴 **{_trains} simultaneous BW systems required plant-wide** "
                                 f"at high TSS ({tss_high:.0f} mg/L) / design temp — "
                                 f"consider: (a) add a dedicated BW pump/blower per stream, "
                                 f"(b) staggered BW scheduling with time-lock logic, or "
@@ -1632,12 +1911,75 @@ with main:
                         st.markdown(g)
 
                 st.caption(
-                    "Scoring: 🟢 Good = avail ≥ 90 %, BW trains ≤ 1, cycle ≥ 6 h  |  "
-                    "🟡 Caution = avail 80–90 %, trains ≤ 2, cycle ≥ 3 h  |  "
-                    "🔴 Critical = avail < 80 %, trains > 2, or cycle < 3 h.  "
-                    "Simultaneity = n_active × BW_dur / (cycle + BW_dur).  "
-                    "BW trains needed = ⌈simultaneity⌉."
+                    "Scoring: 🟢 Good = avail ≥ 90 %, BW systems ≤ 1, cycle ≥ 6 h  |  "
+                    "🟡 Caution = avail 80–90 %, BW systems ≤ 2, cycle ≥ 3 h  |  "
+                    "🔴 Critical = avail < 80 %, BW systems > 2, or cycle < 3 h.  "
+                    "BW systems are plant-wide (baseline: 1–2 for the whole plant).  "
+                    "Simultaneity = n_active_plant × BW_dur / (cycle + BW_dur);  "
+                    "BW systems needed = ⌈simultaneity⌉.  "
+                    "Redundancy (N-1, N-2 …) = standby filters per stream."
                 )
+
+        with st.expander("6 · BW system equipment data sheet", expanded=True):
+            st.markdown("### BW pump")
+            p1, p2, p3, p4 = st.columns(4)
+            p1.metric("Design flow",  f"{bw_sizing['q_bw_design_m3h']:,.0f} m³/h")
+            p2.metric("Total head",   f"{bw_sizing['bw_head_mwc']:.1f} mWC  "
+                                       f"({bw_sizing['bw_head_bar']:.2f} bar)")
+            p3.metric("Shaft power",  f"{bw_sizing['p_pump_shaft_kw']:.0f} kW")
+            p4.metric("Motor power",  f"{bw_sizing['p_pump_motor_kw']:.0f} kW")
+            st.table(pd.DataFrame([
+                ["Design flow (duty)",        f"{bw_sizing['q_bw_design_m3h']:,.1f} m³/h"],
+                ["Total dynamic head",        f"{bw_sizing['bw_head_mwc']:.1f} mWC  ({bw_sizing['bw_head_bar']:.3f} bar)"],
+                ["Pump hydraulic efficiency", f"{bw_sizing['bw_pump_eta']*100:.0f} %"],
+                ["Shaft power",               f"{bw_sizing['p_pump_shaft_kw']:.1f} kW"],
+                ["Motor power (absorbed)",    f"{bw_sizing['p_pump_motor_kw']:.1f} kW"],
+                ["Duty / standby",            f"{_n_bw_systems}D / 1S  (plant-wide)"],
+                ["Fluid",                     f"BW water  ρ={rho_bw:.1f} kg/m³"],
+            ], columns=["Parameter", "Value"]))
+
+            st.markdown("### Air blower")
+            b1, b2, b3, b4 = st.columns(4)
+            b1.metric("Design flow",     f"{bw_sizing['q_air_design_m3h']:,.0f} m³/h  "
+                                          f"({bw_sizing['q_air_design_m3min']:.1f} m³/min)")
+            b2.metric("ΔP (total)",      f"{bw_sizing['dp_total_bar']:.3f} bar")
+            b3.metric("Shaft power",     f"{bw_sizing['p_blower_shaft_kw']:.0f} kW")
+            b4.metric("Motor power",     f"{bw_sizing['p_blower_motor_kw']:.0f} kW")
+            st.table(pd.DataFrame([
+                ["Inlet volume flow",          f"{bw_sizing['q_air_design_m3h']:,.1f} m³/h  ({bw_sizing['q_air_design_m3min']:.1f} m³/min)"],
+                ["Inlet conditions",           f"T={blower_inlet_temp_c:.0f} °C  ρ={bw_sizing['rho_air_kg_m3']:.4f} kg/m³  P={bw_sizing['P1_pa']/1000:.1f} kPa (a)"],
+                ["Vessel back-pressure",       f"{vessel_pressure_bar:.2f} bar g"],
+                ["Water submergence (≈ ID/2)", f"{bw_sizing['h_submergence_m']:.2f} m  →  {bw_sizing['dp_sub_bar']:.3f} bar"],
+                ["Discharge pressure (abs)",   f"{bw_sizing['P2_pa']/1000:.1f} kPa  (ratio {bw_sizing['pressure_ratio']:.3f})"],
+                ["Total ΔP",                   f"{bw_sizing['dp_total_bar']:.3f} bar"],
+                ["Isentropic efficiency",      f"{bw_sizing['blower_eta']*100:.0f} %"],
+                ["Ideal (adiabatic) power",    f"{bw_sizing['p_blower_ideal_kw']:.1f} kW"],
+                ["Shaft power",               f"{bw_sizing['p_blower_shaft_kw']:.1f} kW"],
+                ["Motor power (absorbed)",    f"{bw_sizing['p_blower_motor_kw']:.1f} kW"],
+                ["Basis",                      "Adiabatic compression  γ = 1.4 (dry air)"],
+            ], columns=["Parameter", "Value"]))
+
+            st.markdown("### BW water storage tank")
+            t1, t2, t3 = st.columns(3)
+            t1.metric("Vol/cycle/system",  f"{bw_sizing['bw_vol_per_cycle_m3']:.0f} m³")
+            t2.metric("Simultaneous syst.", f"{bw_sizing['n_bw_systems']}")
+            t3.metric("Recommended tank",  f"{bw_sizing['v_tank_m3']:.0f} m³",
+                      help=f"Governs: {bw_sizing['tank_governs']}")
+            st.table(pd.DataFrame([
+                ["BW vol / filter / cycle (avg)",  f"{bw_sizing['bw_vol_per_cycle_m3']:.1f} m³"],
+                ["Simultaneous BW systems",         f"{bw_sizing['n_bw_systems']}  (design-point N scenario, avg TSS)"],
+                ["Safety factor",                   f"{bw_sizing['tank_sf']:.1f}×"],
+                ["Volume — cycle-based",            f"{bw_sizing['v_cycle_m3']:.0f} m³  (vol × systems × SF)"],
+                ["Volume — 10-min rule",            f"{bw_sizing['v_10min_m3']:.0f} m³  (Q_bw_design / 6)"],
+                ["Recommended tank volume",         f"{bw_sizing['v_tank_m3']:.0f} m³  (governs: {bw_sizing['tank_governs']})"],
+            ], columns=["Parameter", "Value"]))
+            st.caption(
+                "BW pump head is a user input (sidebar → Energy block).  "
+                "Breakdown: vessel operating head + bed/nozzle ΔP + pipe losses.  "
+                "Blower submergence = filter ID / 2 (centroid of water column above nozzle plate).  "
+                "Tank volume covers simultaneous BW systems at design point; "
+                "operator may add live-well or equalisation margin on top."
+            )
 
     # ─────────────────────────────────────────────────────────────────────
     # TAB 7 · WEIGHT
@@ -1765,6 +2107,304 @@ with main:
                 "and instrument connections not included."
             )
 
+        with st.expander("7 · Operating (working) weight & support loads", expanded=True):
+            st.markdown(
+                "Working weight = empty vessel + dry media + process water "
+                "(vessel running full at design conditions). "
+                "This is the load the saddles or legs must carry."
+            )
+
+            o1, o2, o3, o4, o5 = st.columns(5)
+            o1.metric("Empty vessel",    f"{wt_oper['w_empty_kg']:,.0f} kg")
+            o2.metric("Lining / coating", f"{wt_oper['w_lining_kg']:,.0f} kg")
+            o3.metric("Media (dry)",     f"{wt_oper['w_media_kg']:,.0f} kg")
+            o4.metric("Process water",   f"{wt_oper['w_water_kg']:,.0f} kg")
+            o5.metric("Operating total", f"{wt_oper['w_operating_t']:.3f} t",
+                      delta=f"{wt_oper['w_operating_kg']:,.0f} kg",
+                      delta_color="off")
+
+            st.markdown("**Weight breakdown**")
+            lining_label = (f"Internal {lining_result['protection_type'].lower()}"
+                            if lining_result['protection_type'] != "None"
+                            else "Internal lining / coating")
+            st.table(pd.DataFrame([
+                ["Empty vessel (steel structure)",
+                 f"{wt_oper['w_empty_kg']:>12,.1f} kg"],
+                [lining_label,
+                 f"{wt_oper['w_lining_kg']:>12,.1f} kg"],
+                ["Media — dry solid mass",
+                 f"{wt_oper['w_media_kg']:>12,.1f} kg"],
+                ["Process water (vessel full)",
+                 f"{wt_oper['w_water_kg']:>12,.1f} kg"],
+                ["─" * 30, "─" * 16],
+                ["OPERATING WEIGHT",
+                 f"{wt_oper['w_operating_kg']:>12,.1f} kg  =  {wt_oper['w_operating_t']:.3f} t"],
+            ], columns=["Component", "Weight"]))
+
+            st.markdown("**Internal volume breakdown**")
+            st.table(pd.DataFrame([
+                ["Cylindrical shell (internal)",
+                 f"{wt_oper['v_cylinder_m3']:.3f} m³"],
+                ["Two dish ends (internal)",
+                 f"{wt_oper['v_heads_m3']:.3f} m³"],
+                ["Total internal volume",
+                 f"{wt_oper['v_total_internal_m3']:.3f} m³"],
+                ["Media solid volume  Σ(depth × area × (1−ε₀))",
+                 f"{wt_oper['v_solid_media_m3']:.4f} m³"],
+                ["Water volume  (total − solid media)",
+                 f"{wt_oper['v_water_m3']:.3f} m³"],
+            ], columns=["Item", "Value"]))
+
+            st.markdown("**Media layer detail**")
+            st.dataframe(pd.DataFrame(wt_oper["media_rows"]),
+                         use_container_width=True, hide_index=True)
+
+            st.markdown("**Support / saddle loads**")
+            s1, s2, s3 = st.columns(3)
+            s1.metric("Support type",     wt_sup["support_type"])
+            s2.metric("Number of supports", str(wt_oper["n_supports"]))
+            s3.metric("Load per support",
+                      f"{wt_oper['load_per_support_t']:.3f} t",
+                      delta=f"{wt_oper['load_per_support_kN']:.1f} kN",
+                      delta_color="off")
+            st.table(pd.DataFrame([
+                ["Number of supports",
+                 str(wt_oper["n_supports"])],
+                ["Operating weight",
+                 f"{wt_oper['w_operating_kg']:,.1f} kg  =  {wt_oper['w_operating_t']:.3f} t"],
+                ["Vertical load per support",
+                 f"{wt_oper['load_per_support_kg']:,.1f} kg  =  "
+                 f"{wt_oper['load_per_support_t']:.3f} t  =  "
+                 f"{wt_oper['load_per_support_kN']:.1f} kN"],
+            ], columns=["Parameter", "Value"]))
+            st.caption(
+                "Load per support assumes uniform distribution (equal reaction at each support). "
+                "For saddle design, this is the vertical reaction used to check web shear, "
+                "bending stress at the horn, and base plate bearing pressure (Zick analysis). "
+                "Wind/seismic and friction loads are not included here — add as project-specific "
+                "factors per local code (ASCE 7, EN 1991, etc.)."
+            )
+
+        with st.expander("8 · Saddle positioning & section selection", expanded=True):
+
+            # ── Positioning ───────────────────────────────────────────────
+            st.markdown("### Positioning (Zick method)")
+            _aov_color = "🟢" if wt_saddle["a_over_R_ok"] else "🔴"
+            sp1, sp2, sp3, sp4 = st.columns(4)
+            sp1.metric("L / D ratio",          f"{wt_saddle['ld_ratio']:.2f}")
+            sp2.metric("Spacing factor α",     f"{wt_saddle['alpha_pct']} %")
+            sp3.metric("Saddle 1 from head",   f"{wt_saddle['saddle_1_from_left_m']:.3f} m")
+            sp4.metric("Saddle 2 from head",   f"{wt_saddle['saddle_2_from_left_m']:.3f} m",
+                       help="Measured from right head tangent = same distance as saddle 1")
+
+            st.table(pd.DataFrame([
+                ["Total vessel length (T/T)",      f"{total_length:.3f} m"],
+                ["Vessel OD",                       f"{mech['od_m']:.4f} m"],
+                ["L / D ratio",                     f"{wt_saddle['ld_ratio']:.2f}"],
+                ["Spacing factor α",               f"{wt_saddle['alpha_pct']} %  "
+                                                    f"({'L/D<3 →25%' if wt_saddle['ld_ratio']<3 else 'L/D<5 →22%' if wt_saddle['ld_ratio']<5 else 'L/D≥5 →20%'})"],
+                ["Saddle 1 — from left head",      f"{wt_saddle['saddle_1_from_left_m']:.3f} m"],
+                ["Saddle 2 — from left head",      f"{wt_saddle['saddle_2_from_left_m']:.3f} m"],
+                ["Span between saddles",           f"{wt_saddle['saddle_gap_m']:.3f} m"],
+                ["a / R  (Zick parameter)",        f"{wt_saddle['a_over_R']:.3f}  {_aov_color} {'OK — ≤ 0.5' if wt_saddle['a_over_R_ok'] else 'REVIEW — > 0.5'}"],
+                ["Contact arc length (120°)",      f"{wt_saddle['arc_m']:.3f} m"],
+                ["Simplified saddle moment",       f"{wt_saddle['m_saddle_kNm']:.0f} kN·m"],
+            ], columns=["Parameter", "Value"]))
+            st.caption(
+                "α = 0.25 (L/D<3) / 0.22 (L/D<5) / 0.20 (L/D≥5).  "
+                "Zick parameter a/R ≤ 0.5 ensures the dish head can stiffen "
+                "the shell at the saddle horn — per Zick (1951), Welded Pressure Vessels."
+            )
+
+            # ── Load & section ────────────────────────────────────────────
+            st.markdown("### Vertical reaction & section selection")
+            _over = wt_saddle["overstressed"]
+            sl1, sl2, sl3, sl4 = st.columns(4)
+            sl1.metric("Operating weight",  f"{wt_oper['w_operating_t']:.2f} t")
+            sl2.metric("Reaction / saddle", f"{wt_saddle['reaction_t']:.2f} t",
+                       delta=f"{wt_saddle['reaction_kN']:.0f} kN", delta_color="off")
+            sl3.metric("Catalogue capacity",f"{wt_saddle['capacity_t']} t",
+                       delta="⚠️ exceeds max" if _over else "✅ adequate",
+                       delta_color="inverse" if _over else "normal")
+            sl4.metric("Selected section",  wt_saddle["section"])
+
+            # ── Recommendations panel ─────────────────────────────────────
+            _alts = wt_saddle["alternatives"]
+            _min_n = wt_saddle["min_n_needed"]
+
+            if _over:
+                st.error(
+                    f"⚠️ **Load exceeds catalogue maximum** — reaction "
+                    f"{wt_saddle['reaction_t']:.1f} t/saddle > {wt_saddle['capacity_t']} t max.  \n"
+                    f"Minimum **{_min_n} supports** required to stay within catalogue. "
+                    f"Change the **Support type** in the sidebar to a "
+                    f"{'3-saddle' if _min_n == 3 else str(_min_n)+'-support'} arrangement."
+                )
+            else:
+                # Optimisation: could fewer saddles still fit within catalogue?
+                if wt_saddle["n_saddles"] > 2:
+                    _fewer_n = wt_saddle["n_saddles"] - 1
+                    _fewer_alt = next(
+                        (a for a in _alts if a["n_saddles"] == _fewer_n), None)
+                    if _fewer_alt and _fewer_alt["fits_catalogue"]:
+                        _save_kg = (wt_saddle["w_one_saddle_kg"]
+                                    - _fewer_alt["struct_wt_ea_kg"]) * _fewer_n
+                        st.info(
+                            f"💡 **Optimisation** — {_fewer_n} supports would also work: "
+                            f"{_fewer_alt['reaction_t']:.1f} t/saddle → "
+                            f"**{_fewer_alt['section']}** (cap {_fewer_alt['capacity_t']} t). "
+                            f"Removing one support saves ~{abs(_save_kg):,.0f} kg of structural steel. "
+                            f"Change **Support type** in the sidebar to "
+                            f"{'Saddle (2-support)' if _fewer_n == 2 else str(_fewer_n)+'-support'}."
+                        )
+
+            # ── Alternatives comparison table ─────────────────────────────
+            st.markdown("**Support arrangement alternatives**")
+            alt_rows = []
+            for a in _alts:
+                status = "▶ current" if a["is_current"] else (
+                    "✅ fits" if a["fits_catalogue"] else "❌ exceeds max")
+                alt_rows.append({
+                    "Supports": a["n_saddles"],
+                    "Reaction/saddle (t)": a["reaction_t"],
+                    "Section": a["section"],
+                    "Capacity (t)": a["capacity_t"],
+                    "Status": status,
+                    "Struct. wt/saddle (kg)": a["struct_wt_ea_kg"],
+                    "Total struct. wt (kg)": a["struct_wt_total_kg"],
+                    "Saddle positions from left (m)": "  /  ".join(str(p) for p in a["positions_m"]),
+                })
+            _alt_df = pd.DataFrame(alt_rows)
+            st.dataframe(_alt_df, use_container_width=True, hide_index=True)
+            st.caption(
+                "Positions = distance from left head tangent line. "
+                "For 2 saddles: Zick α×L from each end. "
+                "For 3+ saddles: outer two at α×L, inner ones evenly distributed. "
+                "To change the arrangement, update **Support type** in the sidebar "
+                "(🔩 Nozzles & supports expander)."
+            )
+
+            st.table(pd.DataFrame([
+                ["Vertical reaction per saddle",  f"{wt_saddle['reaction_t']:.3f} t  =  {wt_saddle['reaction_kN']:.1f} kN"],
+                ["Selected section",              wt_saddle["section"]],
+                ["Section unit weight",           f"{wt_saddle['kg_per_m']:.2f} kg/m"],
+                ["Piece length (saddle width)",   f"{wt_saddle['piece_length_m']:.1f} m"],
+                ["Piece weight",                  f"{wt_saddle['piece_weight_kg']:.1f} kg"],
+                ["Paint area per piece",          f"{wt_saddle['piece_paint_m2']:.2f} m²"],
+                ["Ribs per saddle assembly",      str(wt_saddle["n_ribs"])],
+                ["Rib mass per saddle",           f"{wt_saddle['w_ribs_kg']:.1f} kg"],
+                ["Saddle structure wt (incl. plates +10%)", f"{wt_saddle['w_one_saddle_kg']:.1f} kg"],
+                [f"Total {wt_saddle['n_saddles']} saddles structure wt",
+                 f"{wt_saddle['w_two_saddles_kg']:.1f} kg"],
+                ["Base plate width (est.)",      f"{wt_saddle['base_width_m']:.3f} m"],
+                ["Base plate area (est.)",       f"{wt_saddle['base_area_m2']:.3f} m²"],
+                ["Foundation bearing pressure",  f"{wt_saddle['bearing_kPa']:.1f} kPa"],
+            ], columns=["Parameter", "Value"]))
+
+            # ── Full catalogue ────────────────────────────────────────────
+            st.markdown("### Full catalogue — all section types")
+            st.dataframe(pd.DataFrame(wt_saddle["catalogue_rows"]),
+                         use_container_width=True, hide_index=True)
+            st.caption(
+                "Ribs/saddle = number of catalogue-section pieces in one saddle assembly "
+                f"(for vessel ID = {real_id:.2f} m).  "
+                "Structure weight includes +10% for wear plate and base plate.  "
+                "Foundation bearing pressure = reaction / (0.8×OD × piece length).  "
+                "Full Zick stress check (shell longitudinal bending, circumferential "
+                "compression at horn, and web shear) should be performed per "
+                "ASME VIII-1 App. L or EN 13445-3 §16 for detailed design."
+            )
+
+        with st.expander("9 · Internal lining / coating", expanded=True):
+            st.markdown(f"### Internal surface areas")
+            ia1, ia2, ia3, ia4 = st.columns(4)
+            ia1.metric("Cylinder",       f"{vessel_areas['a_cylinder_m2']:.1f} m²")
+            ia2.metric("Two dish ends",  f"{vessel_areas['a_two_heads_m2']:.1f} m²")
+            ia3.metric("Nozzle plate",   f"{vessel_areas['a_nozzle_plate_m2']:.1f} m²")
+            ia4.metric("Total to coat",  f"{vessel_areas['a_total_m2']:.1f} m²")
+            st.table(pd.DataFrame([
+                ["Cylinder (shell)",       f"{vessel_areas['a_cylinder_m2']:.2f} m²",
+                 f"π × {real_id:.3f} × {cyl_len:.3f}"],
+                ["One dish end",           f"{vessel_areas['a_one_head_m2']:.2f} m²",
+                 f"{end_geometry}"],
+                ["Two dish ends",          f"{vessel_areas['a_two_heads_m2']:.2f} m²", ""],
+                ["Shell total",            f"{vessel_areas['a_shell_m2']:.2f} m²",  ""],
+                ["Nozzle plate (internal)",f"{vessel_areas['a_nozzle_plate_m2']:.2f} m²", ""],
+                ["Total internal area",    f"{vessel_areas['a_total_m2']:.2f} m²",  ""],
+            ], columns=["Surface", "Area", "Basis"]))
+            st.caption(
+                "Elliptic 2:1 head area: exact oblate-spheroid integral. "
+                "Nozzle plate: flat plate area from nozzle plate design module. "
+                "Nozzle stubs and manhole necks not included."
+            )
+
+            st.markdown(f"### Protection system — {protection_type}")
+            if protection_type == "None":
+                st.info("No internal lining or coating selected. Vessel relies on "
+                        "corrosion allowance only.")
+            else:
+                lc1, lc2, lc3, lc4 = st.columns(4)
+                lc1.metric("Area protected",  f"{lining_result['a_total_m2']:.1f} m²")
+                lc2.metric("Lining weight",   f"{lining_result['weight_kg']:,.0f} kg")
+                lc3.metric("Material cost",   f"USD {lining_result['material_cost_usd']:,.0f}")
+                lc4.metric("Total cost",      f"USD {lining_result['total_cost_usd']:,.0f}",
+                           delta=f"Labour: USD {lining_result['labor_cost_usd']:,.0f}",
+                           delta_color="off")
+
+                if lining_result["id_deduction_mm"] > 0:
+                    st.info(
+                        f"**Hydraulic ID deduction:** "
+                        f"2 × {lining_mm:.1f} mm × {rubber_layers} layers "
+                        f"= **{lining_result['id_deduction_mm'] * rubber_layers:.1f} mm** "
+                        f"→ real ID = **{real_id:.4f} m**"
+                    )
+                else:
+                    st.success(
+                        f"**{protection_type}** — coating thickness "
+                        f"{lining_result['thickness_mm']:.2f} mm is negligible; "
+                        "no hydraulic ID deduction applied."
+                    )
+
+                st.markdown("**Specification & cost breakdown**")
+                detail_rows = [[k, v] for k, v in lining_result["detail"].items()]
+                st.table(pd.DataFrame(detail_rows, columns=["Parameter", "Value"]))
+
+            # ── Reference tables ──────────────────────────────────────────
+            with st.expander("Reference — available types & default costs", expanded=False):
+                st.markdown("**Rubber lining types**")
+                st.dataframe(pd.DataFrame([
+                    {"Type": k, "Density (kg/m³)": v["density_kg_m3"],
+                     "Default cost (USD/m²)": v["default_cost_m2"],
+                     "Hardness": v["hardness"]}
+                    for k, v in RUBBER_TYPES.items()
+                ]), use_container_width=True, hide_index=True)
+
+                st.markdown("**Epoxy coating types**")
+                st.dataframe(pd.DataFrame([
+                    {"Type": k, "Default DFT (µm)": v["default_dft_um"],
+                     "Default coats": v["default_coats"],
+                     "Cost (USD/m²)": v["default_cost_m2"],
+                     "Note": v["note"]}
+                    for k, v in EPOXY_TYPES.items()
+                ]), use_container_width=True, hide_index=True)
+
+                st.markdown("**Ceramic coating types**")
+                st.dataframe(pd.DataFrame([
+                    {"Type": k,
+                     "Default DFT/coat (µm)": v["default_dft_um"],
+                     "Default coats": v["default_coats"],
+                     "Density (kg/m³)": v["density_kg_m3"],
+                     "Cost (USD/m²)": v["default_cost_m2"],
+                     "Note": v["note"]}
+                    for k, v in CERAMIC_TYPES.items()
+                ]), use_container_width=True, hide_index=True)
+
+                st.caption(
+                    "All default costs are indicative supply-only rates for Middle East / SE Asia markets "
+                    "(2024). Add mobilisation, surface preparation (Sa 2.5 / SSPC-SP10), "
+                    "QA/QC inspection, and cure/vulcanisation costs as project-specific items."
+                )
+
     # ─────────────────────────────────────────────────────────────────────
     # TAB 8 · CARTRIDGE
     # ─────────────────────────────────────────────────────────────────────
@@ -1822,7 +2462,6 @@ with main:
             cb4.metric("DHC / element",   f"{cart_result['dhc_g_element']:.0f} g")
 
             _dp_pct = cart_result['dp_clean_bar'] / DP_REPLACEMENT_BAR * 100
-            _dp_ok  = not cart_result['dp_overloaded']
             if cart_result['dp_overloaded']:
                 st.error(
                     f"⚠️ BOL ΔP ({cart_result['dp_clean_bar']:.3f} bar) already exceeds the "
@@ -2072,26 +2711,334 @@ with main:
             use_container_width=True, hide_index=True)
 
     # ─────────────────────────────────────────────────────────────────────
-    # TAB 10 · REPORT
+    # TAB 10 · SECTION DRAWING
+    # ─────────────────────────────────────────────────────────────────────
+    with tab_section:
+        st.subheader("Theoretical elevation section")
+
+        _show_exp = st.toggle("Show expanded bed (BW condition)", value=True,
+                              key="sec_exp")
+
+        _sec_fig = vessel_section_elevation(
+            vessel_id_m      = nominal_id,
+            total_length_m   = total_length,
+            h_dish_m         = h_dish,
+            nozzle_plate_h_m = nozzle_plate_h,
+            layers           = layers,
+            collector_h_m    = collector_h,
+            bw_exp           = bw_exp,
+            show_expansion   = _show_exp,
+        )
+        st.pyplot(_sec_fig, use_container_width=True)
+
+        # Download as PNG
+        _sec_buf = io.BytesIO()
+        _sec_fig.savefig(_sec_buf, format="png", dpi=180, bbox_inches="tight",
+                         facecolor=_sec_fig.get_facecolor())
+        _sec_buf.seek(0)
+        st.download_button(
+            "⬇️ Download PNG",
+            data=_sec_buf,
+            file_name=f"{project_name or 'MMF'}_section.png",
+            mime="image/png",
+        )
+
+        st.caption(
+            "Elevation view — not to scale in the thickness direction.  "
+            "Media layers shown as uniform-height horizontal bands.  "
+            "Expanded bed shown for the water-only BW velocity input."
+        )
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TAB 11 · DATASHEET
+    # ─────────────────────────────────────────────────────────────────────
+    with tab_datasheet:
+        st.subheader("Vessel fabrication data sheet")
+
+        import datetime as _dt
+        _today = _dt.date.today().strftime("%d-%b-%Y")
+
+        # ── Title block ───────────────────────────────────────────────────
+        tb1, tb2, tb3 = st.columns([2, 2, 1])
+        with tb1:
+            st.markdown("**Document**")
+            st.table(pd.DataFrame([
+                ["Project",     project_name],
+                ["Doc. No.",    doc_number],
+                ["Description", "Horizontal Multi-Media Filter"],
+                ["Vessel/Tag",  f"MMF-001"],
+            ], columns=["Field", "Value"]))
+        with tb2:
+            st.markdown("**Approval**")
+            st.table(pd.DataFrame([
+                ["Date",        _today],
+                ["Revision",    revision],
+                ["Client",      client or "—"],
+                ["Prepared by", engineer],
+            ], columns=["Field", "Value"]))
+        with tb3:
+            st.metric("Filters", streams * n_filters)
+            st.metric("Active (N)", streams * n_filters - redundancy * streams)
+
+        st.divider()
+
+        ds_left, ds_right = st.columns([1, 1.1])
+
+        # ── LEFT: Design data ─────────────────────────────────────────────
+        with ds_left:
+            st.markdown("### Design Data")
+            _shell_E = mech["shell_E"]
+            _head_E  = mech["head_E"]
+            st.table(pd.DataFrame([
+                ["Design Code",           "ASME VIII Div. 1"],
+                ["Operating pressure",    f"{design_pressure * 0.7:.2f} barg  (≈ 70 % design)"],
+                ["Design pressure",       f"{design_pressure:.2f} barg"],
+                ["Test pressure (hydro)", f"{design_pressure * 1.5:.2f} barg"],
+                ["Design temperature",    f"{design_temp:.0f} °C"],
+                ["Min. design temp.",     "5 °C (ambient min.)"],
+                ["Corrosion allowance",   f"{corrosion:.1f} mm"],
+                ["Shell joint eff. E",    f"{_shell_E:.2f}  ({shell_radio})"],
+                ["Head joint eff. E",     f"{_head_E:.2f}  ({head_radio})"],
+                ["Head shape",            end_geometry],
+            ], columns=["Parameter", "Value"]))
+
+            st.markdown("### Material")
+            st.table(pd.DataFrame([
+                ["Shell & heads",         material_name],
+                ["Allowable stress S",    f"{mech['allowable_stress']} kg/cm²"],
+                ["Standard",              mat_info["standard"]],
+                ["Nozzle plate",          material_name],
+                ["Internal protection",   protection_type],
+            ], columns=["Component", "Specification"]))
+
+            st.markdown("### Dimensional Data")
+            st.table(pd.DataFrame([
+                ["Internal diameter (ID)",   f"{nominal_id * 1000:.0f} mm"],
+                ["Outside diameter (OD)",    f"{mech['od_m'] * 1000:.0f} mm"],
+                ["Shell thickness (t_des)",  f"{mech['t_shell_design_mm']} mm"],
+                ["Head thickness (t_des)",   f"{mech['t_head_design_mm']} mm"],
+                ["T/T length",               f"{total_length:.3f} m"],
+                ["Cylindrical length",       f"{cyl_len:.3f} m"],
+                ["Dish depth",               f"{h_dish * 1000:.0f} mm"],
+                ["Nozzle plate height",      f"{nozzle_plate_h * 1000:.0f} mm"],
+                ["Nozzle plate thickness",   f"{wt_np['t_design_mm']} mm"],
+            ], columns=["Parameter", "Value"]))
+
+            st.markdown("### Capacity & Weight")
+            _lining_label = (protection_type if protection_type != "None"
+                             else "None (bare metal)")
+            st.table(pd.DataFrame([
+                ["Fluid",                    "Seawater / filtered feed"],
+                ["Internal volume",          f"{wt_oper['v_total_internal_m3']:.2f} m³"],
+                ["Empty weight",             f"{w_total:,.0f} kg  =  {w_total/1000:.3f} t"],
+                ["Internal lining/coating",  _lining_label],
+                ["Lining weight",            f"{lining_result['weight_kg']:,.0f} kg"],
+                ["Operating weight (full)",  f"{wt_oper['w_operating_kg']:,.0f} kg  "
+                                             f"=  {wt_oper['w_operating_t']:.3f} t"],
+                ["Load / support",           f"{wt_oper['load_per_support_kN']:.1f} kN  "
+                                             f"({wt_oper['load_per_support_t']:.3f} t)"],
+                ["Head thickness",           f"{mech['t_head_design_mm']} mm"],
+                ["Shell thickness",          f"{mech['t_shell_design_mm']} mm"],
+                ["Floor (nozzle plate)",     f"{wt_np['t_design_mm']} mm"],
+                ["Est. head weight (×2)",    f"{wt_body['weight_two_heads_kg']:,.0f} kg"],
+                ["Est. shell weight",        f"{wt_body['weight_shell_kg']:,.0f} kg"],
+                ["Est. floor/plate weight",  f"{wt_np['weight_total_kg']:,.0f} kg"],
+            ], columns=["Item", "Value"]))
+
+        # ── RIGHT: section drawing + media + nozzles ───────────────────────
+        with ds_right:
+            st.markdown("### Elevation View — Theoretical Section")
+            _ds_fig = vessel_section_elevation(
+                vessel_id_m      = nominal_id,
+                total_length_m   = total_length,
+                h_dish_m         = h_dish,
+                nozzle_plate_h_m = nozzle_plate_h,
+                layers           = layers,
+                collector_h_m    = collector_h,
+                bw_exp           = bw_exp,
+                show_expansion   = True,
+                figsize          = (10, 4.5),
+            )
+            st.pyplot(_ds_fig, use_container_width=True)
+
+            st.markdown("### Media Bed")
+            _media_rows = []
+            _cum = nozzle_plate_h
+            for lyr in layers:
+                _media_rows.append({
+                    "Layer":        lyr["Type"],
+                    "Depth (mm)":   int(lyr["Depth"] * 1000),
+                    "Bottom (mm)":  int(_cum * 1000),
+                    "Top (mm)":     int((_cum + lyr["Depth"]) * 1000),
+                    "d10 (mm)":     lyr.get("d10", "—"),
+                    "CU":           lyr.get("cu", "—"),
+                    "ε₀":           lyr.get("epsilon0", "—"),
+                    "ρ (kg/m³)":    lyr.get("rho_p_eff", "—"),
+                })
+                _cum += lyr["Depth"]
+            st.dataframe(pd.DataFrame(_media_rows),
+                         use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.markdown("### Nomenclature of Nozzles")
+        st.dataframe(pd.DataFrame(nozzle_sched),
+                     use_container_width=True, hide_index=True)
+
+        st.divider()
+        st.markdown("### Vessel Standards")
+        st.table(pd.DataFrame([
+            ["Design Code",        "ASME Boiler & Pressure Vessel Code Sect. VIII Div. 1"],
+            ["Material (shell)",   mat_info["standard"]],
+            ["Flanges",            "ASME B16.5 / EN 1092-1"],
+            ["Nozzles",            "ASME B36.10 / B36.19"],
+            ["Welding",            "ASME IX — Welding & Brazing Qualifications"],
+            ["NDE",               f"Shell: {shell_radio}   Head: {head_radio}"],
+            ["Corrosion allow.",   f"{corrosion:.1f} mm"],
+            ["Internal coating",   protection_type],
+        ], columns=["Standard / Item", "Reference / Value"]))
+
+        # ── DOCX export ───────────────────────────────────────────────────
+        if _DOCX_OK:
+            st.divider()
+            if st.button("📄 Generate Datasheet DOCX", key="ds_docx_btn"):
+                _ds_doc = _DocxDocument()
+                _ds_doc.add_heading("VESSEL FABRICATION DATA SHEET", 0)
+
+                # Title block
+                _ds_doc.add_heading("1. Document Information", 1)
+                _t = _ds_doc.add_table(rows=1, cols=2)
+                _t.style = "Table Grid"
+                _t.rows[0].cells[0].text = "Project"
+                _t.rows[0].cells[1].text = project_name
+                for _label, _val in [
+                    ("Doc. No.", doc_number), ("Revision", revision),
+                    ("Date", _today), ("Prepared by", engineer),
+                    ("Client", client or "—"),
+                ]:
+                    _r = _t.add_row()
+                    _r.cells[0].text = _label
+                    _r.cells[1].text = _val
+
+                # Design data
+                _ds_doc.add_heading("2. Design Data", 1)
+                _t2 = _ds_doc.add_table(rows=1, cols=2)
+                _t2.style = "Table Grid"
+                _t2.rows[0].cells[0].text = "Parameter"
+                _t2.rows[0].cells[1].text = "Value"
+                for _p, _v in [
+                    ("Design Code", "ASME VIII Div. 1"),
+                    ("Design pressure", f"{design_pressure:.2f} barg"),
+                    ("Design temperature", f"{design_temp:.0f} °C"),
+                    ("Corrosion allowance", f"{corrosion:.1f} mm"),
+                    ("Material", material_name),
+                    ("Shell thickness", f"{mech['t_shell_design_mm']} mm"),
+                    ("Head thickness", f"{mech['t_head_design_mm']} mm"),
+                    ("ID", f"{nominal_id * 1000:.0f} mm"),
+                    ("OD", f"{mech['od_m'] * 1000:.0f} mm"),
+                    ("T/T length", f"{total_length:.3f} m"),
+                    ("Empty weight", f"{w_total:,.0f} kg"),
+                    ("Operating weight", f"{wt_oper['w_operating_kg']:,.0f} kg"),
+                    ("Internal protection", protection_type),
+                ]:
+                    _r2 = _t2.add_row()
+                    _r2.cells[0].text = _p
+                    _r2.cells[1].text = _v
+
+                # Nozzle schedule
+                _ds_doc.add_heading("3. Nozzle Schedule", 1)
+                _cols_noz = list(pd.DataFrame(nozzle_sched).columns)
+                _t3 = _ds_doc.add_table(rows=1, cols=len(_cols_noz))
+                _t3.style = "Table Grid"
+                for ci, cn in enumerate(_cols_noz):
+                    _t3.rows[0].cells[ci].text = cn
+                for _, _noz_row in pd.DataFrame(nozzle_sched).iterrows():
+                    _r3 = _t3.add_row()
+                    for ci, cn in enumerate(_cols_noz):
+                        _r3.cells[ci].text = str(_noz_row[cn])
+
+                # Save to buffer
+                _ds_buf = io.BytesIO()
+                _ds_doc.save(_ds_buf)
+                _ds_buf.seek(0)
+                st.download_button(
+                    "⬇️ Download Datasheet DOCX",
+                    data=_ds_buf,
+                    file_name=f"{doc_number or 'MMF_datasheet'}.docx",
+                    mime="application/vnd.openxmlformats-officedocument"
+                         ".wordprocessingml.document",
+                    key="ds_docx_dl",
+                )
+        else:
+            st.info("Install python-docx to enable DOCX export.")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TAB 12 · REPORT
     # ─────────────────────────────────────────────────────────────────────
     with tab_report:
-        st.subheader("Calculation summary")
 
         w_total_rep = (wt_body["weight_body_kg"] + w_noz
                        + wt_np["weight_total_kg"]
                        + wt_sup["weight_all_supports_kg"]
                        + wt_int["weight_internals_kg"])
 
-        # ── Word export ────────────────────────────────────────────────────
+        # ══════════════════════════════════════════════════════════════════
+        # SECTION SELECTOR
+        # ══════════════════════════════════════════════════════════════════
+        st.markdown("### Report builder")
+        st.caption(
+            "Select the sections to include. "
+            "Identification (cover, project info, sign-off) is always present."
+        )
+
+        _has_lining = lining_result["protection_type"] != "None"
+
+        sel_c1, sel_c2, sel_c3, sel_c4 = st.columns(4)
+
+        with sel_c1:
+            st.markdown("**B · Process Design**")
+            s_process  = st.checkbox("Process basis",           value=True, key="rs_proc")
+            s_water    = st.checkbox("Water properties",        value=True, key="rs_water")
+            s_media    = st.checkbox("Media configuration",     value=True, key="rs_media")
+            s_dp       = st.checkbox("Filtration ΔP",          value=True, key="rs_dp")
+            s_cycle    = st.checkbox("Filtration cycle & BW feasibility",
+                                     value=True, key="rs_cycle")
+
+        with sel_c2:
+            st.markdown("**C · Mechanical & Structural**")
+            s_vessel   = st.checkbox("Vessel dimensions & ASME thickness",
+                                     value=True, key="rs_vessel")
+            s_nzpl     = st.checkbox("Nozzle plate design",    value=True, key="rs_nzpl")
+            s_wt_empty = st.checkbox("Empty weight breakdown", value=True, key="rs_wtempty")
+            s_wt_oper  = st.checkbox("Operating weight & support loads",
+                                     value=True, key="rs_wtoper")
+            s_saddle   = st.checkbox("Saddle design",          value=True, key="rs_saddle")
+
+        with sel_c3:
+            st.markdown("**D · Backwash System**")
+            s_bw_hyd   = st.checkbox("BW hydraulics & collector",
+                                     value=True, key="rs_bwhyd")
+            s_bw_equip = st.checkbox("BW equipment sizing\n(pump / blower / tank)",
+                                     value=True, key="rs_bweq")
+            st.markdown("**E · Internal Protection**")
+            _lining_label = (f"Lining / coating  ({lining_result['protection_type']})"
+                             if _has_lining else "Lining / coating  *(None — skipped)*")
+            s_lining   = st.checkbox(_lining_label, value=_has_lining,
+                                     disabled=not _has_lining, key="rs_lining")
+
+        with sel_c4:
+            st.markdown("**F · Energy & Economics**")
+            s_hyd_prof = st.checkbox("Hydraulic head profile", value=True, key="rs_hyd")
+            s_energy   = st.checkbox("Energy & OPEX",          value=True, key="rs_energy")
+            st.markdown("**G · Post-treatment**")
+            s_cart     = st.checkbox("Cartridge filter",       value=True, key="rs_cart")
+
+        st.divider()
+
+        # ══════════════════════════════════════════════════════════════════
+        # WORD EXPORT
+        # ══════════════════════════════════════════════════════════════════
         def _build_docx() -> bytes:
             doc = _DocxDocument()
-
-            # ── Title ──
-            t = doc.add_heading("AQUASIGHT™  Horizontal Multi-Media Filter", 0)
-            t.alignment = _WD_ALIGN.CENTER
-            t2 = doc.add_heading("Calculation Report", 1)
-            t2.alignment = _WD_ALIGN.CENTER
-            doc.add_paragraph("")
 
             def _tbl(rows_data, cols=("Parameter", "Value")):
                 tbl = doc.add_table(rows=len(rows_data), cols=len(cols))
@@ -2099,201 +3046,357 @@ with main:
                 for i, row_vals in enumerate(rows_data):
                     for j, v in enumerate(row_vals):
                         tbl.rows[i].cells[j].text = str(v)
+                doc.add_paragraph("")
                 return tbl
 
-            # ── 1. Project ──
-            doc.add_heading("1. Project Information", 2)
+            def _h(text, lvl=2):
+                doc.add_heading(text, lvl)
+
+            # ── A. Cover (always) ───────────────────────────────────────
+            t = doc.add_heading("AQUASIGHT™  Horizontal Multi-Media Filter", 0)
+            t.alignment = _WD_ALIGN.CENTER
+            t2 = doc.add_heading("Calculation Report", 1)
+            t2.alignment = _WD_ALIGN.CENTER
+            doc.add_paragraph("")
+            _h("Project Information")
             _tbl([
-                ("Project",      project_name),
-                ("Document",     f"{doc_number}  ·  Rev {revision}"),
-                ("Client",       client or "—"),
-                ("Prepared by",  engineer),
+                ("Project",       project_name),
+                ("Document No.",  f"{doc_number}  ·  Rev {revision}"),
+                ("Client",        client or "—"),
+                ("Prepared by",   engineer),
+                ("Date",          str(__import__("datetime").date.today())),
             ])
-            doc.add_paragraph("")
 
-            # ── 2. Process ──
-            doc.add_heading("2. Process Basis", 2)
-            _tbl([
-                ("Total plant flow",          f"{total_flow:,.0f} m³/h"),
-                ("Streams × filters",    f"{streams} × {n_filters}"),
-                ("Redundancy",                f"N to N-{redundancy}"),
-                ("Flow / filter (N)",         f"{q_per_filter:.1f} m³/h"),
-                ("Filtration rate (N)",       f"{q_per_filter/avg_area:.2f} m/h"),
-            ])
-            doc.add_paragraph("")
+            # Track section number dynamically
+            _sn = [1]
+            def _sec(title):
+                _sn[0] += 1
+                _h(f"{_sn[0]}. {title}")
 
-            # ── 3. Water ──
-            doc.add_heading("3. Water Properties", 2)
-            _tbl([
-                ("",            "Feed",                             "Backwash"),
-                ("Salinity",    f"{feed_sal:.2f} ppt",             f"{bw_sal:.2f} ppt"),
-                ("Temperature", f"{feed_temp:.1f} °C",        f"{bw_temp:.1f} °C"),
-                ("Density",     f"{rho_feed:.3f} kg/m³",      f"{rho_bw:.3f} kg/m³"),
-                ("Viscosity",   f"{mu_feed*1000:.4f} cP",          f"{mu_bw*1000:.4f} cP"),
-            ], cols=("Property", "Feed", "Backwash"))
-            doc.add_paragraph("")
+            # ── B. Process Design ───────────────────────────────────────
+            if s_process:
+                _sec("Process Basis")
+                _tbl([
+                    ("Total plant flow",          f"{total_flow:,.0f} m³/h"),
+                    ("Streams",                   str(streams)),
+                    ("Filters / stream",          str(n_filters)),
+                    ("Redundancy",                f"N-{redundancy} per stream"),
+                    ("Flow / filter (N)",         f"{q_per_filter:.1f} m³/h"),
+                    ("Filtration rate (N)",       f"{q_per_filter/avg_area:.2f} m/h"),
+                    ("Cross-sectional area",      f"{avg_area:.3f} m²"),
+                ])
 
-            # ── 4. Vessel ──
-            doc.add_heading("4. Vessel & Mechanical", 2)
-            _tbl([
-                ("Nominal ID",           f"{nominal_id:.3f} m"),
-                ("Real hydraulic ID",    f"{real_id:.4f} m"),
-                ("Total length T/T",     f"{total_length:.3f} m"),
-                ("End geometry",         end_geometry),
-                ("Material",             material_name),
-                ("Shell t_design",       f"{mech['t_shell_design_mm']} mm"),
-                ("Head t_design",        f"{mech['t_head_design_mm']} mm"),
-                ("Outside diameter",     f"{mech['od_m']:.4f} m"),
-                ("Design pressure",      f"{design_pressure:.2f} bar"),
-                ("Corrosion allowance",  f"{corrosion:.1f} mm"),
-            ])
-            doc.add_paragraph("")
+            if s_water:
+                _sec("Water Properties")
+                _tbl([
+                    ("",            "Feed",                        "Backwash"),
+                    ("Salinity",    f"{feed_sal:.2f} ppt",        f"{bw_sal:.2f} ppt"),
+                    ("Temperature", f"{feed_temp:.1f} °C",        f"{bw_temp:.1f} °C"),
+                    ("Density",     f"{rho_feed:.3f} kg/m³",      f"{rho_bw:.3f} kg/m³"),
+                    ("Viscosity",   f"{mu_feed*1000:.4f} cP",     f"{mu_bw*1000:.4f} cP"),
+                ], cols=("Property", "Feed", "Backwash"))
 
-            # ── 5. Media ──
-            doc.add_heading("5. Media Design", 2)
-            media_rows = [("Media", "Depth (m)", "d10 (mm)", "CU", "Vol (m³)", "Area (m²)")]
-            for b in base:
-                media_rows.append((
-                    b["Type"],
-                    f"{b['Depth']:.3f}",
-                    f"{b['d10']:.2f}",
-                    f"{b['cu']:.2f}",
-                    f"{b['Vol']:.4f}",
-                    f"{b['Area']:.4f}",
-                ))
-            _tbl(media_rows, cols=("Media", "Depth (m)", "d10 (mm)", "CU",
-                                   "Vol (m³)", "Area (m²)"))
-            doc.add_paragraph("")
+            if s_media:
+                _sec("Media Configuration")
+                _m_hdr = ("Media", "Support", "Depth (m)", "d10 (mm)", "CU",
+                           "ε₀", "ρp,eff (kg/m³)", "ψ", "Vol (m³)")
+                _m_rows = [_m_hdr] + [
+                    (b["Type"],
+                     "✓" if b.get("is_support") else "",
+                     f"{b['Depth']:.3f}",
+                     f"{b['d10']:.2f}",
+                     f"{b['cu']:.2f}",
+                     f"{b.get('epsilon0', '—'):.3f}",
+                     f"{b['rho_p_eff']:.0f}",
+                     f"{b.get('psi', '—')}",
+                     f"{b['Vol']:.4f}",
+                    ) for b in base]
+                _tbl(_m_rows, cols=_m_hdr)
 
-            # ── 6. Backwash ──
-            doc.add_heading("6. Backwash — Collector Check", 2)
-            _tbl([
-                ("Proposed BW velocity",  f"{bw_velocity:.1f} m/h"),
-                ("Max safe BW velocity",  f"{bw_col['max_safe_bw_m_h']:.1f} m/h"),
-                ("Min. freeboard",        f"{freeboard_mm:.0f} mm"),
-                ("Actual freeboard",
-                 f"{bw_col['freeboard_m']:.3f} m  ({bw_col['freeboard_pct']:.1f}%)"),
-                ("Status",                bw_col["status"]),
-            ])
-            doc.add_paragraph("")
+            if s_dp:
+                _sec("Filtration Pressure Drop")
+                _tbl([
+                    ("Clean-bed ΔP (Ergun)",    f"{bw_dp['dp_clean_bar']:.4f} bar"),
+                    ("50 % loaded ΔP (½ solid loading)", f"{(bw_dp['dp_clean_bar'] + bw_dp['dp_dirty_bar']) / 2:.4f} bar"),
+                    ("Dirty ΔP (M_max)",        f"{bw_dp['dp_dirty_bar']:.4f} bar"),
+                    ("BW trigger setpoint",     f"{dp_trigger_bar:.2f} bar"),
+                    ("Superficial LV (N)",      f"{bw_dp['u_m_h']:.2f} m/h"),
+                    ("Specific resistance α",
+                     f"{filt_cycles['N']['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg  "
+                     f"({filt_cycles['N']['alpha_source']})"),
+                ])
 
-            # ── 7. Weight ──
-            doc.add_heading("7. Empty Weight Summary", 2)
-            _tbl([
-                ("Shell (cylindrical)",      f"{wt_body['weight_shell_kg']:,.1f} kg"),
-                ("2 × Dish ends",       f"{wt_body['weight_two_heads_kg']:,.1f} kg"),
-                ("Nozzles",                  f"{w_noz:,.1f} kg"),
-                ("Nozzle plate + IPE beams", f"{wt_np['weight_total_kg']:,.1f} kg"),
-                (f"Supports ({wt_sup['support_type']})",
-                                             f"{wt_sup['weight_all_supports_kg']:,.1f} kg"),
-                ("Strainer nozzles",         f"{wt_int['weight_strainers_kg']:,.1f} kg"),
-                ("Air scour header",         f"{wt_int['weight_air_header_kg']:,.1f} kg"),
-                ("Manholes",                 f"{wt_int['weight_manholes_kg']:,.1f} kg"),
-                ("TOTAL EMPTY WEIGHT",
-                 f"{w_total_rep:,.1f} kg  =  {w_total_rep/1000:.3f} t"),
-            ])
-            doc.add_paragraph("")
+            if s_cycle:
+                _sec("Filtration Cycle & BW Feasibility")
+                _tbl([
+                    ("Max solid loading",        f"{solid_loading:.2f} kg/m²"),
+                    ("BW total duration",        f"{bw_total_min} min"),
+                    ("BW sequence",
+                     f"Drain {bw_s_drain}' · Air {bw_s_air}' · Air+W {bw_s_airw}' · "
+                     f"HW {bw_s_hw}' · Settle {bw_s_settle}' · Fill {bw_s_fill}'"),
+                ])
+                doc.add_paragraph(
+                    "Cycle duration (h) — N scenario, design temperature:")
+                _cyc_n = cycle_matrix.get("N", {}).get(
+                    f"Design ({feed_temp:.0f}°C)", {})
+                if _cyc_n:
+                    _ch = ("TSS (mg/L)", "Cycle (h)", "Avail. (%)",
+                           "BW/day", "BW systems (plant-wide)")
+                    _cr = [_ch]
+                    for _tl, _tv in zip(_tss_labels, _tss_vals):
+                        _tr = next((r for r in _cyc_n["tss_results"]
+                                    if r["TSS (mg/L)"] == _tv), None)
+                        _fk = feasibility_matrix.get("N", {}).get(
+                            f"Design ({feed_temp:.0f}°C)", {}).get(_tl, {})
+                        _cr.append((
+                            f"{_tv:.0f}",
+                            f"{_tr['Cycle duration (h)']:.1f}" if _tr else "—",
+                            f"{_fk.get('avail_pct', 0):.1f}",
+                            f"{_fk.get('bw_per_day', 0):.1f}",
+                            str(_fk.get("bw_trains", "—")),
+                        ))
+                    _tbl(_cr, cols=_ch)
 
-            # ── 8. Cartridge ──
-            doc.add_heading("8. Cartridge Filter", 2)
-            _tbl([
-                ("Design flow",          f"{cart_result['design_flow_m3h']:,.1f} m³/h"),
-                ("Element material",     cart_result["element_material"]),
-                ("Element size",         cart_result["element_size"]),
-                ("Rating",               f"{cart_result['rating_um']} µm absolute"),
-                ("Safety factor",        f"{cart_result['safety_factor']}×"),
-                ("Feed viscosity",       f"{cart_result['mu_cP']:.2f} cP"),
-                ("Elements required",    str(cart_result["n_elements"])),
-                ("Housings required",    str(cart_result["n_housings"])),
-                ("Flow / element",       f"{cart_result['actual_flow_m3h_element']:.3f} m³/h ({cart_result['q_lpm_element']:.1f} lpm)"),
-                ("ΔP clean (BOL)",       f"{cart_result['dp_clean_bar']:.4f} bar"),
-                ("ΔP EOL",               f"{cart_result['dp_eol_bar']:.4f} bar"),
-                ("DHC / element",        f"{cart_result['dhc_g_element']:.0f} g"),
-                ("Annual element cost",  f"USD {cart_result['annual_cost_usd']:,.0f}"),
-            ])
-            doc.add_paragraph("")
+            # ── C. Mechanical & Structural ──────────────────────────────
+            if s_vessel:
+                _sec("Vessel Dimensions & ASME Thickness")
+                _tbl([
+                    ("Nominal ID",              f"{nominal_id:.3f} m"),
+                    ("Real hydraulic ID",       f"{real_id:.4f} m"),
+                    ("Outside diameter",        f"{mech['od_m']:.4f} m"),
+                    ("Total length T/T",        f"{total_length:.3f} m"),
+                    ("Cylindrical shell length", f"{cyl_len:.3f} m"),
+                    ("End geometry",            end_geometry),
+                    ("Material",                material_name),
+                    ("Design pressure",         f"{design_pressure:.2f} bar g"),
+                    ("Corrosion allowance",     f"{corrosion:.1f} mm"),
+                    ("Shell t_required",        f"{mech['t_shell_min_mm']:.2f} mm"),
+                    ("Shell t_design",          f"{mech['t_shell_design_mm']} mm"),
+                    ("Head t_required",         f"{mech['t_head_min_mm']:.2f} mm"),
+                    ("Head t_design",           f"{mech['t_head_design_mm']} mm"),
+                    ("Shell joint efficiency E", f"{mech['shell_E']:.2f}"),
+                    ("Head joint efficiency E",  f"{mech['head_E']:.2f}"),
+                    ("Shell radiography",       f"{shell_radio}  (E={mech['shell_E']:.2f})"),
+                    ("Head radiography",        f"{head_radio}  (E={mech['head_E']:.2f})"),
+                ])
 
-            # ── 9. Filtration cycle & BW feasibility ──
-            doc.add_heading("9. Filtration Cycle & BW Feasibility", 2)
-            _tbl([
-                ("BW setpoint",           f"{dp_trigger_bar:.2f} bar"),
-                ("Max solid loading",     f"{solid_loading:.2f} kg/m²"),
-                ("α (specific cake res.)",
-                 f"{filt_cycles['N']['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg "
-                 f"({filt_cycles['N']['alpha_source']})"),
-                ("BW duration (total)",   f"{bw_total_min} min"),
-                ("BW steps",
-                 f"Drain {bw_s_drain}' · Air {bw_s_air}' · Air+W {bw_s_airw}' · "
-                 f"HW {bw_s_hw}' · Settle {bw_s_settle}' · Fill {bw_s_fill}'"),
-            ])
-            doc.add_paragraph("")
-            # Design-temp cycle matrix (N scenario)
-            doc.add_paragraph("Cycle duration (h) — N scenario, design temperature:")
-            _cyc_n_design = cycle_matrix.get("N", {}).get(
-                f"Design ({feed_temp:.0f}°C)", {})
-            if _cyc_n_design:
-                _tss_rows_rep = [("TSS (mg/L)", "Cycle (h)", "Availability (%)",
-                                   "BW/day", "BW trains needed")]
-                for _tl, _tv in zip(_tss_labels, _tss_vals):
-                    _tr2 = next((r for r in _cyc_n_design["tss_results"]
-                                 if r["TSS (mg/L)"] == _tv), None)
-                    _fk  = feasibility_matrix.get("N", {}).get(
-                        f"Design ({feed_temp:.0f}°C)", {}).get(_tl, {})
-                    _tss_rows_rep.append((
-                        f"{_tv:.0f}",
-                        f"{_tr2['Cycle duration (h)']:.1f}" if _tr2 else "—",
-                        f"{_fk.get('avail_pct', 0):.1f}",
-                        f"{_fk.get('bw_per_day', 0):.1f}",
-                        str(_fk.get("bw_trains", "—")),
+            if s_nzpl:
+                _sec("Nozzle Plate Design")
+                _tbl([
+                    ("Plate height",            f"{nozzle_plate_h:.3f} m"),
+                    ("Plate t_min / t_design",  f"{wt_np['t_min_mm']:.2f} / {wt_np['t_design_mm']} mm"),
+                    ("Nozzle density",          f"{np_density:.0f} /m²"),
+                    ("Nozzle bore",             f"{np_bore_dia:.1f} mm"),
+                    ("Total nozzles",           f"{wt_np['n_bores']}"),
+                    ("Plate area",              f"{wt_np['area_total_m2']:.4f} m²"),
+                    ("Open area ratio",         f"{wt_np['open_ratio_pct']:.2f} %"),
+                    ("Design ΔP (nozzle)",      f"{wt_np['q_dp_kpa']:.2f} kPa"),
+                    ("Beam section",            f"{wt_np['beam_section']}  ({wt_np['n_beams']} beams)"),
+                    ("Plate + beam weight",     f"{wt_np['weight_total_kg']:,.1f} kg"),
+                ])
+
+            if s_wt_empty:
+                _sec("Empty Weight Breakdown")
+                _tbl([
+                    ("Cylindrical shell",       f"{wt_body['weight_shell_kg']:,.1f} kg"),
+                    ("2 × Dish ends",           f"{wt_body['weight_two_heads_kg']:,.1f} kg"),
+                    ("Nozzles",                 f"{w_noz:,.1f} kg"),
+                    ("Nozzle plate assembly",   f"{wt_np['weight_total_kg']:,.1f} kg"),
+                    (f"Supports ({wt_sup['support_type']})",
+                                               f"{wt_sup['weight_all_supports_kg']:,.1f} kg"),
+                    ("Strainer nozzles",        f"{wt_int['weight_strainers_kg']:,.1f} kg"),
+                    ("Air scour header",        f"{wt_int['weight_air_header_kg']:,.1f} kg"),
+                    ("Manholes",               f"{wt_int['weight_manholes_kg']:,.1f} kg"),
+                    ("TOTAL EMPTY WEIGHT",
+                     f"{w_total_rep:,.1f} kg  =  {w_total_rep/1000:.3f} t"),
+                ])
+
+            if s_wt_oper:
+                _sec("Operating Weight & Support Loads")
+                _tbl([
+                    ("Empty vessel",            f"{wt_oper['w_empty_kg']:,.1f} kg"),
+                    (f"Internal {lining_result['protection_type'].lower() or 'lining'}",
+                                               f"{wt_oper['w_lining_kg']:,.1f} kg"),
+                    ("Media — dry solid",       f"{wt_oper['w_media_kg']:,.1f} kg"),
+                    ("Process water (full)",    f"{wt_oper['w_water_kg']:,.1f} kg"),
+                    ("OPERATING WEIGHT",
+                     f"{wt_oper['w_operating_kg']:,.1f} kg  =  {wt_oper['w_operating_t']:.3f} t"),
+                    ("Number of supports",      str(wt_oper['n_supports'])),
+                    ("Load per support",
+                     f"{wt_oper['load_per_support_kg']:,.1f} kg  "
+                     f"= {wt_oper['load_per_support_t']:.3f} t  "
+                     f"= {wt_oper['load_per_support_kN']:.1f} kN"),
+                ])
+
+            if s_saddle:
+                _sec("Saddle Design (Zick Method)")
+                _sd = wt_saddle
+                _tbl([
+                    ("Saddle spacing factor α",   f"{_sd['alpha']:.2f}"),
+                    ("Saddle 1 position",         f"{_sd['saddle_1_from_left_m']:.3f} m from left T/L"),
+                    ("Saddle 2 position",         f"{_sd['saddle_2_from_left_m']:.3f} m from left T/L"),
+                    ("Reaction per saddle",       f"{_sd['reaction_t']:.3f} t"),
+                    ("Contact angle",             f"{_sd['contact_angle_deg']:.0f}°"),
+                    ("Section selected",          str(_sd.get('section', '—'))),
+                    ("Section capacity",          f"{_sd.get('capacity_t', '—')} t"),
+                    ("Structural weight / saddle",f"{_sd.get('w_one_saddle_kg', 0):,.0f} kg"),
+                    ("Status",                    "OVERSTRESSED" if _sd.get('overstressed') else "OK"),
+                ])
+
+            # ── D. Backwash System ──────────────────────────────────────
+            if s_bw_hyd:
+                _sec("Backwash Hydraulics & Collector Check")
+                _tbl([
+                    ("BW velocity (proposed)",   f"{bw_velocity:.1f} m/h"),
+                    ("Max safe BW velocity",     f"{bw_col['max_safe_bw_m_h']:.1f} m/h"),
+                    ("Air scour rate",           f"{air_scour_rate:.1f} m/h"),
+                    ("Min. freeboard required",  f"{freeboard_mm:.0f} mm"),
+                    ("Actual freeboard",
+                     f"{bw_col['freeboard_m']:.3f} m  ({bw_col['freeboard_pct']:.1f}%)"),
+                    ("Collector status",         bw_col["status"]),
+                ])
+                doc.add_paragraph("Bed expansion per layer:")
+                _bw_rows = [("Layer", "Fluidised", "ε_fluid.", "Settled (m)",
+                              "Expanded (m)", "u_mf (m/h)", "u_t (m/h)")]
+                for _i, _bl in enumerate(bw_exp["layers"]):
+                    _lname = layers[_i].get("Type", f"Layer {_i+1}") if _i < len(layers) else f"Layer {_i+1}"
+                    _bw_rows.append((
+                        _lname,
+                        "Yes" if _bl.get("fluidised") else "No",
+                        f"{_bl.get('eps_f', 0):.3f}",
+                        f"{_bl.get('depth_settled_m', 0):.3f}",
+                        f"{_bl.get('depth_expanded_m', 0):.3f}",
+                        f"{_bl.get('u_mf_m_h', 0):.2f}",
+                        f"{_bl.get('u_t_m_h', 0):.2f}",
                     ))
-                _tbl(_tss_rows_rep,
-                     cols=("TSS (mg/L)", "Cycle (h)", "Availability (%)",
-                            "BW/day", "BW trains"))
-            doc.add_paragraph("")
+                _tbl(_bw_rows, cols=("Layer", "Fluidised", "ε_fluid.", "Settled (m)",
+                                     "Expanded (m)", "u_mf (m/h)", "u_t (m/h)"))
 
-            # ── 10. Energy ──
-            doc.add_heading("10. Energy & Operating Cost", 2)
-            _tbl([
-                ("Filtration pump head (clean)",
-                 f"{hyd_prof['clean']['total_mwc']:.2f} mWC  "
-                 f"({hyd_prof['clean']['total_bar']:.4f} bar)"),
-                ("Filtration pump head (dirty)",
-                 f"{hyd_prof['dirty']['total_mwc']:.2f} mWC  "
-                 f"({hyd_prof['dirty']['total_bar']:.4f} bar)"),
-                ("Filtration pump power (dirty, per filter)",
-                 f"{energy['p_filt_dirty_kw']:.1f} kW"),
-                ("BW pump power",          f"{energy['p_bw_kw']:.1f} kW"),
-                ("Air blower power (elec.)",f"{energy['p_blower_elec_kw']:.1f} kW"),
-                ("Annual filtration energy",
-                 f"{energy['e_filt_kwh_yr']/1e3:,.0f} MWh/yr"),
-                ("Annual BW energy",
-                 f"{energy['e_bw_pump_kwh_yr']/1e3:,.1f} MWh/yr  "
-                 f"(pump + blower = "
-                 f"{(energy['e_bw_pump_kwh_yr']+energy['e_blower_kwh_yr'])/1e3:,.1f} MWh/yr)"),
-                ("TOTAL annual energy",    f"{energy['e_total_kwh_yr']/1e3:,.0f} MWh/yr"),
-                ("Specific energy",        f"{energy['kwh_per_m3']:.4f} kWh/m³"),
-                ("Annual energy cost",     f"USD {energy['cost_usd_yr']:,.0f}/yr"),
-                ("Electricity tariff",     f"USD {elec_tariff:.3f}/kWh"),
-                ("Op. hours / year",       f"{op_hours_yr:,} h"),
-            ])
-            doc.add_paragraph("")
+            if s_bw_equip:
+                _sec("BW Equipment Sizing")
+                _bws = bw_sizing
+                _tbl([
+                    ("BW design flow",           f"{_bws['q_bw_design_m3h']:,.1f} m³/h"),
+                    ("BW pump head",             f"{_bws['bw_head_mwc']:.2f} mWC"),
+                    ("BW pump shaft power",      f"{_bws['p_pump_shaft_kw']:.1f} kW"),
+                    ("BW pump motor power",      f"{_bws['p_pump_motor_kw']:.1f} kW"),
+                    ("Air flow (design)",        f"{_bws['q_air_design_m3h']:,.1f} Am³/h"),
+                    ("Blower back-pressure",     f"{_bws['P2_pa']/1e5:.3f} bar abs"),
+                    ("Blower shaft power",       f"{_bws['p_blower_shaft_kw']:.1f} kW"),
+                    ("Blower motor power",       f"{_bws['p_blower_motor_kw']:.1f} kW"),
+                    ("BW water tank volume",     f"{_bws['v_tank_m3']:.1f} m³"),
+                    ("BW systems (plant-wide)",  str(_bws.get('n_bw_systems', '—'))),
+                ])
 
-            # ── Sign-off ──
+            # ── E. Internal Protection ──────────────────────────────────
+            if s_lining and _has_lining:
+                _sec(f"Internal Protection — {lining_result['protection_type']}")
+                _tbl([
+                    ("Protection type",          lining_result['protection_type']),
+                    ("Total area protected",     f"{lining_result['a_total_m2']:.2f} m²"),
+                    ("  — Shell (cyl + heads)",  f"{lining_result['a_shell_m2']:.2f} m²"),
+                    ("  — Nozzle plate",         f"{lining_result['a_plate_m2']:.2f} m²"),
+                    ("Lining / coating weight",  f"{lining_result['weight_kg']:,.1f} kg"),
+                    ("Material cost",            f"USD {lining_result['material_cost_usd']:,.0f}"),
+                    ("Application labour cost",  f"USD {lining_result['labor_cost_usd']:,.0f}"),
+                    ("TOTAL COATING COST",       f"USD {lining_result['total_cost_usd']:,.0f}"),
+                ] + [(k, v) for k, v in lining_result["detail"].items()
+                     if k not in {"Material cost", "Labour cost", "Total cost"}])
+
+            # ── F. Energy & Economics ───────────────────────────────────
+            if s_hyd_prof:
+                _sec("Hydraulic Head Profile")
+                _hp_rows = [("Item", "Clean bed", "Dirty bed")]
+                for k in hyd_prof["clean"]["items_bar"]:
+                    _hp_rows.append((
+                        k,
+                        f"{hyd_prof['clean']['items_bar'][k]:.4f} bar"
+                        f" / {hyd_prof['clean']['items_mwc'][k]:.2f} mWC",
+                        f"{hyd_prof['dirty']['items_bar'][k]:.4f} bar"
+                        f" / {hyd_prof['dirty']['items_mwc'][k]:.2f} mWC",
+                    ))
+                _hp_rows.append((
+                    "TOTAL PUMP DUTY",
+                    f"{hyd_prof['clean']['total_bar']:.4f} bar"
+                    f" / {hyd_prof['clean']['total_mwc']:.2f} mWC",
+                    f"{hyd_prof['dirty']['total_bar']:.4f} bar"
+                    f" / {hyd_prof['dirty']['total_mwc']:.2f} mWC",
+                ))
+                _tbl(_hp_rows, cols=("Item", "Clean bed", "Dirty bed"))
+
+            if s_energy:
+                _sec("Energy Consumption & OPEX")
+                _tbl([
+                    ("Filtration pump power (dirty, per filter)",
+                     f"{energy['p_filt_dirty_kw']:.1f} kW"),
+                    ("BW pump power",            f"{energy['p_bw_kw']:.1f} kW"),
+                    ("Air blower power (elec.)", f"{energy['p_blower_elec_kw']:.1f} kW"),
+                    ("Annual filtration energy", f"{energy['e_filt_kwh_yr']/1e3:,.0f} MWh/yr"),
+                    ("Annual BW energy (pump + blower)",
+                     f"{(energy['e_bw_pump_kwh_yr']+energy['e_blower_kwh_yr'])/1e3:,.1f} MWh/yr"),
+                    ("TOTAL annual energy",      f"{energy['e_total_kwh_yr']/1e3:,.0f} MWh/yr"),
+                    ("Specific energy",          f"{energy['kwh_per_m3']:.4f} kWh/m³"),
+                    ("Annual energy OPEX",       f"USD {energy['cost_usd_yr']:,.0f}/yr"),
+                    ("Electricity tariff",       f"USD {elec_tariff:.3f}/kWh"),
+                    ("Operating hours / year",   f"{op_hours_yr:,} h"),
+                ])
+
+            # ── G. Post-treatment ───────────────────────────────────────
+            if s_cart:
+                _sec("Cartridge Filter")
+                _tbl([
+                    ("Design flow",              f"{cart_result['design_flow_m3h']:,.1f} m³/h"),
+                    ("Element material",         cart_result["element_material"]),
+                    ("Element size",             cart_result["element_size"]),
+                    ("Rating",                   f"{cart_result['rating_um']} µm absolute"),
+                    ("Safety factor",            f"{cart_result['safety_factor']}×"),
+                    ("Feed viscosity",           f"{cart_result['mu_cP']:.2f} cP"),
+                    ("Elements required",        str(cart_result["n_elements"])),
+                    ("Housings required",        str(cart_result["n_housings"])),
+                    ("Flow / element",
+                     f"{cart_result['actual_flow_m3h_element']:.3f} m³/h"
+                     f"  ({cart_result['q_lpm_element']:.1f} lpm)"),
+                    ("ΔP clean (BOL)",           f"{cart_result['dp_clean_bar']:.4f} bar"),
+                    ("ΔP EOL",                   f"{cart_result['dp_eol_bar']:.4f} bar"),
+                    ("DHC / element",            f"{cart_result['dhc_g_element']:.0f} g"),
+                    ("Annual element cost",      f"USD {cart_result['annual_cost_usd']:,.0f}"),
+                ])
+
+            # ── A. Sign-off (always) ────────────────────────────────────
             doc.add_page_break()
-            doc.add_heading("Sign-off", 2)
-            doc.add_paragraph(f"Prepared by:  {engineer}")
-            doc.add_paragraph("Role:  Process Expert — AQUASIGHT™")
-            doc.add_paragraph(f"Document:  {doc_number}  ·  Rev {revision}")
-            doc.add_paragraph(f"Project:  {project_name}")
+            _h("Sign-off & Revision Record")
+            _tbl([
+                ("Prepared by",   engineer),
+                ("Role",          "Process Expert — AQUASIGHT™"),
+                ("Document No.",  f"{doc_number}  ·  Rev {revision}"),
+                ("Project",       project_name),
+                ("Client",        client or "—"),
+                ("Date",          str(__import__("datetime").date.today())),
+                ("Software",      "AQUASIGHT™ MMF Calculator"),
+                ("Checked by",    ""),
+                ("Approved by",   ""),
+            ])
+            doc.add_paragraph(
+                "\nThis document was generated automatically. "
+                "All calculations are the responsibility of the engineer of record."
+            )
 
             buf = io.BytesIO()
             doc.save(buf)
             buf.seek(0)
             return buf.getvalue()
 
-        # ── Download button ────────────────────────────────────────────────
-        rep_col, _ = st.columns([2, 3])
-        with rep_col:
+        # ── Download ───────────────────────────────────────────────────────
+        _n_sections = sum([
+            s_process, s_water, s_media, s_dp, s_cycle,
+            s_vessel, s_nzpl, s_wt_empty, s_wt_oper, s_saddle,
+            s_bw_hyd, s_bw_equip, s_lining and _has_lining,
+            s_hyd_prof, s_energy, s_cart,
+        ])
+        st.caption(f"{_n_sections} section(s) selected + Identification & Sign-off (always included)")
+
+        dl_col, _ = st.columns([2, 3])
+        with dl_col:
             if _DOCX_OK:
                 st.download_button(
                     label="⬇️  Download Word report (.docx)",
@@ -2303,57 +3406,102 @@ with main:
                           ".wordprocessingml.document"),
                 )
             else:
-                st.warning("Install python-docx to enable Word export: "
-                           "`pip install python-docx`")
+                st.warning("Install python-docx:  `pip install python-docx`")
 
         st.divider()
 
-        # ── Inline markdown summary ────────────────────────────────────────
-        st.markdown(f"""
-**Project:** {project_name}
-**Document:** {doc_number} · Rev {revision}
-**Prepared by:** {engineer}
+        # ── Inline preview (mirrors section selections) ────────────────────
+        st.markdown(f"**{project_name}** · {doc_number} · Rev {revision} · {engineer}")
+        st.markdown("")
 
----
-
-### Process
+        if s_process:
+            st.markdown("### B1 · Process Basis")
+            st.markdown(f"""
 | Parameter | Value |
 |---|---|
 | Total plant flow | {total_flow:,.0f} m³/h |
 | Streams × filters / stream | {streams} × {n_filters} |
-| Redundancy | N to N-{redundancy} |
+| Redundancy | N-{redundancy} per stream |
 | Flow / filter (N) | {q_per_filter:.1f} m³/h |
 | Filtration rate (N) | {q_per_filter/avg_area:.2f} m/h |
+| Cross-sectional area | {avg_area:.3f} m² |
+""")
 
-### Water
-| | Feed | Backwash |
+        if s_water:
+            st.markdown("### B2 · Water Properties")
+            st.markdown(f"""
+| Property | Feed | Backwash |
 |---|---|---|
 | Salinity | {feed_sal:.2f} ppt | {bw_sal:.2f} ppt |
 | Temperature | {feed_temp:.1f} °C | {bw_temp:.1f} °C |
 | Density | {rho_feed:.3f} kg/m³ | {rho_bw:.3f} kg/m³ |
 | Viscosity | {mu_feed*1000:.4f} cP | {mu_bw*1000:.4f} cP |
+""")
 
-### Vessel
+        if s_media:
+            st.markdown("### B3 · Media Configuration")
+            _med_hdr = "| Media | Sup. | Depth (m) | d10 (mm) | CU | ε₀ | ρp,eff | ψ |"
+            _med_sep = "|---|---|---|---|---|---|---|---|"
+            _med_rows = "\n".join(
+                f"| {b['Type']} | {'✓' if b.get('is_support') else ''} "
+                f"| {b['Depth']:.3f} | {b['d10']:.2f} | {b['cu']:.2f} "
+                f"| {b.get('epsilon0', 0):.3f} | {b['rho_p_eff']:.0f} "
+                f"| {b.get('psi', '—')} |"
+                for b in base
+            )
+            st.markdown(f"{_med_hdr}\n{_med_sep}\n{_med_rows}")
+
+        if s_dp:
+            st.markdown("### B4 · Filtration ΔP")
+            st.markdown(f"""
+| | Value |
+|---|---|
+| Clean-bed ΔP (Ergun) | {bw_dp['dp_clean_bar']:.4f} bar |
+| 50 % loaded ΔP | {(bw_dp['dp_clean_bar'] + bw_dp['dp_dirty_bar']) / 2:.4f} bar |
+| Dirty ΔP (M_max) | {bw_dp['dp_dirty_bar']:.4f} bar |
+| BW trigger setpoint | {dp_trigger_bar:.2f} bar |
+| Superficial LV (N) | {bw_dp['u_m_h']:.2f} m/h |
+""")
+
+        if s_cycle:
+            st.markdown("### B5 · Filtration Cycle & BW Feasibility")
+            _cyc_n2 = cycle_matrix.get("N", {}).get(f"Design ({feed_temp:.0f}°C)", {})
+            if _cyc_n2:
+                _md_ch = "| TSS (mg/L) | Cycle (h) | Avail. (%) | BW/day | BW systems |"
+                _md_cs = "|---|---|---|---|---|"
+                _md_cr = []
+                for _tl2, _tv2 in zip(_tss_labels, _tss_vals):
+                    _tr3 = next((r for r in _cyc_n2["tss_results"]
+                                 if r["TSS (mg/L)"] == _tv2), None)
+                    _fk2 = feasibility_matrix.get("N", {}).get(
+                        f"Design ({feed_temp:.0f}°C)", {}).get(_tl2, {})
+                    _md_cr.append(
+                        f"| {_tv2:.0f} "
+                        f"| {_tr3['Cycle duration (h)']:.1f} " if _tr3 else "| — "
+                        f"| {_fk2.get('avail_pct', 0):.1f} "
+                        f"| {_fk2.get('bw_per_day', 0):.1f} "
+                        f"| {_fk2.get('bw_trains', '—')} |"
+                    )
+                st.markdown(f"{_md_ch}\n{_md_cs}\n" + "\n".join(_md_cr))
+
+        if s_vessel:
+            st.markdown("### C1 · Vessel Dimensions & ASME Thickness")
+            st.markdown(f"""
 | Parameter | Value |
 |---|---|
 | Nominal ID / Real hyd. ID | {nominal_id:.3f} m / {real_id:.4f} m |
+| Outside diameter | {mech['od_m']:.4f} m |
 | Total length T/T | {total_length:.3f} m |
 | End geometry | {end_geometry} |
 | Material | {material_name} |
-| Shell t_design | {mech['t_shell_design_mm']} mm |
-| Head t_design | {mech['t_head_design_mm']} mm |
-| OD | {mech['od_m']:.4f} m |
+| Design pressure | {design_pressure:.2f} bar g |
+| Shell t_req / t_design | {mech['t_shell_min_mm']:.2f} / {mech['t_shell_design_mm']} mm |
+| Head t_req / t_design | {mech['t_head_min_mm']:.2f} / {mech['t_head_design_mm']} mm |
+""")
 
-### Backwash — collector check
-| Parameter | Value |
-|---|---|
-| Proposed BW velocity | {bw_velocity:.1f} m/h |
-| Max safe BW velocity | {bw_col['max_safe_bw_m_h']:.1f} m/h |
-| Min. freeboard | {freeboard_mm:.0f} mm |
-| Freeboard | {bw_col['freeboard_m']:.3f} m ({bw_col['freeboard_pct']:.1f}%) |
-| Status | {bw_col['status']} |
-
-### Empty weight
+        if s_wt_empty:
+            st.markdown("### C3 · Empty Weight")
+            st.markdown(f"""
 | Component | Weight |
 |---|---|
 | Shell + 2 heads | {wt_body['weight_body_kg']:,.0f} kg |
@@ -2361,38 +3509,118 @@ with main:
 | Nozzle plate assembly | {wt_np['weight_total_kg']:,.0f} kg |
 | Supports | {wt_sup['weight_all_supports_kg']:,.0f} kg |
 | Internals | {wt_int['weight_internals_kg']:,.0f} kg |
-| **Total** | **{w_total_rep:,.0f} kg = {w_total_rep/1000:.3f} t** |
+| **TOTAL EMPTY** | **{w_total_rep:,.0f} kg = {w_total_rep/1000:.3f} t** |
+""")
 
-### Cartridge filter
+        if s_wt_oper:
+            st.markdown("### C4 · Operating Weight & Support Loads")
+            st.markdown(f"""
+| Component | Weight |
+|---|---|
+| Empty vessel | {wt_oper['w_empty_kg']:,.0f} kg |
+| Lining / coating | {wt_oper['w_lining_kg']:,.0f} kg |
+| Media (dry) | {wt_oper['w_media_kg']:,.0f} kg |
+| Process water | {wt_oper['w_water_kg']:,.0f} kg |
+| **OPERATING WEIGHT** | **{wt_oper['w_operating_kg']:,.0f} kg = {wt_oper['w_operating_t']:.3f} t** |
+| Load / support ({wt_oper['n_supports']} supports) | {wt_oper['load_per_support_t']:.3f} t = {wt_oper['load_per_support_kN']:.1f} kN |
+""")
+
+        if s_saddle:
+            _sd2 = wt_saddle
+            st.markdown("### C5 · Saddle Design")
+            st.markdown(f"""
 | Parameter | Value |
 |---|---|
-| Design flow | {cart_result['design_flow_m3h']:,.1f} m³/h |
-| Material | {cart_result['element_material']} |
-| Element | {cart_result['element_size']} ({cart_result['element_ties']} TIE) · {cart_result['rating_um']} µm |
-| Safety factor | {cart_result['safety_factor']}× |
-| Feed viscosity | {cart_result['mu_cP']:.2f} cP |
-| Elements / Housings | {cart_result['n_elements']} elem. / {cart_result['n_housings']} housings ({cart_result['n_elem_per_housing']} per housing) |
-| Flow per element | {cart_result['actual_flow_m3h_element']:.3f} m³/h ({cart_result['q_lpm_element']:.1f} lpm) |
-| ΔP clean / EOL | {cart_result['dp_clean_bar']:.4f} / {cart_result['dp_eol_bar']:.4f} bar |
-| DHC per element | {cart_result['dhc_g_element']:.0f} g |
-| Annual element cost | USD {cart_result['annual_cost_usd']:,.0f} |
+| Spacing factor α | {_sd2['alpha']:.2f} |
+| Saddle 1 / Saddle 2 position | {_sd2['saddle_1_from_left_m']:.3f} m / {_sd2['saddle_2_from_left_m']:.3f} m from left T/L |
+| Reaction per saddle | {_sd2['reaction_t']:.3f} t |
+| Section selected | {_sd2.get('section', '—')} — capacity {_sd2.get('capacity_t', '—')} t |
+| Structural weight / saddle | {_sd2.get('w_one_saddle_kg', 0):,.0f} kg |
+| Status | {"OVERSTRESSED" if _sd2.get('overstressed') else "OK"} |
+""")
 
-### Energy & hydraulic profile
-| Component | Clean bed | Dirty bed (M_max) |
-|---|---|---|
-{"".join(f"| {k} | {hyd_prof['clean']['items_bar'][k]:.4f} bar / {hyd_prof['clean']['items_mwc'][k]:.2f} mWC | {hyd_prof['dirty']['items_bar'][k]:.4f} bar / {hyd_prof['dirty']['items_mwc'][k]:.2f} mWC |" + chr(10) for k in hyd_prof['clean']['items_bar'])}| **Total pump duty** | **{hyd_prof['clean']['total_bar']:.4f} bar / {hyd_prof['clean']['total_mwc']:.2f} mWC** | **{hyd_prof['dirty']['total_bar']:.4f} bar / {hyd_prof['dirty']['total_mwc']:.2f} mWC** |
+        if s_bw_hyd:
+            st.markdown("### D1 · Backwash Hydraulics & Collector")
+            st.markdown(f"""
+| Parameter | Value |
+|---|---|
+| BW velocity (proposed / max safe) | {bw_velocity:.1f} / {bw_col['max_safe_bw_m_h']:.1f} m/h |
+| Freeboard (min. req. / actual) | {freeboard_mm:.0f} mm / {bw_col['freeboard_m']*1000:.0f} mm |
+| Collector status | {bw_col['status']} |
+""")
 
+        if s_bw_equip:
+            _bws2 = bw_sizing
+            st.markdown("### D2 · BW Equipment Sizing")
+            st.markdown(f"""
+| Equipment | Key Parameter |
+|---|---|
+| BW pump flow | {_bws2['q_bw_design_m3h']:,.1f} m³/h |
+| BW pump head | {_bws2['bw_head_mwc']:.2f} mWC |
+| BW pump motor | {_bws2['p_pump_motor_kw']:.1f} kW |
+| Air blower flow | {_bws2['q_air_design_m3h']:,.1f} Am³/h |
+| Blower back-pressure | {_bws2['P2_pa']/1e5:.3f} bar abs |
+| Blower motor | {_bws2['p_blower_motor_kw']:.1f} kW |
+| BW water tank | {_bws2['v_tank_m3']:.1f} m³ |
+""")
+
+        if s_lining and _has_lining:
+            st.markdown(f"### E · Internal Protection — {lining_result['protection_type']}")
+            st.markdown(f"""
+| Parameter | Value |
+|---|---|
+| Total area | {lining_result['a_total_m2']:.2f} m² |
+| Weight | {lining_result['weight_kg']:,.0f} kg |
+| Material cost | USD {lining_result['material_cost_usd']:,.0f} |
+| Labour cost | USD {lining_result['labor_cost_usd']:,.0f} |
+| **Total coating cost** | **USD {lining_result['total_cost_usd']:,.0f}** |
+""")
+
+        if s_hyd_prof:
+            st.markdown("### F1 · Hydraulic Head Profile")
+            _hd_hdr = "| Item | Clean bed | Dirty bed |"
+            _hd_sep = "|---|---|---|"
+            _hd_rows = "\n".join(
+                f"| {k} | {hyd_prof['clean']['items_bar'][k]:.4f} bar / "
+                f"{hyd_prof['clean']['items_mwc'][k]:.2f} mWC | "
+                f"{hyd_prof['dirty']['items_bar'][k]:.4f} bar / "
+                f"{hyd_prof['dirty']['items_mwc'][k]:.2f} mWC |"
+                for k in hyd_prof["clean"]["items_bar"]
+            )
+            _hd_tot = (f"| **Total** | **{hyd_prof['clean']['total_bar']:.4f} bar / "
+                       f"{hyd_prof['clean']['total_mwc']:.2f} mWC** | "
+                       f"**{hyd_prof['dirty']['total_bar']:.4f} bar / "
+                       f"{hyd_prof['dirty']['total_mwc']:.2f} mWC** |")
+            st.markdown(f"{_hd_hdr}\n{_hd_sep}\n{_hd_rows}\n{_hd_tot}")
+
+        if s_energy:
+            st.markdown("### F2 · Energy & OPEX")
+            st.markdown(f"""
 | KPI | Value |
 |---|---|
 | Filtration pump power (dirty, per filter) | {energy['p_filt_dirty_kw']:.1f} kW |
 | BW pump power | {energy['p_bw_kw']:.1f} kW |
-| Air blower power (electrical) | {energy['p_blower_elec_kw']:.1f} kW |
+| Air blower power (elec.) | {energy['p_blower_elec_kw']:.1f} kW |
 | Annual total energy | {energy['e_total_kwh_yr']/1e3:,.0f} MWh/yr |
 | Specific energy | {energy['kwh_per_m3']:.4f} kWh/m³ |
 | Annual energy OPEX | USD {energy['cost_usd_yr']:,.0f}/yr |
-        """)
+""")
 
+        if s_cart:
+            st.markdown("### G · Cartridge Filter")
+            st.markdown(f"""
+| Parameter | Value |
+|---|---|
+| Design flow | {cart_result['design_flow_m3h']:,.1f} m³/h |
+| Element | {cart_result['element_size']} · {cart_result['rating_um']} µm · {cart_result['element_material']} |
+| Elements / Housings | {cart_result['n_elements']} / {cart_result['n_housings']} |
+| Flow / element | {cart_result['actual_flow_m3h_element']:.3f} m³/h ({cart_result['q_lpm_element']:.1f} lpm) |
+| ΔP BOL / EOL | {cart_result['dp_clean_bar']:.4f} / {cart_result['dp_eol_bar']:.4f} bar |
+| Annual element cost | USD {cart_result['annual_cost_usd']:,.0f} |
+""")
+
+        st.divider()
         col_sign, _ = st.columns([1, 2])
         with col_sign:
-            st.info(f"**{engineer}**  \nProcess Expert  \n\n"
-                    f"AQUASIGHT™  \n{doc_number} · Rev {revision}")
+            st.info(f"**{engineer}**  \nProcess Expert — AQUASIGHT™  \n\n"
+                    f"{doc_number} · Rev {revision}")
