@@ -49,6 +49,7 @@ from engine.cartridge import (
     ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS, RECOMMENDED_FLUX,
     MAX_ELEMENTS_PER_HOUSING,
 )
+from engine.energy import hydraulic_profile, energy_summary
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -330,6 +331,36 @@ with ctx:
             gusset_t      = st.number_input("Gusset t (mm)",     value=12.0,
                                             step=2.0, key="leg_gt")
             saddle_h = 0.8
+
+    # ── Energy & economics ─────────────────────────────────────────────────
+    with st.expander("⚡ Energy & economics", expanded=False):
+        elec_tariff  = st.number_input(
+            "Electricity tariff (USD/kWh)", value=0.10, step=0.01,
+            min_value=0.01, key="elec_t",
+            help="Blended electricity cost including demand charges")
+        pump_eta     = st.number_input(
+            "Filtration pump efficiency η", value=0.75, step=0.01,
+            min_value=0.30, max_value=0.95, key="pump_e")
+        bw_pump_eta  = st.number_input(
+            "BW pump efficiency η",         value=0.72, step=0.01,
+            min_value=0.30, max_value=0.95, key="bwp_e")
+        motor_eta    = st.number_input(
+            "Motor efficiency η",           value=0.95, step=0.01,
+            min_value=0.70, max_value=0.99, key="mot_e")
+        bw_head_mwc  = st.number_input(
+            "BW pump total head (mWC)",     value=15.0, step=1.0,
+            min_value=1.0, key="bw_hd",
+            help="Typical 12–20 mWC; includes nozzle plate + bed resistance + pipe losses")
+        static_head  = st.number_input(
+            "Filtration delivery head (m)", value=0.0, step=0.5, key="stat_h",
+            help="Elevation difference + downstream back-pressure (m)")
+        pipe_loss_pct= st.number_input(
+            "Pipe friction allowance (%)",  value=15.0, step=5.0,
+            min_value=0.0, max_value=50.0, key="pipe_l",
+            help="Added on top of media + nozzle-plate ΔP as pipe-friction margin")
+        op_hours_yr  = st.number_input(
+            "Operating hours / year",       value=8400, step=100,
+            min_value=1000, key="op_hr")
 
     # ── Performance thresholds ─────────────────────────────────────────────
     with st.expander("⚠️ Thresholds", expanded=False):
@@ -648,6 +679,47 @@ cart_result = cartridge_design(
     target_flux_m3h_element=cart_flux,
 )
 
+# ── Hydraulic profile & energy ────────────────────────────────────────────
+_np_dp_bar = wt_np.get("q_dp_kpa", 0.0) / 100.0   # kPa → bar
+hyd_prof = hydraulic_profile(
+    dp_media_clean_bar = bw_dp["dp_clean_bar"],
+    dp_media_dirty_bar = bw_dp["dp_dirty_bar"],
+    np_dp_bar          = _np_dp_bar,
+    pipe_loss_pct      = pipe_loss_pct,
+    static_head_m      = static_head,
+    rho_feed_kg_m3     = rho_feed,
+)
+
+# Design scenario N at design temp / avg TSS for energy basis
+_n_feas = feasibility_matrix.get("N", {}).get(
+    f"Design ({feed_temp:.0f}°C)", {}).get(
+    f"Avg ({tss_avg:.0f} mg/L)", {})
+_bw_per_day_design = _n_feas.get("bw_per_day", 24.0 / (bw_total_min/60.0 + 1.0))
+_avail_design      = _n_feas.get("avail_pct",  90.0)
+_n_total_filters   = streams * n_filters
+
+energy = energy_summary(
+    q_filter_m3h        = q_per_filter,
+    n_filters_total     = _n_total_filters,
+    filt_head_dirty_mwc = hyd_prof["dirty"]["total_mwc"],
+    filt_head_clean_mwc = hyd_prof["clean"]["total_mwc"],
+    pump_eta            = pump_eta,
+    motor_eta           = motor_eta,
+    rho_feed_kg_m3      = rho_feed,
+    q_bw_m3h            = bw_hyd["q_bw_design_m3h"],
+    bw_head_mwc         = bw_head_mwc,
+    bw_pump_eta         = bw_pump_eta,
+    bw_motor_eta        = motor_eta,
+    rho_bw_kg_m3        = rho_bw,
+    p_blower_kw         = bw_hyd["p_blower_est_kw"],
+    blower_motor_eta    = motor_eta,
+    bw_duration_h       = _bw_dur_h,
+    bw_per_day_design   = _bw_per_day_design,
+    availability_pct    = _avail_design,
+    elec_tariff_usd_kwh = elec_tariff,
+    op_hours_per_year   = float(op_hours_yr),
+)
+
 # ── Consolidated weight ────────────────────────────────────────────────────
 nozzle_wt_total = sum(r.get("Total wt (kg)", 0) for r in nozzle_sched)
 w_body  = wt_body["weight_body_kg"]
@@ -689,7 +761,7 @@ with ctx:
 # ══════════════════════════════════════════════════════════════════════════════
 with main:
     (tab_proj, tab_proc, tab_water, tab_vessel,
-     tab_media, tab_bw, tab_weight, tab_cart, tab_report) = st.tabs([
+     tab_media, tab_bw, tab_weight, tab_cart, tab_energy, tab_report) = st.tabs([
         "📋 Project",
         "💧 Process",
         "🌊 Water",
@@ -698,6 +770,7 @@ with main:
         "🔄 Backwash",
         "⚖️ Weight",
         "🔷 Cartridge",
+        "⚡ Energy",
         "📄 Report",
     ])
 
@@ -1636,7 +1709,106 @@ with main:
             )
 
     # ─────────────────────────────────────────────────────────────────────
-    # TAB 9 · REPORT
+    # TAB 9 · ENERGY
+    # ─────────────────────────────────────────────────────────────────────
+    with tab_energy:
+        st.subheader("Energy & hydraulic profile")
+
+        # ── 1. Hydraulic head budget ──────────────────────────────────────
+        with st.expander("1 · Filtration pump — head budget", expanded=True):
+            st.caption(
+                f"Media ΔP: Ergun clean + Ruth cake dirty at M_max = {solid_loading:.2f} kg/m².  "
+                f"Nozzle plate ΔP from structural calc.  "
+                f"Pipe friction = {pipe_loss_pct:.0f}% of (media + NP).  "
+                f"Static delivery head = {static_head:.1f} m."
+            )
+            hA, hB = st.columns(2)
+            for col, state, bud in [
+                (hA, "Clean bed", hyd_prof["clean"]),
+                (hB, "Dirty bed (M_max, design case)", hyd_prof["dirty"]),
+            ]:
+                with col:
+                    st.markdown(f"**{state}**")
+                    st.dataframe(pd.DataFrame([
+                        ["Media ΔP",            f"{bud['media_bar']:.4f} bar",
+                                                 f"{bud['media_mwc']:.2f} mWC"],
+                        ["Nozzle plate ΔP",     f"{bud['np_bar']:.4f} bar",
+                                                 f"{bud['np_mwc']:.2f} mWC"],
+                        ["Pipe friction",        f"{bud['pipe_bar']:.4f} bar",
+                                                 f"{bud['pipe_mwc']:.2f} mWC"],
+                        ["Static / delivery",    f"{bud['static_bar']:.4f} bar",
+                                                 f"{bud['static_mwc']:.2f} mWC"],
+                        ["**TOTAL pump head**",  f"**{bud['total_bar']:.4f} bar**",
+                                                 f"**{bud['total_mwc']:.2f} mWC**"],
+                    ], columns=["Component", "bar", "mWC"]),
+                    use_container_width=True, hide_index=True)
+
+        # ── 2. Power summary ─────────────────────────────────────────────
+        with st.expander("2 · Power — per consumer", expanded=True):
+            e1, e2, e3, e4 = st.columns(4)
+            e1.metric("Filtration pump\n(dirty, per filter)",
+                      f"{energy['p_filt_dirty_kw']:.1f} kW")
+            e2.metric("Filtration pump\n(clean, per filter)",
+                      f"{energy['p_filt_clean_kw']:.1f} kW")
+            e3.metric("BW pump\n(per event)",
+                      f"{energy['p_bw_kw']:.1f} kW")
+            e4.metric("Air blower\n(electrical, per event)",
+                      f"{energy['p_blower_elec_kw']:.1f} kW")
+
+            st.markdown("**Power basis**")
+            st.dataframe(pd.DataFrame([
+                ["Filtration pump", f"{q_per_filter:.1f} m³/h × {_n_total_filters} filters",
+                 f"η_pump={pump_eta:.2f} · η_motor={motor_eta:.2f}",
+                 f"H_clean={hyd_prof['clean']['total_mwc']:.1f} mWC",
+                 f"H_dirty={hyd_prof['dirty']['total_mwc']:.1f} mWC",
+                 f"{energy['p_filt_avg_kw']:.1f} kW avg"],
+                ["BW pump",         f"{bw_hyd['q_bw_design_m3h']:.0f} m³/h",
+                 f"η_pump={bw_pump_eta:.2f} · η_motor={motor_eta:.2f}",
+                 f"H={bw_head_mwc:.1f} mWC", "—",
+                 f"{energy['p_bw_kw']:.1f} kW"],
+                ["Air blower",      f"{bw_hyd['q_air_design_m3h']:.0f} m³/h air",
+                 f"η_motor={motor_eta:.2f}",
+                 "ΔP=0.5 bar", "—",
+                 f"{energy['p_blower_elec_kw']:.1f} kW elec."],
+            ], columns=["Consumer", "Flow", "Efficiency",
+                        "Head / ΔP (clean)", "Head / ΔP (dirty)", "Power"]),
+            use_container_width=True, hide_index=True)
+
+        # ── 3. Annual energy & cost ───────────────────────────────────────
+        with st.expander("3 · Annual energy & operating cost", expanded=True):
+            st.caption(
+                f"Basis: {op_hours_yr:,.0f} operating hours/year · "
+                f"electricity = USD {elec_tariff:.3f}/kWh · "
+                f"BW: {energy['bw_per_day_design']:.1f} cycles/filter/day × "
+                f"{bw_total_min} min · {_n_total_filters} filters total."
+            )
+            fa, fb, fc, fd = st.columns(4)
+            fa.metric("Filtration pump", f"{energy['e_filt_kwh_yr']/1e3:,.0f} MWh/yr")
+            fb.metric("BW pump",         f"{energy['e_bw_pump_kwh_yr']/1e3:,.1f} MWh/yr")
+            fc.metric("Air blower",      f"{energy['e_blower_kwh_yr']/1e3:,.1f} MWh/yr")
+            fd.metric("TOTAL",           f"{energy['e_total_kwh_yr']/1e3:,.0f} MWh/yr")
+
+            g1, g2, g3 = st.columns(3)
+            g1.metric("Specific energy",  f"{energy['kwh_per_m3']:.4f} kWh/m³")
+            g2.metric("Annual OPEX (energy)",
+                      f"USD {energy['cost_usd_yr']:,.0f}")
+            g3.metric("Water treated / yr",
+                      f"{energy['total_flow_m3_yr']/1e6:.2f} Mm³")
+
+            st.dataframe(pd.DataFrame([
+                ["Filtration pump",   f"{energy['e_filt_kwh_yr']:,.0f}",
+                 f"{energy['e_filt_kwh_yr']*elec_tariff:,.0f}"],
+                ["BW pump",           f"{energy['e_bw_pump_kwh_yr']:,.0f}",
+                 f"{energy['e_bw_pump_kwh_yr']*elec_tariff:,.0f}"],
+                ["Air blower",        f"{energy['e_blower_kwh_yr']:,.0f}",
+                 f"{energy['e_blower_kwh_yr']*elec_tariff:,.0f}"],
+                ["TOTAL",             f"{energy['e_total_kwh_yr']:,.0f}",
+                 f"{energy['cost_usd_yr']:,.0f}"],
+            ], columns=["Consumer", "Energy (kWh/yr)", "Cost (USD/yr)"]),
+            use_container_width=True, hide_index=True)
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TAB 10 · REPORT
     # ─────────────────────────────────────────────────────────────────────
     with tab_report:
         st.subheader("Calculation summary")
@@ -1773,6 +1945,71 @@ with main:
             ])
             doc.add_paragraph("")
 
+            # ── 9. Filtration cycle & BW feasibility ──
+            doc.add_heading("9. Filtration Cycle & BW Feasibility", 2)
+            _tbl([
+                ("BW setpoint",           f"{dp_trigger_bar:.2f} bar"),
+                ("Max solid loading",     f"{solid_loading:.2f} kg/m²"),
+                ("α (specific cake res.)",
+                 f"{filt_cycles['N']['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg "
+                 f"({filt_cycles['N']['alpha_source']})"),
+                ("BW duration (total)",   f"{bw_total_min} min"),
+                ("BW steps",
+                 f"Drain {bw_s_drain}' · Air {bw_s_air}' · Air+W {bw_s_airw}' · "
+                 f"HW {bw_s_hw}' · Settle {bw_s_settle}' · Fill {bw_s_fill}'"),
+            ])
+            doc.add_paragraph("")
+            # Design-temp cycle matrix (N scenario)
+            doc.add_paragraph("Cycle duration (h) — N scenario, design temperature:")
+            _cyc_n_design = cycle_matrix.get("N", {}).get(
+                f"Design ({feed_temp:.0f}°C)", {})
+            if _cyc_n_design:
+                _tss_rows_rep = [("TSS (mg/L)", "Cycle (h)", "Availability (%)",
+                                   "BW/day", "BW trains needed")]
+                for _tl, _tv in zip(_tss_labels, _tss_vals):
+                    _tr2 = next((r for r in _cyc_n_design["tss_results"]
+                                 if r["TSS (mg/L)"] == _tv), None)
+                    _fk  = feasibility_matrix.get("N", {}).get(
+                        f"Design ({feed_temp:.0f}°C)", {}).get(_tl, {})
+                    _tss_rows_rep.append((
+                        f"{_tv:.0f}",
+                        f"{_tr2['Cycle duration (h)']:.1f}" if _tr2 else "—",
+                        f"{_fk.get('avail_pct', 0):.1f}",
+                        f"{_fk.get('bw_per_day', 0):.1f}",
+                        str(_fk.get("bw_trains", "—")),
+                    ))
+                _tbl(_tss_rows_rep,
+                     cols=("TSS (mg/L)", "Cycle (h)", "Availability (%)",
+                            "BW/day", "BW trains"))
+            doc.add_paragraph("")
+
+            # ── 10. Energy ──
+            doc.add_heading("10. Energy & Operating Cost", 2)
+            _tbl([
+                ("Filtration pump head (clean)",
+                 f"{hyd_prof['clean']['total_mwc']:.2f} mWC  "
+                 f"({hyd_prof['clean']['total_bar']:.4f} bar)"),
+                ("Filtration pump head (dirty)",
+                 f"{hyd_prof['dirty']['total_mwc']:.2f} mWC  "
+                 f"({hyd_prof['dirty']['total_bar']:.4f} bar)"),
+                ("Filtration pump power (dirty, per filter)",
+                 f"{energy['p_filt_dirty_kw']:.1f} kW"),
+                ("BW pump power",          f"{energy['p_bw_kw']:.1f} kW"),
+                ("Air blower power (elec.)",f"{energy['p_blower_elec_kw']:.1f} kW"),
+                ("Annual filtration energy",
+                 f"{energy['e_filt_kwh_yr']/1e3:,.0f} MWh/yr"),
+                ("Annual BW energy",
+                 f"{energy['e_bw_pump_kwh_yr']/1e3:,.1f} MWh/yr  "
+                 f"(pump + blower = "
+                 f"{(energy['e_bw_pump_kwh_yr']+energy['e_blower_kwh_yr'])/1e3:,.1f} MWh/yr)"),
+                ("TOTAL annual energy",    f"{energy['e_total_kwh_yr']/1e3:,.0f} MWh/yr"),
+                ("Specific energy",        f"{energy['kwh_per_m3']:.4f} kWh/m³"),
+                ("Annual energy cost",     f"USD {energy['cost_usd_yr']:,.0f}/yr"),
+                ("Electricity tariff",     f"USD {elec_tariff:.3f}/kWh"),
+                ("Op. hours / year",       f"{op_hours_yr:,} h"),
+            ])
+            doc.add_paragraph("")
+
             # ── Sign-off ──
             doc.add_page_break()
             doc.add_heading("Sign-off", 2)
@@ -1865,6 +2102,24 @@ with main:
 | Element | {cart_result['element_size']} · {cart_result['rating_um']} µm |
 | Elements / Housings | {cart_result['n_elements']} elem. / {cart_result['n_housings']} housings |
 | Annual element cost | USD {cart_result['annual_cost_usd']:,.0f} |
+
+### Energy & hydraulic profile
+| Component | Clean bed | Dirty bed (M_max) |
+|---|---|---|
+| Media ΔP | {hyd_prof['clean']['media_bar']:.4f} bar / {hyd_prof['clean']['media_mwc']:.2f} mWC | {hyd_prof['dirty']['media_bar']:.4f} bar / {hyd_prof['dirty']['media_mwc']:.2f} mWC |
+| Nozzle plate ΔP | {hyd_prof['clean']['np_bar']:.4f} bar | {hyd_prof['dirty']['np_bar']:.4f} bar |
+| Pipe friction ({pipe_loss_pct:.0f}%) | {hyd_prof['clean']['pipe_bar']:.4f} bar | {hyd_prof['dirty']['pipe_bar']:.4f} bar |
+| Static head | {hyd_prof['clean']['static_mwc']:.1f} mWC | {hyd_prof['dirty']['static_mwc']:.1f} mWC |
+| **Total pump head** | **{hyd_prof['clean']['total_mwc']:.2f} mWC** | **{hyd_prof['dirty']['total_mwc']:.2f} mWC** |
+
+| KPI | Value |
+|---|---|
+| Filtration pump power (dirty, per filter) | {energy['p_filt_dirty_kw']:.1f} kW |
+| BW pump power | {energy['p_bw_kw']:.1f} kW |
+| Air blower power (electrical) | {energy['p_blower_elec_kw']:.1f} kW |
+| Annual total energy | {energy['e_total_kwh_yr']/1e3:,.0f} MWh/yr |
+| Specific energy | {energy['kwh_per_m3']:.4f} kWh/m³ |
+| Annual energy OPEX | USD {energy['cost_usd_yr']:,.0f}/yr |
         """)
 
         col_sign, _ = st.columns([1, 2])
