@@ -1106,9 +1106,34 @@ with ctx:
         _cols_status[i % 2].markdown(f"{icon} {label}")
 
     if bw_col["media_loss_risk"]:
-        st.error(f"⚠️ Media loss risk! Max safe BW: "
-                 f"{bw_col['max_safe_bw_m_h']} m/h")
+        st.warning(f"⚠️ Media carryover risk — max safe BW rate: "
+                   f"{bw_col['max_safe_bw_m_h']:.1f} m/h")
     st.caption("AQUASIGHT™ | Proprietary")
+
+# ── Engineering alert helper ───────────────────────────────────────────────
+def show_alert(level: str, title: str, message: str) -> None:
+    _icons  = {"info": "🔵", "advisory": "🟡", "warning": "🟠", "critical": "🔴"}
+    _colors = {
+        "info":     "#0d1f35",
+        "advisory": "#2a2000",
+        "warning":  "#2a1200",
+        "critical": "#2a0000",
+    }
+    _borders = {
+        "info":     "#1a3a5c",
+        "advisory": "#b8860b",
+        "warning":  "#cc5500",
+        "critical": "#cc0000",
+    }
+    st.markdown(
+        f"""<div style='padding:10px 14px;border-radius:6px;
+        background:{_colors[level]};border-left:4px solid {_borders[level]};
+        margin:6px 0;'>
+        {_icons[level]} <b>{title}</b><br>
+        <span style='font-size:0.9em;opacity:0.92'>{message}</span>
+        </div>""",
+        unsafe_allow_html=True,
+    )
 
 # ══════════════════════════════════════════════════════════════════════════════
 # CONTENT TABS
@@ -1167,55 +1192,304 @@ with main:
 
         load_data = filter_loading(total_flow, streams, n_filters, redundancy)
 
-        # Comparison table across all scenarios
+        # ── Pre-compute all scenario / layer KPIs for assessment ──────────
+        def _lv_severity(vel, threshold):
+            if vel <= threshold:
+                return None
+            ovr = (vel - threshold) / threshold
+            if ovr <= 0.05:  return "advisory"
+            if ovr <= 0.15:  return "warning"
+            return "critical"
+
+        def _ebct_severity(ebct, threshold):
+            if ebct >= threshold:
+                return None
+            short = (threshold - ebct) / threshold
+            if short <= 0.10: return "advisory"
+            if short <= 0.25: return "warning"
+            return "critical"
+
+        _all_lv_issues   = []   # (scenario_label, layer, severity, vel)
+        _all_ebct_issues = []   # (scenario_label, layer, severity, ebct)
+        _n_criticals = 0
+        _n_warnings  = 0
+        _n_advisories = 0
+
+        for _x, _a, _q in load_data:
+            _sc = "N" if _x == 0 else f"N-{_x}"
+            for _b in base:
+                _vel  = _q / _b["Area"] if _b["Area"] > 0 else 0
+                _ebct = (_b["Vol"] / _q) * 60 if _q > 0 else 0
+                _lv_sev  = _lv_severity(_vel, velocity_threshold)
+                _eb_sev  = _ebct_severity(_ebct, ebct_threshold)
+                if _lv_sev:
+                    _all_lv_issues.append((_sc, _b["Type"], _lv_sev, _vel))
+                    if _lv_sev == "critical":   _n_criticals += 1
+                    elif _lv_sev == "warning":  _n_warnings  += 1
+                    else:                        _n_advisories += 1
+                if _eb_sev:
+                    _all_ebct_issues.append((_sc, _b["Type"], _eb_sev, _ebct))
+                    if _eb_sev == "critical":   _n_criticals += 1
+                    elif _eb_sev == "warning":  _n_warnings  += 1
+                    else:                        _n_advisories += 1
+
+        # ── Overall risk level ────────────────────────────────────────────
+        _n_scenario_criticals = sum(
+            1 for s, _, sv, __ in (_all_lv_issues + _all_ebct_issues)
+            if sv == "critical" and s == "N"
+        )
+        _n_scenario_warnings = sum(
+            1 for s, _, sv, __ in (_all_lv_issues + _all_ebct_issues)
+            if sv == "warning" and s == "N"
+        )
+        if _n_criticals == 0 and _n_warnings == 0 and _n_advisories <= 1:
+            _overall_risk = "STABLE"
+            _risk_color   = "#0a2a0a"
+            _risk_border  = "#1a7a1a"
+            _risk_icon    = "🟢"
+        elif _n_scenario_criticals > 1 or (_n_criticals > 0 and _n_warnings > 2):
+            _overall_risk = "CRITICAL"
+            _risk_color   = "#2a0000"
+            _risk_border  = "#cc0000"
+            _risk_icon    = "🔴"
+        elif _n_scenario_criticals > 0 or _n_warnings >= 3:
+            _overall_risk = "ELEVATED"
+            _risk_color   = "#2a1200"
+            _risk_border  = "#cc5500"
+            _risk_icon    = "🟠"
+        elif _n_scenario_warnings > 0 or _n_criticals > 0:
+            _overall_risk = "MARGINAL"
+            _risk_color   = "#2a2000"
+            _risk_border  = "#b8860b"
+            _risk_icon    = "🟡"
+        else:
+            _overall_risk = "STABLE"
+            _risk_color   = "#0a2a0a"
+            _risk_border  = "#1a7a1a"
+            _risk_icon    = "🟢"
+
+        # Key drivers for the assessment panel
+        _drivers = []
+        if _all_lv_issues:
+            _worst_lv = max(_all_lv_issues, key=lambda t: t[3])
+            _drivers.append(
+                f"Filtration velocity reaches {_worst_lv[3]:.2f} m/h "
+                f"(recommended envelope upper limit {velocity_threshold:.1f} m/h) "
+                f"in scenario {_worst_lv[0]}, layer {_worst_lv[1]}."
+            )
+        if _all_ebct_issues:
+            _worst_eb = min(_all_ebct_issues, key=lambda t: t[3])
+            _drivers.append(
+                f"Contact time reduces to {_worst_eb[3]:.2f} min "
+                f"(recommended lower limit {ebct_threshold:.1f} min) "
+                f"in scenario {_worst_eb[0]}, layer {_worst_eb[1]}."
+            )
+        if not _drivers:
+            _drivers.append("All hydraulic parameters remain within the recommended operating envelope across all evaluated scenarios.")
+
+        _impacts = {
+            "STABLE":   [
+                "Filter performance expected to be consistent across the full redundancy range.",
+                "Particulate capture efficiency maintains design margin under peak loading.",
+                "No hydraulic adjustments indicated at current configuration.",
+            ],
+            "MARGINAL": [
+                "Performance remains acceptable under normal N-scenario operation.",
+                "One or more standby scenarios approach the hydraulic envelope boundary — review BW cycle frequency.",
+                "Minor adjustments to filter area or media depth may improve N-1 resilience.",
+            ],
+            "ELEVATED": [
+                "Elevated velocity or reduced contact time may compromise particulate capture under peak hydraulic loading.",
+                "Run time between backwash cycles likely shortened by 15–30% compared to design basis.",
+                "Consider increasing number of operating filters or filter area to restore operating margin.",
+            ],
+            "CRITICAL": [
+                "Hydraulic loading significantly exceeds the recommended operating envelope.",
+                "Risk of particulate breakthrough and accelerated media fouling under sustained operation.",
+                "System redesign recommended — increase filter area, add filter units, or reduce total flow per vessel.",
+            ],
+        }
+        _recommendations = {
+            "STABLE":   "Maintain current configuration. Review again if flow demand increases or media condition degrades.",
+            "MARGINAL": "Review N-1 scenario performance with the client and confirm acceptance of reduced margin during filter outage.",
+            "ELEVATED": "Increase filter area or reduce per-filter hydraulic loading. Adding one filter unit per stream typically resolves elevated ratings.",
+            "CRITICAL": "Redesign required. The current number of filters or vessel area is insufficient for the specified flow. Consult process design basis before proceeding.",
+        }
+
+        # ── Part 4: Combined Process Assessment Panel ─────────────────────
+        st.markdown(
+            f"""<div style='padding:16px 20px;border-radius:8px;
+            background:{_risk_color};border-left:5px solid {_risk_border};
+            margin-bottom:16px;'>
+            <div style='font-size:1.15em;font-weight:bold;margin-bottom:8px'>
+            Overall Process Assessment &nbsp; {_risk_icon} {_overall_risk}</div>
+            <div style='margin-bottom:8px'><b>Key drivers:</b><br>
+            {"<br>".join("· " + d for d in _drivers)}</div>
+            <div style='margin-bottom:8px'><b>Expected operational impact:</b><br>
+            {"<br>".join("· " + i for i in _impacts[_overall_risk])}</div>
+            <div><b>Recommendation:</b><br>
+            {_recommendations[_overall_risk]}</div>
+            </div>""",
+            unsafe_allow_html=True,
+        )
+
+        # ── Flow distribution table ───────────────────────────────────────
         st.markdown("#### Flow distribution by scenario")
         comp = []
         for x, a, q in load_data:
             lv = q / avg_area if avg_area > 0 else 0
+            _lv_flag = "Within envelope" if lv <= velocity_threshold else (
+                "Approaching limit" if lv <= velocity_threshold * 1.05 else "Outside envelope")
             comp.append({
-                "Scenario":            "N" if x == 0 else f"N-{x}",
-                "Active filters":      a,
+                "Scenario":             "N" if x == 0 else f"N-{x}",
+                "Active filters":       a,
                 "Flow / filter (m³/h)": round(q, 2),
-                "LV (m/h)":            round(lv, 2),
-                "LV status":           "✅" if lv <= velocity_threshold else "⚠️",
+                "LV (m/h)":             round(lv, 2),
+                "Hydraulic status":     _lv_flag,
             })
         st.dataframe(pd.DataFrame(comp), use_container_width=True, hide_index=True)
 
-        # EBCT per layer per scenario
-        st.markdown("#### EBCT & LV per layer")
+        # ── Part 6: Grouped warnings by cause ────────────────────────────
+        st.markdown("#### Operating envelope review by scenario")
+
         for x, a, q in load_data:
             label = "N (normal)" if x == 0 else f"N-{x}"
+            _sc_lbl = "N" if x == 0 else f"N-{x}"
             with st.expander(f"Scenario {label} — {q:.1f} m³/h / filter",
                              expanded=(x == 0)):
-                rows, alerts = [], []
+                rows = []
+                _sc_lv_issues   = []
+                _sc_ebct_issues = []
                 for b in base:
                     vel  = q / b["Area"] if b["Area"] > 0 else 0
                     ebct = (b["Vol"] / q) * 60 if q > 0 else 0
+                    _lv_sev = _lv_severity(vel, velocity_threshold)
+                    _eb_sev = _ebct_severity(ebct, ebct_threshold)
+                    _lv_env = ("Within envelope" if not _lv_sev
+                               else "Approaching limit" if _lv_sev == "advisory"
+                               else "Outside envelope")
+                    _eb_env = ("Within envelope" if not _eb_sev
+                               else "Approaching limit" if _eb_sev == "advisory"
+                               else "Outside envelope")
                     rows.append({
-                        "Layer":      b["Type"],
-                        "Area (m²)":  round(b["Area"], 3),
-                        "LV (m/h)":   round(vel, 2),
-                        "LV ✓":       "✅" if vel <= velocity_threshold else "⚠️",
-                        "EBCT (min)": round(ebct, 2),
-                        "EBCT ✓":     "✅" if ebct >= ebct_threshold else "⚠️",
+                        "Layer":        b["Type"],
+                        "Area (m²)":    round(b["Area"], 3),
+                        "LV (m/h)":     round(vel, 2),
+                        "LV envelope":  _lv_env,
+                        "EBCT (min)":   round(ebct, 2),
+                        "EBCT envelope": _eb_env,
                     })
-                    if vel > velocity_threshold:
-                        alerts.append(f"⚠️ {b['Type']}: LV {vel:.2f} m/h "
-                                      f"> max {velocity_threshold} m/h")
-                    if ebct < ebct_threshold:
-                        alerts.append(f"⚠️ {b['Type']}: EBCT {ebct:.2f} min "
-                                      f"< min {ebct_threshold} min")
-                st.dataframe(pd.DataFrame(rows),
-                             use_container_width=True, hide_index=True)
-                for msg in alerts:
-                    st.warning(msg)
+                    if _lv_sev:
+                        _sc_lv_issues.append((b["Type"], _lv_sev, vel))
+                    if _eb_sev:
+                        _sc_ebct_issues.append((b["Type"], _eb_sev, ebct))
+
+                st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+
+                # Group 1: Hydraulic Loading
+                if _sc_lv_issues:
+                    with st.expander(f"🟠 Hydraulic Loading — {len(_sc_lv_issues)} layer(s) outside envelope"):
+                        for _layer, _sev, _vel in _sc_lv_issues:
+                            show_alert(
+                                _sev,
+                                f"{_layer}: filtration velocity {_vel:.2f} m/h",
+                                "Elevated filtration velocity increases risk of media disturbance "
+                                "and localised particulate breakthrough. "
+                                "Consider increasing filter area or reducing per-filter loading.",
+                            )
+
+                # Group 2: Contact Time
+                if _sc_ebct_issues:
+                    with st.expander(f"🟡 Contact Time — {len(_sc_ebct_issues)} layer(s) below design target"):
+                        for _layer, _sev, _ebct in _sc_ebct_issues:
+                            show_alert(
+                                _sev,
+                                f"{_layer}: contact time {_ebct:.2f} min",
+                                "Reduced contact time may compromise particulate capture "
+                                "stability under peak hydraulic loading. "
+                                "Extended run times or deeper media beds recommended.",
+                            )
+
+                if not _sc_lv_issues and not _sc_ebct_issues:
+                    st.success("All layers operate within the recommended hydraulic envelope for this scenario.")
 
         st.divider()
         m1, m2, m3, m4 = st.columns(4)
-        m1.metric("LV — N scenario",   f"{q_per_filter/avg_area:.2f} m/h")
-        m2.metric("Flow / filter (N)", f"{q_per_filter:.1f} m³/h")
-        m3.metric("Total filters",     f"{streams * n_filters}")
-        m4.metric("Redundancy",        f"N to N-{redundancy}")
+        m1.metric("LV — N scenario",            f"{q_per_filter/avg_area:.2f} m/h")
+        m2.metric("Flow / filter (N)",           f"{q_per_filter:.1f} m³/h")
+        m3.metric("Total filters",               f"{streams * n_filters}")
+        m4.metric("Recommended LV envelope",     f"≤ {velocity_threshold:.1f} m/h")
+
+        # ── Part 5: Design Robustness Index ──────────────────────────────
+        st.markdown("#### Design Robustness Index")
+        st.caption(
+            "Engineering summary across all evaluated redundancy scenarios. "
+            "Intended as a one-page design review reference."
+        )
+        _rob_rows = []
+        _all_scenarios = [("N", 0)] + [(f"N-{i}", i) for i in range(1, redundancy + 1)]
+        _eval_set = {("N" if x == 0 else f"N-{x}"): q
+                     for x, _, q in load_data}
+
+        for _sc_name, _x in _all_scenarios:
+            if _sc_name not in _eval_set:
+                _rob_rows.append({
+                    "Scenario":          _sc_name,
+                    "Filtration rate":   "—",
+                    "Hydraulic status":  "Not evaluated",
+                    "EBCT status":       "Not evaluated",
+                    "Overall":           "Not evaluated",
+                })
+                continue
+            _q = _eval_set[_sc_name]
+            _lv_n = _q / avg_area if avg_area > 0 else 0
+            _worst_lv_sev = None
+            _worst_eb_sev = None
+            for _b in base:
+                _v = _q / _b["Area"] if _b["Area"] > 0 else 0
+                _e = (_b["Vol"] / _q) * 60 if _q > 0 else 0
+                _sv = _lv_severity(_v, velocity_threshold)
+                _se = _ebct_severity(_e, ebct_threshold)
+                _sev_rank = {"critical": 3, "warning": 2, "advisory": 1, None: 0}
+                if _sev_rank.get(_sv, 0) > _sev_rank.get(_worst_lv_sev, 0):
+                    _worst_lv_sev = _sv
+                if _sev_rank.get(_se, 0) > _sev_rank.get(_worst_eb_sev, 0):
+                    _worst_eb_sev = _se
+
+            def _sev_to_label(s):
+                return ("Within envelope" if s is None
+                        else "Approaching limit" if s == "advisory"
+                        else "Outside envelope")
+
+            _lv_label = _sev_to_label(_worst_lv_sev)
+            _eb_label = _sev_to_label(_worst_eb_sev)
+
+            _worst_overall = max(
+                _worst_lv_sev or "", _worst_eb_sev or "",
+                key=lambda s: {"critical": 3, "warning": 2, "advisory": 1, "": 0}.get(s, 0)
+            )
+            _overall_label = (
+                "Stable" if not _worst_overall
+                else "Marginal" if _worst_overall == "advisory"
+                else "Sensitive" if _worst_overall == "warning"
+                else "Critical"
+            )
+
+            _rob_rows.append({
+                "Scenario":          _sc_name,
+                "Filtration rate":   f"{_lv_n:.2f} m/h",
+                "Hydraulic status":  _lv_label,
+                "EBCT status":       _eb_label,
+                "Overall":           _overall_label,
+            })
+
+        st.dataframe(pd.DataFrame(_rob_rows), use_container_width=True, hide_index=True)
+        st.caption(
+            f"Recommended operating envelope: LV ≤ {velocity_threshold:.1f} m/h  ·  "
+            f"EBCT ≥ {ebct_threshold:.1f} min  ·  "
+            "Stable = both within envelope · Marginal = approaching limit · "
+            "Sensitive = one parameter outside envelope · Critical = both outside."
+        )
 
     # ─────────────────────────────────────────────────────────────────────
     # TAB 3 · WATER PROPERTIES
@@ -1507,13 +1781,27 @@ with main:
             # A: water-only BW (pump rate) — governs collector check
             # B: air+water combined (air scour rate as equivalent) — governs cleaning
             exp_rows = []
+            _bw_integrity_alerts = []
             for L in bw_col["per_layer"]:
                 if L.get("elutriation_risk"):
-                    status = "ELUTRIATION RISK"
+                    status = "Approaching terminal velocity"
+                    _bw_integrity_alerts.append((
+                        "critical",
+                        f"{L['media_type']}: backwash velocity approaches terminal settling velocity",
+                        "Risk of progressive media loss over repeated backwash cycles. "
+                        "Reduce backwash rate or raise the outlet collector to maintain media inventory."
+                    ))
                 elif L["fluidised"]:
-                    status = "Fluidised  " + str(L["expansion_pct"]) + "%"
+                    status = f"Fluidised — {L['expansion_pct']}% bed expansion"
                 else:
-                    status = "Not fluidised  (u_mf=" + str(L["u_mf_m_h"]) + " m/h)"
+                    status = f"Below fluidisation threshold (u_mf = {L['u_mf_m_h']} m/h)"
+                    _bw_integrity_alerts.append((
+                        "warning" if freeboard_mm >= 150 else "advisory",
+                        f"{L['media_type']}: hydraulic bed lift not achieved at current water rate",
+                        "Backwash velocity is below the minimum fluidisation threshold for this media fraction. "
+                        "Air scour provides primary mechanical cleaning action. "
+                        "Hydraulic lift of settled solids is not achieved by water flow alone at this rate."
+                    ))
                 exp_rows.append({
                     "Media":          L["media_type"],
                     "d10 (mm)":       L["d10_mm"],
@@ -1557,6 +1845,11 @@ with main:
                 })
             st.dataframe(pd.DataFrame(comb_rows),
                          use_container_width=True, hide_index=True)
+
+            if _bw_integrity_alerts:
+                with st.expander(f"🔴 Backwash Integrity — {len(_bw_integrity_alerts)} concern(s) identified"):
+                    for _lvl, _ttl, _msg in _bw_integrity_alerts:
+                        show_alert(_lvl, _ttl, _msg)
 
             ec1, ec2, ec3 = st.columns(3)
             ec1.metric("Settled bed",   f"{exp_combined['total_settled_m']:.3f} m")
@@ -1608,11 +1901,15 @@ with main:
             )
 
             if bw_col["media_loss_risk"]:
-                st.error(
-                    f"Expanded bed top ({bw_col['expanded_top_m']:.3f} m) "
-                    f"≥ collector ({bw_col['collector_h_m']:.3f} m). "
-                    f"Reduce BW velocity to ≤ {bw_col['max_safe_bw_m_h']:.1f} m/h "
-                    "or raise the collector."
+                show_alert(
+                    "critical",
+                    "Collector height insufficient — media carryover risk",
+                    f"The expanded bed top ({bw_col['expanded_top_m']:.3f} m) reaches or exceeds "
+                    f"the BW outlet collector ({bw_col['collector_h_m']:.3f} m). "
+                    f"Media loss will occur progressively over repeated backwash cycles. "
+                    f"Maximum safe backwash velocity with current geometry: "
+                    f"{bw_col['max_safe_bw_m_h']:.1f} m/h. "
+                    "Raise the collector or reduce backwash rate to restore freeboard margin."
                 )
 
         with st.expander("2 · BW pump & air blower capacity", expanded=True):
