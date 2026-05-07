@@ -59,6 +59,16 @@ from engine.cartridge import (
 )
 from engine.energy import hydraulic_profile, energy_summary
 from engine.drawing import vessel_section_elevation, LAYER_COLORS as DRAWING_LAYER_COLORS
+from engine.economics import (
+    capex_breakdown, opex_annual, carbon_footprint, global_benchmark_comparison,
+)
+
+try:
+    import plotly.graph_objects as _go
+    import plotly.express as _px
+    _PLOTLY_OK = True
+except ImportError:
+    _PLOTLY_OK = False
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PAGE CONFIG
@@ -116,23 +126,6 @@ if "media_presets" not in st.session_state or set(
         st.session_state.media_presets.keys()) != set(DEFAULT_MEDIA_PRESETS.keys()):
     st.session_state.media_presets = DEFAULT_MEDIA_PRESETS.copy()
 
-# ── Input panel navigation ─────────────────────────────────────────────────
-_PANELS = [
-    ("project",      "📋", "Project"),
-    ("process",      "💧", "Process"),
-    ("water",        "🌊", "Water"),
-    ("geometry",     "🏗️", "Geometry"),
-    ("mechanical",   "⚙️", "Mechanical"),
-    ("nozzle_plate", "🟫", "Nozzle plate"),
-    ("media",        "🧱", "Media"),
-    ("backwash",     "🔄", "Backwash"),
-    ("supports",     "🔩", "Supports"),
-    ("energy",       "⚡", "Energy"),
-    ("thresholds",   "⚠️", "Thresholds"),
-    ("cartridge",    "🔷", "Cartridge"),
-]
-if "active_panel" not in st.session_state:
-    st.session_state.active_panel = "project"
 
 # ══════════════════════════════════════════════════════════════════════════════
 # HEADER
@@ -147,51 +140,29 @@ with h2:
 st.divider()
 
 # ══════════════════════════════════════════════════════════════════════════════
-# LAYOUT: nav icons | input panel | output tabs
+# LAYOUT: context tabs (left) | output tabs (right)
 # ══════════════════════════════════════════════════════════════════════════════
-nav_col, inp_col, main_col = st.columns([0.55, 1.8, 4.5], gap="medium")
+ctx, main = st.columns([1, 4])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# NAV COLUMN  ─ icon buttons, one per input panel
-# ─────────────────────────────────────────────────────────────────────────────
-with nav_col:
-    st.markdown(" ")
-    for _pid, _icon, _lbl in _PANELS:
-        _active = st.session_state.active_panel == _pid
-        if st.button(
-            _icon,
-            key=f"nav_{_pid}",
-            help=_lbl,
-            use_container_width=True,
-            type="primary" if _active else "secondary",
-        ):
-            st.session_state.active_panel = _pid
+with ctx:
+    proc_tab, vessel_tab, media_tab, bw_tab, econ_tab = st.tabs([
+        "⚙️ Process", "🏗️ Vessel", "🧱 Media", "🔄 BW", "💰 Econ"
+    ])
 
-# ─────────────────────────────────────────────────────────────────────────────
-# INPUT PANEL
-# ─────────────────────────────────────────────────────────────────────────────
-with inp_col:
-    _ap = st.session_state.active_panel
-    _ap_label = next(l for p, i, l in _PANELS if p == _ap)
-    st.markdown(f"**{_ap_label}**")
-
-    # ── Block 1: Project ───────────────────────────────────────────────────
-    with st.expander("📋 Project", expanded=(_ap == "project")):
+    # ── Tab 1: Process ────────────────────────────────────────────────────
+    with proc_tab:
+        st.markdown("**Project**")
         project_name = st.text_input("Project",     value="NPC SWRO 60 000 m³/d")
         doc_number   = st.text_input("Doc. No.",    value="EXXXX-VWT-PCS-CAL-2001")
         revision     = st.text_input("Revision",    value="A1")
         client       = st.text_input("Client",      value="")
         engineer     = st.text_input("Prepared by", value="Islam Shahine")
 
-    # ── Block 1: Process basis ─────────────────────────────────────────────
-    with st.expander("💧 Process basis", expanded=(_ap == "process")):
-        total_flow = st.number_input("Total plant flow (m³/h)",
-                                     value=21000.0, step=100.0)
+        st.markdown("**Filter configuration**")
+        total_flow = st.number_input("Total plant flow (m³/h)", value=21000.0, step=100.0)
         streams    = int(st.number_input("Streams", value=1, min_value=1))
-        n_filters  = int(st.number_input("Filters / stream",
-                                          value=16, min_value=1))
-        redundancy = int(st.selectbox("Redundancy (per stream)",
-                                      [0, 1, 2, 3, 4], index=1))
+        n_filters  = int(st.number_input("Filters / stream", value=16, min_value=1))
+        redundancy = int(st.selectbox("Redundancy (per stream)", [0, 1, 2, 3, 4], index=1))
         q_n = total_flow / streams / n_filters
         st.caption(
             f"Flow / filter (N): **{q_n:.1f} m³/h**  \n"
@@ -199,51 +170,98 @@ with inp_col:
             f"Total active filters (N scenario): **{streams * n_filters} plant-wide**"
         )
 
-    # ── Block 2: Water properties ──────────────────────────────────────────
-    with st.expander("💧 Water properties", expanded=(_ap == "water")):
-        st.markdown("**Feed water**")
-        feed_preset = st.selectbox("Feed preset", list(FEED_PRESETS.keys()),
-                                   index=2, key="feed_pre")
+        st.markdown("**Water quality — feed**")
+        feed_preset = st.selectbox("Feed preset", list(FEED_PRESETS.keys()), index=2, key="feed_pre")
         fp = FEED_PRESETS[feed_preset]
-        feed_sal = st.number_input("Salinity (ppt)",   value=fp["salinity_ppt"],
-                                   step=0.5, key="f_sal")
-        feed_temp = st.number_input("Temperature (°C)", value=fp["temp_c"],
-                                    step=1.0, key="f_tmp")
+        feed_sal  = st.number_input("Feed salinity (ppt)",    value=fp["salinity_ppt"], step=0.5, key="f_sal")
+        feed_temp = st.number_input("Feed temp — avg (°C)",   value=fp["temp_c"],        step=1.0, key="f_tmp")
+        temp_low  = st.number_input("Feed temp — min (°C)",   value=15.0, step=1.0, key="t_low")
+        temp_high = st.number_input("Feed temp — max (°C)",   value=35.0, step=1.0, key="t_high")
+        tss_low   = st.number_input("Feed TSS — low (mg/L)",  value=5.0,  step=1.0)
+        tss_avg   = st.number_input("Feed TSS — avg (mg/L)",  value=10.0, step=1.0)
+        tss_high  = st.number_input("Feed TSS — high (mg/L)", value=20.0, step=1.0)
 
-        st.markdown("**Backwash water**")
-        bw_preset = st.selectbox("BW preset", list(BW_PRESETS.keys()),
-                                 index=0, key="bw_pre")
+        st.markdown("**Water quality — backwash**")
+        bw_preset = st.selectbox("BW preset", list(BW_PRESETS.keys()), index=0, key="bw_pre")
         bp = BW_PRESETS[bw_preset] or fp
-        bw_sal  = st.number_input("Salinity (ppt)",   value=bp["salinity_ppt"],
-                                  step=0.5, key="b_sal")
-        bw_temp = st.number_input("Temperature (°C)", value=bp["temp_c"],
-                                  step=1.0, key="b_tmp")
+        bw_sal  = st.number_input("BW salinity (ppt)", value=bp["salinity_ppt"], step=0.5, key="b_sal")
+        bw_temp = st.number_input("BW temp (°C)",      value=bp["temp_c"],       step=1.0, key="b_tmp")
 
-    # ── Block 3: Vessel geometry ───────────────────────────────────────────
-    with st.expander("🏗️ Vessel geometry", expanded=(_ap == "geometry")):
-        nominal_id   = st.number_input("Nominal internal diameter (m)",
-                                       value=5.5, step=0.1,
-                                       help="The ID the vessel is sized to. "
-                                            "Lining reduces the hydraulic ID.")
-        total_length = st.number_input("Total length T/T (m)",
-                                       value=24.3, step=0.1)
-        end_geometry = st.selectbox("End geometry",
-                                    ["Elliptic 2:1", "Torispherical 10%"])
+        st.markdown("**Performance thresholds**")
+        velocity_threshold = st.number_input("Max LV (m/h)",   value=12.0)
+        ebct_threshold     = st.number_input("Min EBCT (min)", value=5.0)
 
-    # ── Block 3: Mechanical ────────────────────────────────────────────────
-    with st.expander("⚙️ Mechanical", expanded=(_ap == "mechanical")):
+        st.markdown("**Cartridge filter**")
+        cart_flow   = st.number_input(
+            "Design flow (m³/h)", value=float(total_flow), step=100.0, key="cart_flow",
+            help="Total flow to the cartridge station (usually = plant flow)")
+        cart_size   = st.selectbox(
+            "Element length", ELEMENT_SIZE_LABELS, index=2, key="cart_size",
+            help="All elements are 2.5\" (63.5 mm) OD.")
+        cart_rating = st.selectbox(
+            "Rating (μm absolute)", RATING_UM_OPTIONS, index=1, key="cart_rating")
+        cart_cip = st.toggle(
+            "CIP system (SS 316L elements)", value=False, key="cart_cip",
+            help="CIP: regenerable SS 316L elements. SF=1.2, DHC=45 g/TIE.")
+        _hsg_options     = [str(r) for r in HOUSING_CAPACITY_OPTIONS] + ["Custom…"]
+        _hsg_default_idx = HOUSING_CAPACITY_OPTIONS.index(DEFAULT_ELEMENTS_PER_HOUSING)
+        cart_hsg_sel = st.selectbox(
+            "Elements per housing", _hsg_options, index=_hsg_default_idx, key="cart_hsg_sel")
+        if cart_hsg_sel == "Custom…":
+            cart_housing = st.number_input(
+                "Custom elements per housing", min_value=1, max_value=500,
+                value=100, step=1, key="cart_hsg_custom")
+        else:
+            cart_housing = int(cart_hsg_sel)
+        _cf_inlet_max  = float(tss_avg)
+        _cf_outlet_max = round(0.15 * tss_avg, 2)
+        cf_inlet_tss = st.number_input(
+            "CF inlet TSS (mg/L)", min_value=0.0, max_value=_cf_inlet_max,
+            value=min(2.0, _cf_inlet_max), step=0.1, format="%.2f", key="cf_inlet_tss",
+            help=f"MMF effluent entering CF. Max = feed TSS ({tss_avg:.1f} mg/L).")
+        cf_outlet_tss = st.number_input(
+            "CF outlet TSS — target (mg/L)", min_value=0.0, max_value=_cf_outlet_max,
+            value=min(0.5, _cf_outlet_max), step=0.05, format="%.2f", key="cf_outlet_tss",
+            help=f"Max = 15 % of MMF feed TSS = {_cf_outlet_max:.2f} mg/L.")
+        _sf_label = f"SF = {SAFETY_FACTOR_CIP}" if cart_cip else f"SF = {SAFETY_FACTOR_STD}"
+        st.caption(
+            f"{'🔩 SS 316L CIP — ' + _sf_label if cart_cip else '🔵 Polymer standard — ' + _sf_label}.  "
+            "Replacement interval calculated from DHC ÷ TSS loading rate.")
+
+    # ── Tab 2: Vessel ─────────────────────────────────────────────────────
+    with vessel_tab:
+        st.markdown("**Vessel geometry**")
+        nominal_id   = st.number_input("Nominal internal diameter (m)", value=5.5, step=0.1,
+                                       help="Lining reduces the hydraulic ID.")
+        total_length = st.number_input("Total length T/T (m)", value=24.3, step=0.1)
+        end_geometry = st.selectbox("End geometry", ["Elliptic 2:1", "Torispherical 10%"])
+
+        st.markdown("**Mechanical (ASME)**")
         material_name   = st.selectbox("Material", list(MATERIALS.keys()), index=3)
         mat_info        = MATERIALS[material_name]
         st.caption(f"*{mat_info['description']}*")
         design_pressure = st.number_input("Design pressure (bar)", value=7.0, step=0.5)
         design_temp     = st.number_input("Design temperature (°C)", value=50.0, step=5.0)
         corrosion       = st.number_input("Corrosion allowance (mm)", value=1.5, step=0.5)
+        st.markdown("*Radiography (ASME UW-11)*")
+        rc1, rc2 = st.columns(2)
+        with rc1:
+            shell_radio = st.selectbox("Shell", RADIOGRAPHY_OPTIONS, index=2, key="sh_r")
+            st.caption(f"E = {JOINT_EFFICIENCY[shell_radio]:.2f}")
+        with rc2:
+            head_radio  = st.selectbox("Head",  RADIOGRAPHY_OPTIONS, index=2, key="hd_r")
+            st.caption(f"E = {JOINT_EFFICIENCY[head_radio]:.2f}")
+        st.markdown("*Thickness overrides* (0 = use calculated)")
+        ov_shell = st.number_input("Shell t override (mm)", value=0.0, step=1.0, key="ov_sh")
+        ov_head  = st.number_input("Head t override (mm)",  value=0.0, step=1.0, key="ov_hd")
+        steel_density = st.number_input("Steel density (kg/m³)", value=STEEL_DENSITY_KG_M3,
+                                        help="7850 CS · 7900 SS 304/316")
 
-        st.caption("Internal protection")
+        st.markdown("**Internal protection**")
         protection_type = st.selectbox(
             "Protection type", PROTECTION_TYPES, index=1, key="prot_type",
             help="Rubber lining: bonded sheet, reduces hydraulic ID by 2×thickness.  "
-                 "Epoxy / Ceramic coating: applied in coats (DFT in µm), negligible ID impact.")
+                 "Epoxy / Ceramic: applied in coats (DFT in µm), negligible ID impact.")
 
         if protection_type == "Rubber lining":
             rubber_type_sel = st.selectbox(
@@ -307,30 +325,11 @@ with inp_col:
             ceramic_type_sel = "Ceramic-filled epoxy"
             ceramic_dft_um = 500.0; ceramic_coats = 2
             ceramic_cost_m2 = 0.0; ceramic_labor_m2 = DEFAULT_LABOR_CERAMIC_M2
-        st.markdown("**Radiography (ASME UW-11)**")
-        rc1, rc2 = st.columns(2)
-        with rc1:
-            shell_radio = st.selectbox("Shell", RADIOGRAPHY_OPTIONS, index=2,
-                                       key="sh_r")
-            st.caption(f"E = {JOINT_EFFICIENCY[shell_radio]:.2f}")
-        with rc2:
-            head_radio  = st.selectbox("Head",  RADIOGRAPHY_OPTIONS, index=2,
-                                       key="hd_r")
-            st.caption(f"E = {JOINT_EFFICIENCY[head_radio]:.2f}")
 
-        st.markdown("**Thickness overrides** (0 = use calculated)")
-        ov_shell = st.number_input("Shell t override (mm)", value=0.0, step=1.0,
-                                   key="ov_sh",
-                                   help="Must be ≥ t_min + CA. "
-                                        "Enforced automatically.")
-        ov_head  = st.number_input("Head t override (mm)",  value=0.0, step=1.0,
-                                   key="ov_hd")
-        steel_density = st.number_input("Steel density (kg/m³)",
-                                        value=STEEL_DENSITY_KG_M3,
-                                        help="7850 CS · 7900 SS 304/316")
-
-    # ── Block 3: Nozzle plate ──────────────────────────────────────────────
-    with st.expander("🟫 Nozzle plate", expanded=(_ap == "nozzle_plate")):
+    # ── Tab 3: Media ──────────────────────────────────────────────────────
+    with media_tab:
+        st.markdown("**Nozzle plate**")
+        nozzle_plate_h = st.number_input("Nozzle plate height (m)", value=1.0, step=0.05)
         np_bore_dia    = st.number_input("Bore diameter (mm)", value=50.0,
                                          step=5.0, min_value=10.0, key="np_bd")
         np_density     = st.number_input(
@@ -340,19 +339,12 @@ with inp_col:
             help=f"{NOZZLE_DENSITY_MIN:.0f}–{NOZZLE_DENSITY_MAX:.0f} nozzles/m²")
         np_beam_sp     = st.number_input("Beam spacing (mm)", value=500.0,
                                          step=50.0, key="np_bs",
-                                         help="Stiffener beam spacing — "
-                                              "effective bending span")
+                                         help="Stiffener beam spacing — effective bending span")
         np_override_t  = st.number_input("Override plate t (mm) — 0=calc",
                                          value=0.0, step=1.0, key="np_ov")
 
-    # ── Block 4: Media layers ──────────────────────────────────────────────
-    with st.expander("🧱 Media layers", expanded=(_ap == "media")):
-        nozzle_plate_h = st.number_input("Nozzle plate height (m)",
-                                         value=1.0, step=0.05)
-        captured_solids_density = st.number_input(
-            "Captured solids density (kg/m³)", value=1020.0, step=10.0,
-            help="Density of TSS retained in media voids — typically 1010–1050 kg/m³")
-        n_layers = int(st.selectbox("Layers", [1,2,3,4,5,6], index=2))
+        st.markdown("**Media layers**")
+        n_layers = int(st.selectbox("Layers", [1, 2, 3, 4, 5, 6], index=2))
         _rho_water_sidebar = water_properties(feed_temp, feed_sal)["density_kg_m3"]
         layers = []
         default_types = ["Gravel", "Fine sand", "Anthracite"]
@@ -365,8 +357,7 @@ with inp_col:
                                              ).index(def_type),
                                   key=f"lt_{i}")
             preset = st.session_state.media_presets[m_type]
-            depth  = st.number_input("Depth (m)",
-                                     value=preset["default_depth"],
+            depth  = st.number_input("Depth (m)", value=preset["default_depth"],
                                      step=0.05, key=f"ld_{i}")
             default_sup = (m_type == "Gravel")
             is_sup = st.checkbox("Support media (no clogging)", value=default_sup,
@@ -390,34 +381,28 @@ with inp_col:
                 _psi = _c1.number_input("Sphericity ψ", value=0.80,
                                         step=0.05, min_value=0.3, max_value=1.0,
                                         key=f"psi_{i}",
-                                        help="1 = perfect sphere; 0.5–0.9 typical for filter media")
+                                        help="1 = perfect sphere; 0.5–0.9 typical")
                 _eps0_est = _eps0_from_psi(_psi)
                 _eps0 = _c2.number_input(
                     "Voidage ε₀", value=_eps0_est, step=0.01,
                     min_value=0.25, max_value=0.70, key=f"ep_{i}",
-                    help=f"Estimated from ψ: {_eps0_est:.3f}  (Kozeny empirical — override if measured)")
+                    help=f"Estimated from ψ: {_eps0_est:.3f} (Kozeny empirical)")
                 _is_por = st.checkbox("Porous media (water fills particle pores)",
-                                      value=False, key=f"por_{i}",
-                                      help="GAC, Pumice, FILTRALITE, etc. — water soaks into "
-                                           "particle pores, increasing effective density vs dry")
+                                      value=False, key=f"por_{i}")
                 if _is_por:
                     _p1, _p2 = st.columns(2)
                     _rho_dry = _p1.number_input(
                         "Dry apparent density (kg/m³)", value=500.0, step=50.0,
-                        min_value=100.0, key=f"rhd_{i}",
-                        help="Mass of one dry particle ÷ its apparent volume (including pores)")
+                        min_value=100.0, key=f"rhd_{i}")
                     _eps_p = _p2.number_input(
                         "Particle internal porosity εₚ", value=0.50,
-                        step=0.05, min_value=0.0, max_value=0.95, key=f"epp_{i}",
-                        help="Pore volume ÷ total particle volume (not bed voidage ε₀)")
+                        step=0.05, min_value=0.0, max_value=0.95, key=f"epp_{i}")
                     _rho_eff = _rho_eff_porous(_rho_dry, _eps_p, _rho_water_sidebar)
-                    st.caption(f"ρ_eff (water-saturated) = {_rho_eff:.0f} kg/m³  "
-                               f"= {_rho_dry:.0f} + {_rho_water_sidebar:.0f}×{_eps_p:.2f}")
+                    st.caption(f"ρ_eff = {_rho_eff:.0f} kg/m³")
                 else:
                     _rho_eff = st.number_input(
                         "Particle density (kg/m³)", value=2650.0, step=50.0,
-                        min_value=100.0, key=f"rh_{i}",
-                        help="True solid particle density (non-porous media)")
+                        min_value=100.0, key=f"rh_{i}")
                 data["d10"]       = _d10
                 data["cu"]        = _cu
                 data["d60"]       = round(_d10 * _cu, 3)
@@ -428,48 +413,41 @@ with inp_col:
             layers.append({**data, "Type": m_type, "Depth": depth,
                            "is_support": is_sup, "capture_frac": cap_frac})
 
-    # ── Block 5: Backwash ──────────────────────────────────────────────────
-    with st.expander("🔄 Backwash design", expanded=(_ap == "backwash")):
-        collector_h    = st.number_input(
-            "BW outlet collector height (m)", value=4.2, step=0.1,
-            help="Height from vessel bottom to BW outlet collector / trough")
-        freeboard_mm   = st.number_input(
-            "Min. freeboard (mm)", value=200, step=50, min_value=50,
-            key="fb_mm",
-            help="Minimum clearance required between expanded bed top and "
-                 "collector. Governs max-safe-BW binary search.")
-        bw_velocity    = st.number_input("Proposed BW velocity (m/h)",
-                                         value=30.0, step=5.0)
-        air_scour_rate = st.number_input("Air scour rate (m/h)",
-                                         value=55.0, step=5.0)
-        bw_cycles_day  = int(st.number_input("BW cycles / filter / day",
-                                              value=1, min_value=1))
-        solid_loading  = st.number_input("Solid loading before BW (kg/m²)",
-                                         value=1.5, step=0.1)
-        dp_trigger_bar = st.number_input(
-            "BW initiation ΔP setpoint (bar)", value=1.0, step=0.1,
-            min_value=0.01, key="dp_trig",
-            help="Filter triggers BW when ΔP across media reaches this value")
+        st.markdown("**Filtration performance**")
+        solid_loading = st.number_input("Solid loading before BW (kg/m²)", value=1.5, step=0.1)
+        captured_solids_density = st.number_input(
+            "Captured solids density (kg/m³)", value=1020.0, step=10.0,
+            help="Density of TSS retained in media voids — typically 1010–1050 kg/m³")
         alpha_9 = st.number_input(
             "Specific cake resistance α (× 10⁹ m/kg)",
             value=0.0, step=5.0, min_value=0.0, key="alpha_res",
             help=(
                 "Resistance of deposited TSS cake per unit mass (Ruth model). "
-                "0 = auto-calibrate: α is set so that ΔP reaches the trigger "
-                "exactly at M_max (solid loading input above). "
-                "Typical ranges: coarse mineral / silt  0.1–10 · "
-                "seawater mixed TSS  10–50 · "
-                "organic-rich / algae  100–500 · "
-                "clay / fine colloids  1 000–10 000  (all × 10⁹ m/kg)."
+                "0 = auto-calibrate so that ΔP reaches the trigger at M_max. "
+                "Typical ranges: coarse mineral / silt 0.1–10 · "
+                "seawater mixed TSS 10–50 · organic-rich / algae 100–500 · "
+                "clay / fine colloids 1 000–10 000  (all × 10⁹ m/kg)."
             ))
-        alpha_specific = alpha_9 * 1e9   # m/kg
-        tss_low  = st.number_input("Feed TSS — low (mg/L)",  value=5.0,  step=1.0)
-        tss_avg  = st.number_input("Feed TSS — avg (mg/L)",  value=10.0, step=1.0)
-        tss_high = st.number_input("Feed TSS — high (mg/L)", value=20.0, step=1.0)
-        st.caption("Temperature range for filtration cycle matrix:")
-        temp_low  = st.number_input("Feed temp — min (°C)", value=15.0, step=1.0, key="t_low")
-        temp_high = st.number_input("Feed temp — max (°C)", value=35.0, step=1.0, key="t_high")
-        st.caption("BW step durations (editable):")
+        alpha_specific = alpha_9 * 1e9
+
+    # ── Tab 4: BW ─────────────────────────────────────────────────────────
+    with bw_tab:
+        st.markdown("**BW hydraulics**")
+        collector_h    = st.number_input(
+            "BW outlet collector height (m)", value=4.2, step=0.1,
+            help="Height from vessel bottom to BW outlet collector / trough")
+        freeboard_mm   = st.number_input(
+            "Min. freeboard (mm)", value=200, step=50, min_value=50, key="fb_mm",
+            help="Minimum clearance between expanded bed top and collector.")
+        bw_velocity    = st.number_input("Proposed BW velocity (m/h)", value=30.0, step=5.0)
+        air_scour_rate = st.number_input("Air scour rate (m/h)", value=55.0, step=5.0)
+
+        st.markdown("**BW sequence**")
+        bw_cycles_day  = int(st.number_input("BW cycles / filter / day", value=1, min_value=1))
+        dp_trigger_bar = st.number_input(
+            "BW initiation ΔP setpoint (bar)", value=1.0, step=0.1,
+            min_value=0.01, key="dp_trig",
+            help="Filter triggers BW when ΔP across media reaches this value")
         bw_s_drain  = st.number_input("① Gravity drain (min)",       value=10, step=1, min_value=0, key="bws1")
         bw_s_air    = st.number_input("② Air scour only (min)",       value=1,  step=1, min_value=0, key="bws2")
         bw_s_airw   = st.number_input("③ Air + low-rate water (min)", value=5,  step=1, min_value=0, key="bws3")
@@ -478,12 +456,12 @@ with inp_col:
         bw_s_fill   = st.number_input("⑥ Fill & rinse (min)",         value=10, step=1, min_value=0, key="bws6")
         bw_total_min = bw_s_drain + bw_s_air + bw_s_airw + bw_s_hw + bw_s_settle + bw_s_fill
         st.metric("Total BW duration", f"{bw_total_min} min")
-        st.caption("Equipment sizing")
+
+        st.markdown("**Equipment sizing**")
         vessel_pressure_bar = st.number_input(
             "Vessel operating pressure (bar g)", value=2.0, step=0.5,
             min_value=0.0, key="ves_press",
-            help="Gauge pressure inside the filter vessel during BW. "
-                 "Adds to blower back-pressure alongside water submergence.")
+            help="Gauge pressure inside the filter vessel during BW.")
         blower_eta = st.number_input(
             "Blower isentropic efficiency", value=0.70, step=0.01,
             min_value=0.30, max_value=0.95, key="blower_eta")
@@ -493,170 +471,103 @@ with inp_col:
         tank_sf = st.number_input(
             "BW tank safety factor", value=1.5, step=0.1,
             min_value=1.0, max_value=3.0, key="tank_sf",
-            help="Tank volume = BW vol/cycle × simultaneous systems × SF. "
-                 "Minimum is also checked against 10 min at design BW flow.")
-
-    # ── Block 3+6: Supports & nozzles ─────────────────────────────────────
-    with st.expander("🔩 Nozzles & supports", expanded=(_ap == "supports")):
-        default_rating  = st.selectbox("Flange rating", FLANGE_RATINGS, index=1)
-        nozzle_stub_len = st.number_input("Nozzle stub length (mm)",
-                                          value=350, step=50)
-        strainer_mat    = st.selectbox("Strainer material",
-                                       list(STRAINER_WEIGHT_KG.keys()), index=0,
-                                       help="SS316 seawater · HDPE/PP fresh/brackish")
-        air_header_dn   = st.number_input("Air scour header DN (mm)",
-                                          value=200, step=50, key="ah_dn")
-        manhole_dn      = st.selectbox("Manhole size",
-                                       list(MANHOLE_WEIGHT_KG.keys()), index=0)
-        n_manholes      = int(st.number_input("No. of manholes",
-                                               value=1, min_value=0, step=1))
-        support_type    = st.selectbox("Support type", SUPPORT_TYPES, key="sup_t")
-        if "Saddle" in support_type:
-            saddle_h      = st.number_input("Saddle height (m)", value=0.8,
-                                            step=0.05, key="sad_h")
-            base_plate_t  = st.number_input("Base plate t (mm)", value=20.0,
-                                            step=2.0, key="sad_bp")
-            gusset_t      = st.number_input("Gusset t (mm)",     value=12.0,
-                                            step=2.0, key="sad_gt")
-            saddle_contact_angle = st.number_input(
-                "Saddle contact angle (°)", value=120.0, step=15.0,
-                min_value=90.0, max_value=180.0, key="sad_ang",
-                help="Arc of vessel shell in contact with saddle. "
-                     "120° is standard; 150° for heavy/thin-walled vessels.")
-            leg_h = 1.2; leg_section = 150.0
-        else:
-            leg_h         = st.number_input("Leg height (m)",   value=1.2,
-                                            step=0.1, key="leg_h")
-            leg_section   = st.number_input("Leg section (mm)", value=150.0,
-                                            step=25.0, key="leg_s")
-            base_plate_t  = st.number_input("Base plate t (mm)", value=20.0,
-                                            step=2.0, key="leg_bp")
-            gusset_t      = st.number_input("Gusset t (mm)",     value=12.0,
-                                            step=2.0, key="leg_gt")
-            saddle_h = 0.8
-            saddle_contact_angle = 120.0
-
-    # ── Energy & economics ─────────────────────────────────────────────────
-    with st.expander("⚡ Energy & economics", expanded=(_ap == "energy")):
-        st.caption("Hydraulic profile — filtration pump duty")
-        np_slot_dp   = st.number_input(
-            "Strainer nozzle plate ΔP at design LV (bar)", value=0.02,
-            step=0.005, min_value=0.0, format="%.3f", key="np_slot",
-            help=(
-                "Hydraulic ΔP through the strainer nozzle slots at filtration flow. "
-                "The 50 mm plate bore is for the nozzle body — ΔP is governed by "
-                "the fine slots on the nozzle head (manufacturer data). "
-                "Typical: 0.01–0.05 bar (0.1–0.5 mWC) at 8–12 m/h."
-            ))
-        p_residual   = st.number_input(
-            "Required downstream pressure (barg)", value=2.50, step=0.25,
-            min_value=0.0, key="p_res",
-            help="Residual pressure at downstream tie-in (e.g. RO feed header). "
-                 "Typically 2–4 barg for SWRO pre-treatment.")
-        dp_inlet_pipe = st.number_input(
-            "Inlet piping losses (bar)", value=0.30, step=0.05,
-            min_value=0.0, key="dp_in",
-            help="Feed nozzle + inlet pipe + isolation valve + flow meter + fittings. "
-                 "Typical 0.2–0.5 bar depending on pipe sizing and layout.")
-        dp_dist      = st.number_input(
-            "Inlet distributor ΔP (bar)", value=0.02, step=0.01,
-            min_value=0.0, key="dp_dist",
-            help="Perforated header-lateral or distributor nozzles. Typical 0.01–0.05 bar.")
-        dp_outlet_pipe= st.number_input(
-            "Outlet piping losses (bar)", value=0.20, step=0.05,
-            min_value=0.0, key="dp_out",
-            help="Outlet nozzle + pipe + isolation valve + fittings. Typical 0.1–0.3 bar.")
-        static_head  = st.number_input(
-            "Static elevation head (m)", value=0.0, step=0.5, key="stat_h",
-            help="Filter elevation above pump centre-line (positive = pumping uphill).")
-        st.caption("Equipment efficiencies")
-        pump_eta     = st.number_input(
-            "Filtration pump η", value=0.75, step=0.01,
-            min_value=0.30, max_value=0.95, key="pump_e")
-        bw_pump_eta  = st.number_input(
-            "BW pump η",         value=0.72, step=0.01,
-            min_value=0.30, max_value=0.95, key="bwp_e")
-        motor_eta    = st.number_input(
-            "Motor η (all motors)", value=0.95, step=0.01,
-            min_value=0.70, max_value=0.99, key="mot_e")
-        bw_head_mwc  = st.number_input(
+            help="Tank volume = BW vol/cycle × simultaneous systems × SF.")
+        bw_head_mwc = st.number_input(
             "BW pump total head (mWC)", value=15.0, step=1.0,
             min_value=1.0, key="bw_hd",
             help="Typical 12–20 mWC; includes bed + nozzle plate + BW piping losses.")
-        st.caption("Economics")
-        elec_tariff  = st.number_input(
-            "Electricity tariff (USD/kWh)", value=0.10, step=0.01,
-            min_value=0.01, key="elec_t")
-        op_hours_yr  = st.number_input(
-            "Operating hours / year", value=8400, step=100,
-            min_value=1000, key="op_hr")
 
-    # ── Performance thresholds ─────────────────────────────────────────────
-    with st.expander("⚠️ Thresholds", expanded=(_ap == "thresholds")):
-        velocity_threshold = st.number_input("Max LV (m/h)",   value=12.0)
-        ebct_threshold     = st.number_input("Min EBCT (min)", value=5.0)
-
-    # ── Block 7: Cartridge filter ───────────────────────────────────────────
-    with st.expander("🔷 Cartridge filter", expanded=(_ap == "cartridge")):
-        cart_flow   = st.number_input(
-            "Design flow (m³/h)", value=float(total_flow),
-            step=100.0, key="cart_flow",
-            help="Total flow to the cartridge station (usually = plant flow)")
-        cart_size   = st.selectbox(
-            "Element length", ELEMENT_SIZE_LABELS, index=2, key="cart_size",
-            help="All elements are 2.5\" (63.5 mm) OD. "
-                 "Longer elements = more TIEs = higher capacity per housing.")
-        cart_rating = st.selectbox(
-            "Rating (μm absolute)", RATING_UM_OPTIONS, index=1, key="cart_rating")
-
-        cart_cip = st.toggle(
-            "CIP system (SS 316L elements)",
-            value=False, key="cart_cip",
-            help="CIP (Clean-In-Place): regenerable stainless-steel 316L elements.  "
-                 "Applies SF=1.2 (vs 1.5 for disposable polymer), higher DHC (45 g/TIE), "
-                 "longer replacement interval, and SS 316L unit costs.")
-
-        # Housing size: standard market rounds + optional custom value
-        _hsg_options = [str(r) for r in HOUSING_CAPACITY_OPTIONS] + ["Custom…"]
-        _hsg_default_idx = HOUSING_CAPACITY_OPTIONS.index(DEFAULT_ELEMENTS_PER_HOUSING)
-        cart_hsg_sel = st.selectbox(
-            "Elements per housing (market round)", _hsg_options,
-            index=_hsg_default_idx, key="cart_hsg_sel",
-            help="Standard market rounds: 1·3·5·7·12·18·21·28·36·52·75·100·160·200.  "
-                 "Select 'Custom…' to enter any value up to 500.  "
-                 "Use the optimisation table in the Cartridge tab to find the best fit.")
-        if cart_hsg_sel == "Custom…":
-            cart_housing = st.number_input(
-                "Custom elements per housing", min_value=1, max_value=500,
-                value=100, step=1, key="cart_hsg_custom",
-                help="Enter a non-standard housing capacity (e.g. 120, 144, 180).")
+        st.markdown("**Nozzles & supports**")
+        default_rating  = st.selectbox("Flange rating", FLANGE_RATINGS, index=1)
+        nozzle_stub_len = st.number_input("Nozzle stub length (mm)", value=350, step=50)
+        strainer_mat    = st.selectbox("Strainer material",
+                                       list(STRAINER_WEIGHT_KG.keys()), index=0,
+                                       help="SS316 seawater · HDPE/PP fresh/brackish")
+        air_header_dn   = st.number_input("Air scour header DN (mm)", value=200, step=50, key="ah_dn")
+        manhole_dn      = st.selectbox("Manhole size", list(MANHOLE_WEIGHT_KG.keys()), index=0)
+        n_manholes      = int(st.number_input("No. of manholes", value=1, min_value=0, step=1))
+        support_type    = st.selectbox("Support type", SUPPORT_TYPES, key="sup_t")
+        if "Saddle" in support_type:
+            saddle_h      = st.number_input("Saddle height (m)", value=0.8, step=0.05, key="sad_h")
+            base_plate_t  = st.number_input("Base plate t (mm)", value=20.0, step=2.0, key="sad_bp")
+            gusset_t      = st.number_input("Gusset t (mm)",     value=12.0, step=2.0, key="sad_gt")
+            saddle_contact_angle = st.number_input(
+                "Saddle contact angle (°)", value=120.0, step=15.0,
+                min_value=90.0, max_value=180.0, key="sad_ang",
+                help="120° is standard; 150° for heavy/thin-walled vessels.")
+            leg_h = 1.2; leg_section = 150.0
         else:
-            cart_housing = int(cart_hsg_sel)
+            leg_h         = st.number_input("Leg height (m)",   value=1.2, step=0.1, key="leg_h")
+            leg_section   = st.number_input("Leg section (mm)", value=150.0, step=25.0, key="leg_s")
+            base_plate_t  = st.number_input("Base plate t (mm)", value=20.0, step=2.0, key="leg_bp")
+            gusset_t      = st.number_input("Gusset t (mm)",     value=12.0, step=2.0, key="leg_gt")
+            saddle_h = 0.8
+            saddle_contact_angle = 120.0
 
-        # TSS quality inputs
-        st.markdown("**TSS quality**")
-        _cf_inlet_max  = float(tss_avg)
-        _cf_outlet_max = round(0.15 * tss_avg, 2)
-        cf_inlet_tss = st.number_input(
-            "CF inlet TSS — MMF effluent (mg/L)",
-            min_value=0.0, max_value=_cf_inlet_max,
-            value=min(2.0, _cf_inlet_max),
-            step=0.1, format="%.2f", key="cf_inlet_tss",
-            help="TSS entering the cartridge filter = MMF effluent quality.  "
-                 "Will be auto-calculated when the MMF performance model is added.  "
-                 f"Max = MMF feed TSS ({tss_avg:.1f} mg/L).")
-        cf_outlet_tss = st.number_input(
-            "CF outlet TSS — target (mg/L)",
-            min_value=0.0, max_value=_cf_outlet_max,
-            value=min(0.5, _cf_outlet_max),
-            step=0.05, format="%.2f", key="cf_outlet_tss",
-            help=f"Target effluent TSS from cartridge filter.  "
-                 f"Max = 15 % of MMF feed TSS = {_cf_outlet_max:.2f} mg/L.")
+    # ── Tab 5: Econ ───────────────────────────────────────────────────────
+    with econ_tab:
+        st.markdown("**Pump hydraulics**")
+        np_slot_dp    = st.number_input(
+            "Strainer nozzle plate ΔP at design LV (bar)", value=0.02,
+            step=0.005, min_value=0.0, format="%.3f", key="np_slot",
+            help="ΔP through strainer nozzle slots. Typical 0.01–0.05 bar.")
+        p_residual    = st.number_input(
+            "Required downstream pressure (barg)", value=2.50, step=0.25,
+            min_value=0.0, key="p_res",
+            help="Residual pressure at downstream tie-in. Typically 2–4 barg.")
+        dp_inlet_pipe = st.number_input(
+            "Inlet piping losses (bar)", value=0.30, step=0.05, min_value=0.0, key="dp_in")
+        dp_dist       = st.number_input(
+            "Inlet distributor ΔP (bar)", value=0.02, step=0.01, min_value=0.0, key="dp_dist")
+        dp_outlet_pipe = st.number_input(
+            "Outlet piping losses (bar)", value=0.20, step=0.05, min_value=0.0, key="dp_out")
+        static_head   = st.number_input(
+            "Static elevation head (m)", value=0.0, step=0.5, key="stat_h")
 
-        _sf_label = f"SF = {SAFETY_FACTOR_CIP}" if cart_cip else f"SF = {SAFETY_FACTOR_STD}"
-        st.caption(
-            f"{'🔩 SS 316L CIP — ' + _sf_label if cart_cip else '🔵 Polymer standard — ' + _sf_label}.  "
-            "Replacement interval calculated from DHC ÷ TSS loading rate.")
+        st.markdown("**Efficiencies**")
+        pump_eta    = st.number_input("Filtration pump η", value=0.75, step=0.01,
+                                      min_value=0.30, max_value=0.95, key="pump_e")
+        bw_pump_eta = st.number_input("BW pump η",         value=0.72, step=0.01,
+                                      min_value=0.30, max_value=0.95, key="bwp_e")
+        motor_eta   = st.number_input("Motor η (all motors)", value=0.95, step=0.01,
+                                      min_value=0.70, max_value=0.99, key="mot_e")
+
+        st.markdown("**Energy economics**")
+        elec_tariff = st.number_input("Electricity tariff (USD/kWh)", value=0.10,
+                                      step=0.01, min_value=0.01, key="elec_t")
+        op_hours_yr = st.number_input("Operating hours / year", value=8400,
+                                      step=100, min_value=1000, key="op_hr")
+
+        st.markdown("**CAPEX inputs**")
+        design_life_years        = st.number_input("Design life (years)", value=20, step=1, min_value=5, key="des_life")
+        discount_rate            = st.number_input("Discount rate (%)", value=5.0, step=0.5, min_value=0.0, key="disc_rate")
+        currency                 = st.selectbox("Currency", ["USD", "EUR", "GBP", "SAR", "AED"], key="currency")
+        steel_cost_usd_kg        = st.number_input("Steel cost (USD/kg)", value=3.5, step=0.1, key="st_cost")
+        erection_usd_vessel      = st.number_input("Erection cost (USD/vessel)", value=50000.0, step=5000.0, key="erect_usd")
+        piping_usd_vessel        = st.number_input("Piping cost (USD/vessel)",   value=80000.0, step=5000.0, key="pip_usd")
+        instrumentation_usd_vessel = st.number_input("Instrumentation (USD/vessel)", value=30000.0, step=5000.0, key="instr_usd")
+        civil_usd_vessel         = st.number_input("Civil works (USD/vessel)",   value=40000.0, step=5000.0, key="civil_usd")
+        engineering_pct          = st.number_input("Engineering (%)", value=12.0, step=1.0, min_value=0.0, key="eng_pct")
+        contingency_pct          = st.number_input("Contingency (%)", value=10.0, step=1.0, min_value=0.0, key="cont_pct")
+
+        st.markdown("**OPEX inputs**")
+        media_replace_years   = st.number_input("Media replacement interval (years)", value=7.0, step=1.0, key="med_int")
+        econ_media_gravel     = st.number_input("Gravel cost (USD/t)",     value=80.0,  step=10.0, key="mc_gr")
+        econ_media_sand       = st.number_input("Sand cost (USD/t)",       value=150.0, step=10.0, key="mc_sd")
+        econ_media_anthracite = st.number_input("Anthracite cost (USD/t)", value=400.0, step=25.0, key="mc_an")
+        nozzle_replace_years  = st.number_input("Nozzle replacement interval (years)", value=10.0, step=1.0, key="noz_int")
+        nozzle_unit_cost      = st.number_input("Nozzle unit cost (USD/nozzle)", value=15.0, step=1.0, key="noz_cost")
+        labour_usd_filter_yr  = st.number_input("Labour (USD/filter/year)", value=5000.0, step=500.0, key="lab_usd")
+        chemical_cost_m3      = st.number_input("Chemical cost (USD/m³ treated)", value=0.005,
+                                                step=0.001, format="%.3f", key="chem_m3")
+
+        st.markdown("**Carbon footprint**")
+        grid_intensity       = st.number_input("Grid intensity (kgCO₂/kWh)", value=0.45, step=0.01, key="grid_co2")
+        steel_carbon_kg      = st.number_input("Steel embodied carbon (kgCO₂/kg)", value=1.85, step=0.05, key="st_co2")
+        concrete_carbon_kg   = st.number_input("Concrete embodied carbon (kgCO₂/kg)", value=0.13, step=0.01, key="con_co2")
+        media_co2_gravel     = st.number_input("Gravel carbon (kgCO₂/kg)", value=0.004, step=0.001, format="%.3f", key="mco_gr")
+        media_co2_sand       = st.number_input("Sand carbon (kgCO₂/kg)", value=0.006, step=0.001, format="%.3f", key="mco_sd")
+        media_co2_anthracite = st.number_input("Anthracite carbon (kgCO₂/kg)", value=0.15, step=0.01, key="mco_an")
 
 # ══════════════════════════════════════════════════════════════════════════════
 # PRE-COMPUTE — all calculations in dependency order
@@ -1095,10 +1006,88 @@ wt_saddle = saddle_design(
     contact_angle_deg = saddle_contact_angle,
 )
 
+# ── Economics ────────────────────────────────────────────────────────────────
+_n_total_vessels = streams * n_filters
+
+# Build per-type media inventory (kg, all vessels) and unit costs (USD/kg)
+_media_inventory: dict = {}
+_media_usd_kg:   dict = {}
+_media_co2_kg:   dict = {}
+for _b in base:
+    _mt   = _b["Type"]
+    _mkg  = _b["Vol"] * _b["rho_p_eff"] * _n_total_vessels
+    _media_inventory[_mt] = _media_inventory.get(_mt, 0.0) + _mkg
+    _is_grav = "Gravel" in _mt
+    _is_anth = "Anthracite" in _mt
+    _media_usd_kg[_mt]  = (econ_media_gravel if _is_grav
+                           else econ_media_anthracite if _is_anth
+                           else econ_media_sand) / 1000.0
+    _media_co2_kg[_mt]  = (media_co2_gravel if _is_grav
+                           else media_co2_anthracite if _is_anth
+                           else media_co2_sand)
+
+econ_capex = capex_breakdown(
+    weight_total_kg        = w_total,
+    n_vessels              = _n_total_vessels,
+    steel_cost_usd_kg      = steel_cost_usd_kg,
+    erection_usd           = erection_usd_vessel,
+    piping_usd             = piping_usd_vessel,
+    instrumentation_usd    = instrumentation_usd_vessel,
+    civil_usd              = civil_usd_vessel,
+    engineering_pct        = engineering_pct,
+    contingency_pct        = contingency_pct,
+)
+
+econ_opex = opex_annual(
+    filtration_power_kw        = energy["p_filt_avg_kw"],
+    bw_power_kw                = energy["p_bw_kw"],
+    blower_power_kw            = energy["p_blower_elec_kw"],
+    n_vessels                  = _n_total_vessels,
+    electricity_tariff         = elec_tariff,
+    operating_hours            = float(op_hours_yr),
+    media_inventory_kg_by_type = _media_inventory,
+    media_costs_by_type        = _media_usd_kg,
+    media_interval_years       = media_replace_years,
+    n_strainer_nozzles         = wt_np.get("n_bores", 0) * _n_total_vessels,
+    nozzle_cost_usd            = nozzle_unit_cost,
+    nozzle_interval_years      = nozzle_replace_years,
+    labour_usd_per_filter_year = labour_usd_filter_yr,
+    n_filters_total            = _n_total_vessels,
+    chemical_cost_usd_m3       = chemical_cost_m3,
+    total_flow_m3h             = total_flow,
+)
+
+econ_carbon = carbon_footprint(
+    filtration_power_kw    = energy["p_filt_avg_kw"],
+    bw_power_kw            = energy["p_bw_kw"],
+    blower_power_kw        = energy["p_blower_elec_kw"],
+    operating_hours        = float(op_hours_yr),
+    grid_intensity_kg_kwh  = grid_intensity,
+    weight_steel_kg        = w_total * _n_total_vessels,
+    steel_carbon_kg_kg     = steel_carbon_kg,
+    weight_concrete_kg     = 0.0,
+    concrete_carbon_kg_kg  = concrete_carbon_kg,
+    media_mass_by_type_kg  = _media_inventory,
+    media_carbon_by_type   = _media_co2_kg,
+    design_life_years      = int(design_life_years),
+    total_flow_m3h         = total_flow,
+)
+
+econ_bench = global_benchmark_comparison(
+    capex_total_usd    = econ_capex["total_capex_usd"],
+    opex_usd_year      = econ_opex["total_opex_usd_yr"],
+    total_flow_m3h     = total_flow,
+    n_filters          = _n_total_vessels,
+    design_life_years  = int(design_life_years),
+    co2_per_m3         = econ_carbon["co2_per_m3_operational"],
+    electricity_tariff = elec_tariff,
+    operating_hours    = float(op_hours_yr),
+)
+
 # ══════════════════════════════════════════════════════════════════════════════
-# STATUS BADGES  (appended below inputs in the input panel column)
+# STATUS BADGES  (appended below the tab group in the context column)
 # ══════════════════════════════════════════════════════════════════════════════
-with inp_col:
+with ctx:
     st.divider()
     _status_items = {
         "Project":    bool(project_name),
@@ -1124,10 +1113,10 @@ with inp_col:
 # ══════════════════════════════════════════════════════════════════════════════
 # CONTENT TABS
 # ══════════════════════════════════════════════════════════════════════════════
-with main_col:
+with main:
     (tab_proj, tab_proc, tab_water, tab_vessel,
      tab_media, tab_bw, tab_weight, tab_cart, tab_energy,
-     tab_section, tab_datasheet, tab_report) = st.tabs([
+     tab_section, tab_datasheet, tab_report, tab_econ) = st.tabs([
         "📋 Project",
         "💧 Process",
         "🌊 Water",
@@ -1140,6 +1129,7 @@ with main_col:
         "🖼️ Section",
         "📋 Datasheet",
         "📄 Report",
+        "💰 Economics",
     ])
 
     # ─────────────────────────────────────────────────────────────────────
@@ -3624,3 +3614,175 @@ with main_col:
         with col_sign:
             st.info(f"**{engineer}**  \nProcess Expert — AQUASIGHT™  \n\n"
                     f"{doc_number} · Rev {revision}")
+
+    # ─────────────────────────────────────────────────────────────────────
+    # TAB 13 · ECONOMICS
+    # ─────────────────────────────────────────────────────────────────────
+    with tab_econ:
+        st.subheader("Economics — CAPEX · OPEX · Carbon · Benchmarks")
+
+        # ── Key headline metrics ──────────────────────────────────────────
+        em1, em2, em3, em4 = st.columns(4)
+        em1.metric("Total CAPEX",
+                   f"USD {econ_capex['total_capex_usd']:,.0f}",
+                   delta=f"{econ_bench['capex_per_m3d']:.1f} USD/m³/d  {econ_bench['capex_status']}",
+                   delta_color="off")
+        em2.metric("Annual OPEX",
+                   f"USD {econ_opex['total_opex_usd_yr']:,.0f}/yr",
+                   delta=f"{econ_bench['opex_per_m3']:.4f} USD/m³  {econ_bench['opex_status']}",
+                   delta_color="off")
+        em3.metric("LCOW",
+                   f"{econ_bench['lcow']:.4f} USD/m³",
+                   delta=econ_bench["lcow_status"],
+                   delta_color="off")
+        em4.metric("CO₂ operational",
+                   f"{econ_carbon['co2_per_m3_operational']:.4f} kgCO₂/m³",
+                   delta=econ_bench["carbon_status"],
+                   delta_color="off")
+
+        # ── CAPEX breakdown ───────────────────────────────────────────────
+        with st.expander("1 · CAPEX breakdown", expanded=True):
+            _capex_items = {
+                "Steel (structure)":      econ_capex["steel_cost_usd"],
+                "Erection":               econ_capex["erection_usd"],
+                "Piping":                 econ_capex["piping_usd"],
+                "Instrumentation":        econ_capex["instrumentation_usd"],
+                "Civil works":            econ_capex["civil_usd"],
+                "Engineering":            econ_capex["engineering_usd"],
+                "Contingency":            econ_capex["contingency_usd"],
+            }
+            c_left, c_right = st.columns([1, 1])
+            with c_left:
+                st.table(pd.DataFrame([
+                    [k, f"USD {v:,.0f}", f"{v/max(econ_capex['total_capex_usd'],1)*100:.1f} %"]
+                    for k, v in _capex_items.items()
+                ] + [["**TOTAL**",
+                       f"**USD {econ_capex['total_capex_usd']:,.0f}**", "**100 %**"]],
+                    columns=["Item", "Cost (USD)", "Share"]))
+                st.caption(
+                    f"{_n_total_vessels} vessels · steel {steel_cost_usd_kg:.2f} USD/kg · "
+                    f"engineering {engineering_pct:.0f} % · contingency {contingency_pct:.0f} %"
+                )
+            with c_right:
+                if _PLOTLY_OK:
+                    _fig_cap = _go.Figure(_go.Pie(
+                        labels=list(_capex_items.keys()),
+                        values=list(_capex_items.values()),
+                        hole=0.35,
+                        textinfo="label+percent",
+                        textfont_size=11,
+                    ))
+                    _fig_cap.update_layout(
+                        title="CAPEX split",
+                        showlegend=False,
+                        margin=dict(t=40, b=10, l=10, r=10),
+                        height=340,
+                    )
+                    st.plotly_chart(_fig_cap, use_container_width=True)
+                else:
+                    st.info("Install plotly for pie charts.")
+
+        # ── OPEX breakdown ────────────────────────────────────────────────
+        with st.expander("2 · Annual OPEX breakdown", expanded=True):
+            _opex_items = {
+                "Energy":             econ_opex["energy_cost_usd_yr"],
+                "Media replacement":  econ_opex["media_cost_usd_yr"],
+                "Nozzle replacement": econ_opex["nozzle_cost_usd_yr"],
+                "Labour":             econ_opex["labour_cost_usd_yr"],
+                "Chemicals":          econ_opex["chemical_cost_usd_yr"],
+            }
+            o_left, o_right = st.columns([1, 1])
+            with o_left:
+                st.table(pd.DataFrame([
+                    [k, f"USD {v:,.0f}/yr", f"{v/max(econ_opex['total_opex_usd_yr'],1)*100:.1f} %"]
+                    for k, v in _opex_items.items()
+                ] + [["**TOTAL**",
+                       f"**USD {econ_opex['total_opex_usd_yr']:,.0f}/yr**", "**100 %**"]],
+                    columns=["Item", "Cost (USD/yr)", "Share"]))
+                st.caption(
+                    f"Specific OPEX: **{econ_opex['opex_per_m3_usd']:.4f} USD/m³**  ·  "
+                    f"Annual flow: {econ_opex['annual_flow_m3']/1e6:.2f} Mm³/yr  ·  "
+                    f"Media interval: {media_replace_years:.0f} yr"
+                )
+            with o_right:
+                if _PLOTLY_OK:
+                    _fig_op = _go.Figure(_go.Pie(
+                        labels=list(_opex_items.keys()),
+                        values=list(_opex_items.values()),
+                        hole=0.35,
+                        textinfo="label+percent",
+                        textfont_size=11,
+                    ))
+                    _fig_op.update_layout(
+                        title="OPEX split",
+                        showlegend=False,
+                        margin=dict(t=40, b=10, l=10, r=10),
+                        height=340,
+                    )
+                    st.plotly_chart(_fig_op, use_container_width=True)
+
+        # ── Carbon footprint ──────────────────────────────────────────────
+        with st.expander("3 · Carbon footprint", expanded=True):
+            cf1, cf2, cf3, cf4 = st.columns(4)
+            cf1.metric("Operational CO₂/yr", f"{econ_carbon['co2_operational_kg_yr']/1000:,.1f} t/yr")
+            cf2.metric("Construction CO₂",   f"{econ_carbon['co2_construction_kg']/1000:,.1f} t")
+            cf3.metric("Lifecycle CO₂",      f"{econ_carbon['co2_lifecycle_kg']/1000:,.1f} t",
+                       delta=f"over {econ_carbon['design_life_years']} yr", delta_color="off")
+            cf4.metric("Specific operational", f"{econ_carbon['co2_per_m3_operational']:.4f} kgCO₂/m³",
+                       delta=econ_bench["carbon_status"], delta_color="off")
+
+            st.table(pd.DataFrame([
+                ["Operational CO₂ / year",
+                 f"{econ_carbon['co2_operational_kg_yr']:,.0f} kg/yr",
+                 f"Grid: {grid_intensity:.3f} kgCO₂/kWh"],
+                ["Construction — steel",
+                 f"{econ_carbon['co2_steel_kg']:,.0f} kg",
+                 f"{steel_carbon_kg:.2f} kgCO₂/kg steel"],
+                ["Construction — media",
+                 f"{econ_carbon['co2_media_kg']:,.0f} kg",
+                 "Weighted by mass"],
+                ["Construction — concrete",
+                 f"{econ_carbon['co2_concrete_kg']:,.0f} kg",
+                 f"{concrete_carbon_kg:.2f} kgCO₂/kg"],
+                ["Lifecycle total",
+                 f"{econ_carbon['co2_lifecycle_kg']:,.0f} kg",
+                 f"= {econ_carbon['co2_lifecycle_kg']/1000:.1f} t over {econ_carbon['design_life_years']} yr"],
+                ["Specific — operational",
+                 f"{econ_carbon['co2_per_m3_operational']:.4f} kgCO₂/m³",
+                 econ_bench["carbon_status"]],
+                ["Specific — lifecycle",
+                 f"{econ_carbon['co2_per_m3_lifecycle']:.4f} kgCO₂/m³",
+                 "Incl. construction, amortised"],
+            ], columns=["Item", "Value", "Basis"]))
+
+        # ── Global benchmark comparison ───────────────────────────────────
+        with st.expander("4 · Global benchmark comparison", expanded=True):
+            st.caption(
+                "Benchmarks: horizontal MMF for SWRO / brackish pre-treatment "
+                "(Middle East / Mediterranean, 2024 basis). "
+                "🟢 = within range · 🟡 = borderline · 🔴 = outside range."
+            )
+            st.table(pd.DataFrame([
+                ["CAPEX",
+                 f"{econ_bench['capex_per_m3d']:.2f} USD/m³/d",
+                 econ_bench["capex_benchmark"],
+                 econ_bench["capex_status"]],
+                ["OPEX",
+                 f"{econ_bench['opex_per_m3']:.4f} USD/m³",
+                 econ_bench["opex_benchmark"],
+                 econ_bench["opex_status"]],
+                ["Operational carbon",
+                 f"{econ_bench['co2_per_m3']:.4f} kgCO₂/m³",
+                 econ_bench["carbon_benchmark"],
+                 econ_bench["carbon_status"]],
+                ["LCOW",
+                 f"{econ_bench['lcow']:.4f} USD/m³",
+                 econ_bench["lcow_benchmark"],
+                 econ_bench["lcow_status"]],
+            ], columns=["Metric", "Project", "Benchmark range", "Status"]))
+
+            st.caption(
+                f"Daily capacity: {econ_bench['daily_flow_m3d']:,.0f} m³/d  ·  "
+                f"Annual flow: {econ_bench['annual_flow_m3']/1e6:.2f} Mm³/yr  ·  "
+                f"LCOW basis: CRF = 8 % (≈ 12-yr payback at 5 %)."
+            )
