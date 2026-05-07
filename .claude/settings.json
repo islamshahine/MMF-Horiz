@@ -9,7 +9,11 @@
       "Bash(pkill -f \"streamlit run\")",
       "Bash(streamlit run app.py --server.port 8501 --server.headless true > /tmp/mmf_streamlit.log 2>&1 & *)",
       "Read(//tmp/**)",
-      "Bash(git push *)"
+      "Bash(git push *)",
+      "Bash(pkill -f \"streamlit run\" 2>/dev/null; sleep 1; streamlit run app.py --server.port 8501 --server.headless true > /tmp/st.log 2>&1 & *)"
+    ],
+    "additionalDirectories": [
+      "/tmp"
     ]
   }
 }

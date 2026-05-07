@@ -1218,6 +1218,8 @@ with main:
         for _x, _a, _q in load_data:
             _sc = "N" if _x == 0 else f"N-{_x}"
             for _b in base:
+                if _b.get("is_support"):
+                    continue
                 _vel  = _q / _b["Area"] if _b["Area"] > 0 else 0
                 _ebct = (_b["Vol"] / _q) * 60 if _q > 0 else 0
                 _lv_sev  = _lv_severity(_vel, velocity_threshold)
@@ -1363,12 +1365,17 @@ with main:
                 for b in base:
                     vel  = q / b["Area"] if b["Area"] > 0 else 0
                     ebct = (b["Vol"] / q) * 60 if q > 0 else 0
-                    _lv_sev = _lv_severity(vel, velocity_threshold)
-                    _eb_sev = _ebct_severity(ebct, ebct_threshold)
-                    _lv_env = ("Within envelope" if not _lv_sev
+                    if b.get("is_support"):
+                        _lv_sev, _eb_sev = None, None
+                    else:
+                        _lv_sev = _lv_severity(vel, velocity_threshold)
+                        _eb_sev = _ebct_severity(ebct, ebct_threshold)
+                    _lv_env = ("N/A" if b.get("is_support")
+                               else "Within envelope" if not _lv_sev
                                else "Approaching limit" if _lv_sev == "advisory"
                                else "Outside envelope")
-                    _eb_env = ("Within envelope" if not _eb_sev
+                    _eb_env = ("N/A" if b.get("is_support")
+                               else "Within envelope" if not _eb_sev
                                else "Approaching limit" if _eb_sev == "advisory"
                                else "Outside envelope")
                     rows.append({
@@ -1446,6 +1453,8 @@ with main:
             _worst_lv_sev = None
             _worst_eb_sev = None
             for _b in base:
+                if _b.get("is_support"):
+                    continue
                 _v = _q / _b["Area"] if _b["Area"] > 0 else 0
                 _e = (_b["Vol"] / _q) * 60 if _q > 0 else 0
                 _sv = _lv_severity(_v, velocity_threshold)
