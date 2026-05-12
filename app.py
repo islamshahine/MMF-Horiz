@@ -2452,7 +2452,7 @@ with main:
             return colors.get(val, "")
 
         st.dataframe(
-            _rob_df.style.applymap(_color_overall, subset=["Overall"]),
+            _rob_df.style.map(_color_overall, subset=["Overall"]),
             use_container_width=True, hide_index=True,
         )
 
