@@ -15,7 +15,9 @@
       "Bash(head -1286 /workspaces/MMF-Horiz/app.py > /tmp/app_top.py && echo \"Top saved: $\\(wc -l < /tmp/app_top.py\\) lines\")",
       "Bash(cat /tmp/app_top.py /tmp/app_middle.py > /workspaces/MMF-Horiz/app.py && wc -l /workspaces/MMF-Horiz/app.py)",
       "Bash(curl -s http://localhost:8599/)",
-      "Bash(mkdir -p /workspaces/MMF-Horiz/ui)"
+      "Bash(mkdir -p /workspaces/MMF-Horiz/ui)",
+      "Bash(grep -v \"^$\")",
+      "Bash(git commit *)"
     ],
     "additionalDirectories": [
       "/tmp",
