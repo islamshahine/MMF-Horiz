@@ -73,6 +73,8 @@ DEFAULT_MEDIA_PRESETS = {
                           "rho_p_eff": 2650, "d60": 0.65, "is_porous": False, "default_depth": 0.70},
     "Anthracite":        {"d10": 1.30, "cu": 1.5, "epsilon0": 0.48, "psi": 0.70,
                           "rho_p_eff": 1450, "d60": 2.25, "is_porous": False, "default_depth": 0.80},
+    "Garnet":            {"d10": 0.30, "cu": 1.3, "epsilon0": 0.38, "psi": 0.80,
+                          "rho_p_eff": 4100, "d60": 0.39, "is_porous": False, "default_depth": 0.10},
     "MnO₂":             {"d10": 1.00, "cu": 2.4, "epsilon0": 0.50, "psi": 0.65,
                           "rho_p_eff": 4200, "d60": 2.40, "is_porous": False, "default_depth": 0.40},
     "Medium GAC":        {"d10": 1.00, "cu": 1.6, "epsilon0": 0.55, "psi": 0.65,
