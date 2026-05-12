@@ -128,6 +128,7 @@ def compute_all(inputs: dict) -> dict:
     elec_tariff     = inputs["elec_tariff"]
     op_hours_yr     = inputs["op_hours_yr"]
     design_life_years    = inputs["design_life_years"]
+    discount_rate        = inputs.get("discount_rate", 5.0)
     steel_cost_usd_kg    = inputs["steel_cost_usd_kg"]
     erection_usd_vessel  = inputs["erection_usd_vessel"]
     piping_usd_vessel    = inputs["piping_usd_vessel"]
@@ -607,9 +608,10 @@ def compute_all(inputs: dict) -> dict:
         total_flow_m3h    = total_flow,
         n_filters         = _n_total_vessels,
         design_life_years = int(design_life_years),
-        co2_per_m3        = econ_carbon["co2_per_m3_operational"],
+        co2_per_m3         = econ_carbon["co2_per_m3_operational"],
         electricity_tariff = elec_tariff,
-        operating_hours   = float(op_hours_yr),
+        operating_hours    = float(op_hours_yr),
+        discount_rate_pct  = float(discount_rate),
     )
 
     # ── Assessment pre-computation ────────────────────────────────────────────

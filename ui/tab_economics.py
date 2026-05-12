@@ -22,6 +22,8 @@ def render_tab_economics(inputs: dict, computed: dict):
     grid_intensity     = inputs["grid_intensity"]
     steel_carbon_kg    = inputs["steel_carbon_kg"]
     concrete_carbon_kg = inputs["concrete_carbon_kg"]
+    discount_rate      = inputs.get("discount_rate", 5.0)
+    design_life_years  = inputs.get("design_life_years", 20)
     streams            = inputs["streams"]
     n_filters          = inputs["n_filters"]
 
@@ -191,5 +193,7 @@ def render_tab_economics(inputs: dict, computed: dict):
         st.caption(
             f"Daily capacity: {econ_bench['daily_flow_m3d']:,.0f} m³/d  ·  "
             f"Annual flow: {econ_bench['annual_flow_m3']/1e6:.2f} Mm³/yr  ·  "
-            f"LCOW basis: CRF = 8 % (≈ 12-yr payback at 5 %)."
+            f"LCOW = (CAPEX × CRF + OPEX) / annual flow  ·  "
+            f"CRF = {econ_bench['crf']:.4f}  "
+            f"({discount_rate:.1f} % discount · {design_life_years} yr life)"
         )

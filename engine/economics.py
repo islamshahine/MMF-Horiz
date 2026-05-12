@@ -6,6 +6,20 @@ AQUASIGHT™ MMF Calculator.
 """
 
 
+def capital_recovery_factor(discount_rate_pct: float, design_life_years: int) -> float:
+    """Annualise CAPEX using the standard CRF formula.
+
+    CRF = i(1+i)^n / ((1+i)^n − 1)
+    where i = annual discount rate (decimal) and n = design life (years).
+    Returns 1/n for zero discount rate (simple payback).
+    """
+    i = discount_rate_pct / 100.0
+    n = int(design_life_years)
+    if i <= 0.0 or n <= 0:
+        return 1.0 / max(n, 1)
+    return i * (1.0 + i) ** n / ((1.0 + i) ** n - 1.0)
+
+
 def capex_breakdown(
     weight_total_kg: float,
     n_vessels: int,
@@ -161,6 +175,7 @@ def global_benchmark_comparison(
     co2_per_m3: float,
     electricity_tariff: float,
     operating_hours: float,
+    discount_rate_pct: float = 5.0,
 ) -> dict:
     """
     Compare project metrics against global benchmarks for horizontal MMF
@@ -180,8 +195,7 @@ def global_benchmark_comparison(
     capex_per_m3d = capex_total_usd / max(daily_flow_m3d, 1.0)
     opex_per_m3   = opex_usd_year   / max(annual_flow_m3, 1.0)
 
-    # LCOW: capital recovery factor ≈ 0.08 (≈12-year payback at 5%)
-    crf  = 0.08
+    crf  = capital_recovery_factor(discount_rate_pct, design_life_years)
     lcow = (capex_total_usd * crf + opex_usd_year) / max(annual_flow_m3, 1.0)
 
     def _light(val, lo, hi):
@@ -195,6 +209,7 @@ def global_benchmark_comparison(
         "capex_per_m3d":       round(capex_per_m3d, 2),
         "opex_per_m3":         round(opex_per_m3, 4),
         "lcow":                round(lcow, 4),
+        "crf":                 round(crf, 6),
         "co2_per_m3":          round(co2_per_m3, 4),
         "capex_status":        _light(capex_per_m3d, 15, 35),
         "opex_status":         _light(opex_per_m3,   0.02, 0.06),
