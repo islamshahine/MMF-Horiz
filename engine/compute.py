@@ -1,0 +1,814 @@
+"""engine/compute.py — Central computation engine for AQUASIGHT™ MMF."""
+import math as _math
+
+from engine.geometry   import segment_area, dish_volume
+from engine.process    import filter_loading
+from engine.water      import water_properties
+from engine.mechanical import (
+    thickness, apply_thickness_override, empty_weight,
+    nozzle_plate_design, saddle_weight, internals_weight,
+    operating_weight, saddle_design, MATERIALS,
+)
+from engine.nozzles    import estimate_nozzle_schedule
+from engine.backwash   import (
+    backwash_hydraulics, bed_expansion, pressure_drop,
+    bw_sequence, filtration_cycle, bw_system_sizing,
+)
+from engine.collector_ext import collector_check_ext
+from engine.coating    import internal_surface_areas, lining_cost
+from engine.cartridge  import cartridge_design, cartridge_optimise
+from engine.energy     import hydraulic_profile, energy_summary
+from engine.economics  import (
+    capex_breakdown, opex_annual, carbon_footprint,
+    global_benchmark_comparison,
+)
+
+
+def compute_all(inputs: dict) -> dict:
+    # ── Unpack inputs ──────────────────────────────────────────────────────
+    total_flow      = inputs["total_flow"]
+    streams         = inputs["streams"]
+    n_filters       = inputs["n_filters"]
+    redundancy      = inputs["redundancy"]
+    feed_temp       = inputs["feed_temp"]
+    feed_sal        = inputs["feed_sal"]
+    temp_low        = inputs["temp_low"]
+    temp_high       = inputs["temp_high"]
+    tss_low         = inputs["tss_low"]
+    tss_avg         = inputs["tss_avg"]
+    tss_high        = inputs["tss_high"]
+    bw_temp         = inputs["bw_temp"]
+    bw_sal          = inputs["bw_sal"]
+    velocity_threshold = inputs["velocity_threshold"]
+    ebct_threshold     = inputs["ebct_threshold"]
+    nominal_id      = inputs["nominal_id"]
+    total_length    = inputs["total_length"]
+    end_geometry    = inputs["end_geometry"]
+    lining_mm       = inputs["lining_mm"]
+    material_name   = inputs["material_name"]
+    mat_info        = inputs["mat_info"]
+    shell_radio     = inputs["shell_radio"]
+    head_radio      = inputs["head_radio"]
+    design_pressure = inputs["design_pressure"]
+    corrosion       = inputs["corrosion"]
+    steel_density   = inputs["steel_density"]
+    ov_shell        = inputs["ov_shell"]
+    ov_head         = inputs["ov_head"]
+    nozzle_plate_h  = inputs["nozzle_plate_h"]
+    np_bore_dia     = inputs["np_bore_dia"]
+    np_density      = inputs["np_density"]
+    np_beam_sp      = inputs["np_beam_sp"]
+    np_override_t   = inputs["np_override_t"]
+    np_slot_dp      = inputs["np_slot_dp"]
+    collector_h     = inputs["collector_h"]
+    freeboard_mm    = inputs["freeboard_mm"]
+    layers          = inputs["layers"]
+    solid_loading   = inputs["solid_loading"]
+    captured_solids_density = inputs["captured_solids_density"]
+    alpha_specific  = inputs["alpha_specific"]
+    dp_trigger_bar  = inputs["dp_trigger_bar"]
+    bw_velocity     = inputs["bw_velocity"]
+    air_scour_rate  = inputs["air_scour_rate"]
+    bw_cycles_day   = inputs["bw_cycles_day"]
+    bw_s_drain      = inputs["bw_s_drain"]
+    bw_s_air        = inputs["bw_s_air"]
+    bw_s_airw       = inputs["bw_s_airw"]
+    bw_s_hw         = inputs["bw_s_hw"]
+    bw_s_settle     = inputs["bw_s_settle"]
+    bw_s_fill       = inputs["bw_s_fill"]
+    bw_total_min    = inputs["bw_total_min"]
+    vessel_pressure_bar  = inputs["vessel_pressure_bar"]
+    blower_eta      = inputs["blower_eta"]
+    blower_inlet_temp_c  = inputs["blower_inlet_temp_c"]
+    tank_sf         = inputs["tank_sf"]
+    bw_head_mwc     = inputs["bw_head_mwc"]
+    default_rating  = inputs["default_rating"]
+    nozzle_stub_len = inputs["nozzle_stub_len"]
+    strainer_mat    = inputs["strainer_mat"]
+    air_header_dn   = inputs["air_header_dn"]
+    manhole_dn      = inputs["manhole_dn"]
+    n_manholes      = inputs["n_manholes"]
+    support_type    = inputs["support_type"]
+    saddle_h        = inputs["saddle_h"]
+    leg_h           = inputs["leg_h"]
+    leg_section     = inputs["leg_section"]
+    base_plate_t    = inputs["base_plate_t"]
+    gusset_t        = inputs["gusset_t"]
+    saddle_contact_angle = inputs["saddle_contact_angle"]
+    protection_type = inputs["protection_type"]
+    rubber_type_sel = inputs["rubber_type_sel"]
+    rubber_layers   = inputs["rubber_layers"]
+    rubber_cost_m2  = inputs["rubber_cost_m2"]
+    rubber_labor_m2 = inputs["rubber_labor_m2"]
+    epoxy_type_sel  = inputs["epoxy_type_sel"]
+    epoxy_dft_um    = inputs["epoxy_dft_um"]
+    epoxy_coats     = inputs["epoxy_coats"]
+    epoxy_cost_m2   = inputs["epoxy_cost_m2"]
+    epoxy_labor_m2  = inputs["epoxy_labor_m2"]
+    ceramic_type_sel = inputs["ceramic_type_sel"]
+    ceramic_dft_um  = inputs["ceramic_dft_um"]
+    ceramic_coats   = inputs["ceramic_coats"]
+    ceramic_cost_m2 = inputs["ceramic_cost_m2"]
+    ceramic_labor_m2 = inputs["ceramic_labor_m2"]
+    cart_flow       = inputs["cart_flow"]
+    cart_size       = inputs["cart_size"]
+    cart_rating     = inputs["cart_rating"]
+    cart_housing    = inputs["cart_housing"]
+    cart_cip        = inputs["cart_cip"]
+    cf_inlet_tss    = inputs["cf_inlet_tss"]
+    cf_outlet_tss   = inputs["cf_outlet_tss"]
+    dp_dist         = inputs["dp_dist"]
+    dp_inlet_pipe   = inputs["dp_inlet_pipe"]
+    dp_outlet_pipe  = inputs["dp_outlet_pipe"]
+    p_residual      = inputs["p_residual"]
+    static_head     = inputs["static_head"]
+    pump_eta        = inputs["pump_eta"]
+    bw_pump_eta     = inputs["bw_pump_eta"]
+    motor_eta       = inputs["motor_eta"]
+    elec_tariff     = inputs["elec_tariff"]
+    op_hours_yr     = inputs["op_hours_yr"]
+    design_life_years    = inputs["design_life_years"]
+    steel_cost_usd_kg    = inputs["steel_cost_usd_kg"]
+    erection_usd_vessel  = inputs["erection_usd_vessel"]
+    piping_usd_vessel    = inputs["piping_usd_vessel"]
+    instrumentation_usd_vessel = inputs["instrumentation_usd_vessel"]
+    civil_usd_vessel     = inputs["civil_usd_vessel"]
+    engineering_pct      = inputs["engineering_pct"]
+    contingency_pct      = inputs["contingency_pct"]
+    media_replace_years  = inputs["media_replace_years"]
+    econ_media_gravel    = inputs["econ_media_gravel"]
+    econ_media_sand      = inputs["econ_media_sand"]
+    econ_media_anthracite = inputs["econ_media_anthracite"]
+    nozzle_replace_years = inputs["nozzle_replace_years"]
+    nozzle_unit_cost     = inputs["nozzle_unit_cost"]
+    labour_usd_filter_yr = inputs["labour_usd_filter_yr"]
+    chemical_cost_m3     = inputs["chemical_cost_m3"]
+    grid_intensity       = inputs["grid_intensity"]
+    steel_carbon_kg      = inputs["steel_carbon_kg"]
+    concrete_carbon_kg   = inputs["concrete_carbon_kg"]
+    media_co2_gravel     = inputs["media_co2_gravel"]
+    media_co2_sand       = inputs["media_co2_sand"]
+    media_co2_anthracite = inputs["media_co2_anthracite"]
+
+    # ── Block 2: Water properties ──────────────────────────────────────────
+    feed_wp = water_properties(feed_temp, feed_sal)
+    bw_wp   = water_properties(bw_temp,  bw_sal)
+    rho_feed = feed_wp["density_kg_m3"]
+    mu_feed  = feed_wp["viscosity_pa_s"]
+    rho_bw   = bw_wp["density_kg_m3"]
+    mu_bw    = bw_wp["viscosity_pa_s"]
+
+    # ── Block 3: Vessel geometry ───────────────────────────────────────────
+    h_dish  = (nominal_id / 4) if end_geometry == "Elliptic 2:1" else (0.2 * nominal_id)
+    cyl_len = total_length - 2 * h_dish
+    real_id = nominal_id - 2.0 * lining_mm / 1000.0
+
+    # ── Block 3: Mechanical ────────────────────────────────────────────────
+    mech_base = thickness(
+        diameter_m=nominal_id, design_pressure_bar=design_pressure,
+        material_name=material_name, shell_radio=shell_radio,
+        head_radio=head_radio, corrosion_mm=corrosion,
+        internal_lining_mm=lining_mm,
+    )
+    mech = apply_thickness_override(
+        mech_base, override_shell_mm=ov_shell, override_head_mm=ov_head,
+        internal_lining_mm=lining_mm, nominal_id_m=nominal_id,
+    )
+    mech["corrosion_mm"] = corrosion
+
+    wt_body = empty_weight(
+        diameter_m=real_id, straight_length_m=cyl_len, end_geometry=end_geometry,
+        t_shell_mm=mech["t_shell_design_mm"], t_head_mm=mech["t_head_design_mm"],
+        density_kg_m3=steel_density,
+    )
+
+    # ── Block 4: Media geometry ────────────────────────────────────────────
+    geo_rows, base = [], []
+    curr_h = nozzle_plate_h
+    if nozzle_plate_h > 0:
+        a0 = segment_area(0, real_id)
+        a1 = segment_area(nozzle_plate_h, real_id)
+        v_c = (a1 - a0) * cyl_len
+        v_e = (dish_volume(nozzle_plate_h, real_id, h_dish, end_geometry) -
+               dish_volume(0, real_id, h_dish, end_geometry)) * 2
+        tot = v_c + v_e
+        geo_rows.append(["Nozzle Plate", nozzle_plate_h,
+                         tot / nozzle_plate_h if nozzle_plate_h else 0, v_c, v_e, tot])
+    for L in layers:
+        h1, h2 = curr_h, curr_h + L["Depth"]
+        v_c  = (segment_area(h2, real_id) - segment_area(h1, real_id)) * cyl_len
+        v_e  = (dish_volume(h2, real_id, h_dish, end_geometry) -
+                dish_volume(h1, real_id, h_dish, end_geometry)) * 2
+        vol  = v_c + v_e
+        area = vol / L["Depth"] if L["Depth"] > 0 else 0
+        base.append({**L, "Vol": vol, "Area": area})
+        geo_rows.append([L["Type"], L["Depth"], area, v_c, v_e, vol])
+        curr_h = h2
+    avg_area     = sum(b["Area"] for b in base) / len(base) if base else 1.0
+    q_per_filter = (total_flow / streams) / n_filters
+
+    # ── Block 4: Pressure drop (Ergun) ────────────────────────────────────────
+    bw_dp = pressure_drop(
+        layers=layers,
+        q_filter_m3h=q_per_filter,
+        avg_area_m2=avg_area,
+        solid_loading_kg_m2=solid_loading,
+        captured_density_kg_m3=captured_solids_density,
+        water_temp_c=feed_temp,
+        rho_water=rho_feed,
+        alpha_m_kg=alpha_specific,
+        dp_trigger_bar=dp_trigger_bar,
+    )
+    np_dp_auto = bw_dp["dp_dirty_bar"]
+
+    # ── Block 3: Nozzle plate ─────────────────────────────────────────────────
+    wt_np = nozzle_plate_design(
+        vessel_id_m=real_id,
+        cyl_len_m=cyl_len,
+        h_dish_m=h_dish,
+        h_plate_m=nozzle_plate_h,
+        design_dp_bar=np_dp_auto,
+        media_layers=layers,
+        water_density_kg_m3=rho_feed,
+        nozzle_density_per_m2=np_density,
+        bore_diameter_mm=np_bore_dia,
+        beam_spacing_mm=np_beam_sp,
+        allowable_stress_kgf_cm2=float(mech["allowable_stress"]),
+        corrosion_allowance_mm=corrosion,
+        density_kg_m3=steel_density,
+        override_thickness_mm=np_override_t,
+    )
+
+    # ── Block 6: Nozzle schedule ──────────────────────────────────────────────
+    nozzle_sched = estimate_nozzle_schedule(
+        q_filter_m3h=q_per_filter,
+        bw_velocity_ms=bw_velocity,
+        area_filter_m2=avg_area,
+        default_rating=default_rating,
+        stub_length_mm=float(nozzle_stub_len),
+    )
+
+    # ── Block 6: Supports ─────────────────────────────────────────────────────
+    wt_sup = saddle_weight(
+        vessel_od_m=mech["od_m"],
+        support_type=support_type,
+        saddle_height_m=saddle_h,
+        leg_height_m=leg_h,
+        leg_section_mm=leg_section,
+        base_plate_thickness_mm=base_plate_t,
+        gusset_thickness_mm=gusset_t,
+        density_kg_m3=steel_density,
+    )
+
+    # ── Block 5: Backwash ─────────────────────────────────────────────────────
+    bw_hyd = backwash_hydraulics(
+        filter_area_m2=avg_area,
+        bw_rate_m_h=bw_velocity,
+        air_scour_rate_m_h=air_scour_rate,
+        filtration_flow_m3h=q_per_filter,
+    )
+    bw_col = collector_check_ext(
+        layers=layers,
+        nozzle_plate_h_m=nozzle_plate_h,
+        collector_h_m=collector_h,
+        bw_velocity_m_h=bw_velocity,
+        water_temp_c=bw_temp,
+        rho_water=rho_bw,
+        min_freeboard_m=freeboard_mm / 1000.0,
+    )
+    bw_exp = bed_expansion(
+        layers=layers,
+        bw_velocity_m_h=bw_velocity,
+        water_temp_c=bw_temp,
+        rho_water=rho_bw,
+    )
+    bw_seq = bw_sequence(
+        filter_area_m2=avg_area,
+        tss_scenarios=[tss_low, tss_avg, tss_high],
+        n_filters_total=streams * n_filters,
+        bw_per_day_per_filter=bw_cycles_day,
+    )
+
+    # ── Block 6: Internals weight ─────────────────────────────────────────────
+    wt_int = internals_weight(
+        n_strainer_nozzles=wt_np.get("n_bores", 0),
+        strainer_material=strainer_mat,
+        air_header_dn_mm=int(air_header_dn),
+        cyl_len_m=cyl_len,
+        manhole_dn=manhole_dn,
+        n_manholes=n_manholes,
+    )
+
+    # ── TSS mass balance ──────────────────────────────────────────────────────
+    run_time_h = bw_seq.get("run_time_h", 24.0)
+    waste_vol  = bw_seq.get("waste_vol_avg_m3", 1.0)
+
+    def _tss_bal(tss_mg_l):
+        m_sol = tss_mg_l * q_per_filter * run_time_h / 1000.0
+        w_tss = (m_sol * 1e3) / waste_vol if waste_vol > 0 else 0.0
+        m_day = m_sol * (streams * n_filters) * bw_cycles_day
+        return round(m_sol, 1), round(w_tss, 0), round(m_day, 0)
+
+    m_sol_low,  w_tss_low,  m_daily_low  = _tss_bal(tss_low)
+    m_sol_avg,  w_tss_avg,  m_daily_avg  = _tss_bal(tss_avg)
+    m_sol_high, w_tss_high, m_daily_high = _tss_bal(tss_high)
+
+    # ── Filtration cycle (DP-trigger based) ───────────────────────────────────
+    _load_data_cyc = filter_loading(total_flow, streams, n_filters, redundancy)
+    filt_cycles: dict = {}
+    for _x, _nact, _q in _load_data_cyc:
+        _sc = "N" if _x == 0 else f"N-{_x}"
+        filt_cycles[_sc] = filtration_cycle(
+            layers=layers,
+            q_filter_m3h=_q,
+            avg_area_m2=avg_area,
+            solid_loading_kg_m2=solid_loading,
+            captured_density_kg_m3=captured_solids_density,
+            water_temp_c=feed_temp,
+            rho_water=rho_feed,
+            dp_trigger_bar=dp_trigger_bar,
+            alpha_m_kg=alpha_specific,
+            tss_mg_l_list=[tss_low, tss_avg, tss_high],
+        )
+
+    # ── Filtration cycle matrix: TSS × temperature ────────────────────────────
+    _alpha_fixed = filt_cycles["N"]["alpha_used_m_kg"] if filt_cycles else 0.0
+    tss_labels   = [f"Low ({tss_low:.0f} mg/L)",
+                    f"Avg ({tss_avg:.0f} mg/L)",
+                    f"High ({tss_high:.0f} mg/L)"]
+    tss_vals     = [tss_low, tss_avg, tss_high]
+    _temp_vals   = [temp_low, feed_temp, temp_high]
+    temp_labels  = [f"Min ({temp_low:.0f}°C)",
+                    f"Design ({feed_temp:.0f}°C)",
+                    f"Max ({temp_high:.0f}°C)"]
+    cycle_matrix: dict = {}
+    for _x, _nact, _q in _load_data_cyc:
+        _sc = "N" if _x == 0 else f"N-{_x}"
+        cycle_matrix[_sc] = {}
+        for _tv, _tl in zip(_temp_vals, temp_labels):
+            cycle_matrix[_sc][_tl] = filtration_cycle(
+                layers=layers,
+                q_filter_m3h=_q,
+                avg_area_m2=avg_area,
+                solid_loading_kg_m2=solid_loading,
+                captured_density_kg_m3=captured_solids_density,
+                water_temp_c=_tv,
+                rho_water=rho_feed,
+                dp_trigger_bar=dp_trigger_bar,
+                alpha_m_kg=_alpha_fixed,
+                tss_mg_l_list=tss_vals,
+            )
+
+    # ── BW scheduling & feasibility ───────────────────────────────────────────
+    _bw_dur_h = bw_total_min / 60.0
+
+    def _feas_kpis(t_cycle_h, bw_dur_h, n_active_per_stream, n_streams):
+        t_total   = t_cycle_h + bw_dur_h
+        avail_pct = t_cycle_h / t_total * 100 if t_total > 0 else 0.0
+        bw_per_day = 24.0 / t_total if t_total > 0 else 0.0
+        n_active_total = n_active_per_stream * n_streams
+        sim_demand = n_active_total * bw_dur_h / t_total if t_total > 0 else 0.0
+        bw_trains  = max(1, _math.ceil(sim_demand))
+        if avail_pct >= 90 and bw_trains <= 1 and t_cycle_h >= 6:
+            score, flag = "🟢 Good", "OK"
+        elif avail_pct >= 80 and bw_trains <= 2 and t_cycle_h >= 3:
+            score, flag = "🟡 Caution", "Review"
+        else:
+            score, flag = "🔴 Critical", "Redesign"
+        return {
+            "t_cycle_h":       round(t_cycle_h,   2),
+            "avail_pct":       round(avail_pct,    1),
+            "bw_per_day":      round(bw_per_day,   1),
+            "sim_demand":      round(sim_demand,    2),
+            "n_active_total":  n_active_total,
+            "n_active_stream": n_active_per_stream,
+            "bw_trains":       bw_trains,
+            "score":           score,
+            "flag":            flag,
+        }
+
+    feasibility_matrix: dict = {}
+    for _x, _nact, _q in _load_data_cyc:
+        _sc = "N" if _x == 0 else f"N-{_x}"
+        feasibility_matrix[_sc] = {}
+        for _t_lbl in temp_labels:
+            feasibility_matrix[_sc][_t_lbl] = {}
+            for _tss_lbl, _tss_v in zip(tss_labels, tss_vals):
+                _cyc_t = cycle_matrix[_sc][_t_lbl]
+                _tr    = next((r for r in _cyc_t["tss_results"]
+                               if r["TSS (mg/L)"] == _tss_v), None)
+                _t_cyc = _tr["Cycle duration (h)"] if _tr else 0.0
+                feasibility_matrix[_sc][_t_lbl][_tss_lbl] = _feas_kpis(
+                    _t_cyc, _bw_dur_h, _nact, streams
+                )
+
+    # ── Cartridge design ──────────────────────────────────────────────────────
+    _cart_mu_cP = mu_feed * 1000.0
+    cart_result = cartridge_design(
+        design_flow_m3h=cart_flow,
+        element_size=cart_size,
+        rating_um=cart_rating,
+        mu_cP=_cart_mu_cP,
+        n_elem_per_housing=cart_housing,
+        is_CIP_system=cart_cip,
+        cf_inlet_tss_mg_l=cf_inlet_tss,
+        cf_outlet_tss_mg_l=cf_outlet_tss,
+    )
+    cart_optim = cartridge_optimise(
+        design_flow_m3h=cart_flow,
+        rating_um=cart_rating,
+        mu_cP=_cart_mu_cP,
+        is_CIP_system=cart_cip,
+    )
+
+    # ── Hydraulic profile & energy ────────────────────────────────────────────
+    hyd_prof = hydraulic_profile(
+        dp_media_clean_bar  = bw_dp["dp_clean_bar"],
+        dp_media_dirty_bar  = bw_dp["dp_dirty_bar"],
+        np_dp_filt_bar      = np_slot_dp,
+        distributor_dp_bar  = dp_dist,
+        dp_inlet_pipe_bar   = dp_inlet_pipe,
+        dp_outlet_pipe_bar  = dp_outlet_pipe,
+        p_residual_bar      = p_residual,
+        static_head_m       = static_head,
+        rho_feed_kg_m3      = rho_feed,
+    )
+
+    _n_feas = feasibility_matrix.get("N", {}).get(
+        f"Design ({feed_temp:.0f}°C)", {}).get(
+        f"Avg ({tss_avg:.0f} mg/L)", {})
+    _bw_per_day_design = _n_feas.get("bw_per_day", 24.0 / (bw_total_min/60.0 + 1.0))
+    _avail_design      = _n_feas.get("avail_pct",  90.0)
+    _n_total_filters   = streams * n_filters
+
+    energy = energy_summary(
+        q_filter_m3h        = q_per_filter,
+        n_filters_total     = _n_total_filters,
+        filt_head_dirty_mwc = hyd_prof["dirty"]["total_mwc"],
+        filt_head_clean_mwc = hyd_prof["clean"]["total_mwc"],
+        pump_eta            = pump_eta,
+        motor_eta           = motor_eta,
+        rho_feed_kg_m3      = rho_feed,
+        q_bw_m3h            = bw_hyd["q_bw_design_m3h"],
+        bw_head_mwc         = bw_head_mwc,
+        bw_pump_eta         = bw_pump_eta,
+        bw_motor_eta        = motor_eta,
+        rho_bw_kg_m3        = rho_bw,
+        p_blower_kw         = bw_hyd["p_blower_est_kw"],
+        blower_motor_eta    = motor_eta,
+        bw_duration_h       = _bw_dur_h,
+        bw_per_day_design   = _bw_per_day_design,
+        availability_pct    = _avail_design,
+        elec_tariff_usd_kwh = elec_tariff,
+        op_hours_per_year   = float(op_hours_yr),
+    )
+
+    # ── BW system equipment sizing ────────────────────────────────────────────
+    _n_bw_systems = _n_feas.get("bw_trains", 1)
+    bw_sizing = bw_system_sizing(
+        q_bw_design_m3h     = bw_hyd["q_bw_design_m3h"],
+        bw_head_mwc         = bw_head_mwc,
+        bw_pump_eta         = bw_pump_eta,
+        motor_eta           = motor_eta,
+        q_air_design_m3h    = bw_hyd["q_air_design_m3h"],
+        vessel_pressure_bar = vessel_pressure_bar,
+        filter_id_m         = real_id,
+        blower_inlet_temp_c = blower_inlet_temp_c,
+        blower_eta          = blower_eta,
+        bw_vol_per_cycle_m3 = bw_seq["total_vol_avg_m3"],
+        n_bw_systems        = _n_bw_systems,
+        tank_sf             = tank_sf,
+        rho_bw_kg_m3        = rho_bw,
+    )
+
+    # ── Consolidated weight ───────────────────────────────────────────────────
+    nozzle_wt_total = sum(r.get("Total wt (kg)", 0) for r in nozzle_sched)
+    w_body  = wt_body["weight_body_kg"]
+    w_np    = wt_np["weight_total_kg"]
+    w_sup   = wt_sup["weight_all_supports_kg"]
+    w_noz   = nozzle_wt_total
+    w_int   = wt_int["weight_internals_kg"]
+    w_total = w_body + w_np + w_sup + w_noz + w_int
+
+    # ── Internal surface areas & lining ───────────────────────────────────────
+    vessel_areas = internal_surface_areas(
+        vessel_id_m          = real_id,
+        cyl_len_m            = cyl_len,
+        h_dish_m             = h_dish,
+        end_type             = end_geometry,
+        nozzle_plate_area_m2 = wt_np.get("area_total_m2", 0.0),
+    )
+    lining_result = lining_cost(
+        protection_type      = protection_type,
+        areas                = vessel_areas,
+        rubber_type          = rubber_type_sel,
+        rubber_thickness_mm  = lining_mm if lining_mm > 0 else 4.0,
+        rubber_layers        = rubber_layers,
+        rubber_cost_m2       = rubber_cost_m2,
+        rubber_labor_m2      = rubber_labor_m2,
+        epoxy_type           = epoxy_type_sel,
+        epoxy_dft_um         = epoxy_dft_um,
+        epoxy_coats          = epoxy_coats,
+        epoxy_cost_m2        = epoxy_cost_m2,
+        epoxy_labor_m2       = epoxy_labor_m2,
+        ceramic_type         = ceramic_type_sel,
+        ceramic_dft_um       = ceramic_dft_um,
+        ceramic_coats        = ceramic_coats,
+        ceramic_cost_m2      = ceramic_cost_m2,
+        ceramic_labor_m2     = ceramic_labor_m2,
+    )
+
+    wt_oper = operating_weight(
+        layers          = layers,
+        avg_area_m2     = avg_area,
+        vessel_id_m     = real_id,
+        cyl_len_m       = cyl_len,
+        h_dish_m        = h_dish,
+        end_type        = end_geometry,
+        w_empty_kg      = w_total,
+        n_supports      = wt_sup["n_supports"],
+        rho_water_kg_m3 = rho_feed,
+        w_lining_kg     = lining_result["weight_kg"],
+    )
+    wt_saddle = saddle_design(
+        total_length_m    = total_length,
+        vessel_od_m       = mech["od_m"],
+        vessel_id_m       = real_id,
+        w_operating_kg    = wt_oper["w_operating_kg"],
+        n_saddles         = wt_sup["n_supports"],
+        contact_angle_deg = saddle_contact_angle,
+    )
+
+    # ── Economics ─────────────────────────────────────────────────────────────
+    _n_total_vessels = streams * n_filters
+    _media_inventory: dict = {}
+    _media_usd_kg:   dict = {}
+    _media_co2_kg:   dict = {}
+    for _b in base:
+        _mt  = _b["Type"]
+        _mkg = _b["Vol"] * _b["rho_p_eff"] * _n_total_vessels
+        _media_inventory[_mt] = _media_inventory.get(_mt, 0.0) + _mkg
+        _is_grav = "Gravel" in _mt
+        _is_anth = "Anthracite" in _mt
+        _media_usd_kg[_mt] = (econ_media_gravel if _is_grav
+                              else econ_media_anthracite if _is_anth
+                              else econ_media_sand) / 1000.0
+        _media_co2_kg[_mt] = (media_co2_gravel if _is_grav
+                              else media_co2_anthracite if _is_anth
+                              else media_co2_sand)
+
+    econ_capex = capex_breakdown(
+        weight_total_kg     = w_total,
+        n_vessels           = _n_total_vessels,
+        steel_cost_usd_kg   = steel_cost_usd_kg,
+        erection_usd        = erection_usd_vessel,
+        piping_usd          = piping_usd_vessel,
+        instrumentation_usd = instrumentation_usd_vessel,
+        civil_usd           = civil_usd_vessel,
+        engineering_pct     = engineering_pct,
+        contingency_pct     = contingency_pct,
+    )
+    econ_opex = opex_annual(
+        filtration_power_kw        = energy["p_filt_avg_kw"],
+        bw_power_kw                = energy["p_bw_kw"],
+        blower_power_kw            = energy["p_blower_elec_kw"],
+        n_vessels                  = _n_total_vessels,
+        electricity_tariff         = elec_tariff,
+        operating_hours            = float(op_hours_yr),
+        media_inventory_kg_by_type = _media_inventory,
+        media_costs_by_type        = _media_usd_kg,
+        media_interval_years       = media_replace_years,
+        n_strainer_nozzles         = wt_np.get("n_bores", 0) * _n_total_vessels,
+        nozzle_cost_usd            = nozzle_unit_cost,
+        nozzle_interval_years      = nozzle_replace_years,
+        labour_usd_per_filter_year = labour_usd_filter_yr,
+        n_filters_total            = _n_total_vessels,
+        chemical_cost_usd_m3       = chemical_cost_m3,
+        total_flow_m3h             = total_flow,
+    )
+    econ_carbon = carbon_footprint(
+        filtration_power_kw   = energy["p_filt_avg_kw"],
+        bw_power_kw           = energy["p_bw_kw"],
+        blower_power_kw       = energy["p_blower_elec_kw"],
+        operating_hours       = float(op_hours_yr),
+        grid_intensity_kg_kwh = grid_intensity,
+        weight_steel_kg       = w_total * _n_total_vessels,
+        steel_carbon_kg_kg    = steel_carbon_kg,
+        weight_concrete_kg    = 0.0,
+        concrete_carbon_kg_kg = concrete_carbon_kg,
+        media_mass_by_type_kg = _media_inventory,
+        media_carbon_by_type  = _media_co2_kg,
+        design_life_years     = int(design_life_years),
+        total_flow_m3h        = total_flow,
+    )
+    econ_bench = global_benchmark_comparison(
+        capex_total_usd   = econ_capex["total_capex_usd"],
+        opex_usd_year     = econ_opex["total_opex_usd_yr"],
+        total_flow_m3h    = total_flow,
+        n_filters         = _n_total_vessels,
+        design_life_years = int(design_life_years),
+        co2_per_m3        = econ_carbon["co2_per_m3_operational"],
+        electricity_tariff = elec_tariff,
+        operating_hours   = float(op_hours_yr),
+    )
+
+    # ── Assessment pre-computation ────────────────────────────────────────────
+    load_data = _load_data_cyc
+
+    def _lv_severity(vel, threshold):
+        if vel <= threshold:
+            return None
+        ovr = (vel - threshold) / threshold
+        if ovr <= 0.05:  return "advisory"
+        if ovr <= 0.15:  return "warning"
+        return "critical"
+
+    def _ebct_severity(ebct, threshold):
+        if ebct >= threshold:
+            return None
+        short = (threshold - ebct) / threshold
+        if short <= 0.10: return "advisory"
+        if short <= 0.25: return "warning"
+        return "critical"
+
+    all_lv_issues   = []
+    all_ebct_issues = []
+    n_criticals  = 0
+    n_warnings   = 0
+    n_advisories = 0
+
+    for _x, _a, _q in load_data:
+        _sc = "N" if _x == 0 else f"N-{_x}"
+        for _b in base:
+            if _b.get("is_support"):
+                continue
+            _vel  = _q / _b["Area"] if _b["Area"] > 0 else 0
+            _ebct = (_b["Vol"] / _q) * 60 if _q > 0 else 0
+            _lv_sev = _lv_severity(_vel, velocity_threshold)
+            _eb_sev = _ebct_severity(_ebct, ebct_threshold)
+            if _lv_sev:
+                all_lv_issues.append((_sc, _b["Type"], _lv_sev, _vel))
+                if _lv_sev == "critical":   n_criticals  += 1
+                elif _lv_sev == "warning":  n_warnings   += 1
+                else:                        n_advisories += 1
+            if _eb_sev:
+                all_ebct_issues.append((_sc, _b["Type"], _eb_sev, _ebct))
+                if _eb_sev == "critical":   n_criticals  += 1
+                elif _eb_sev == "warning":  n_warnings   += 1
+                else:                        n_advisories += 1
+
+    _n_scen_crit = sum(1 for s, _, sv, __ in (all_lv_issues + all_ebct_issues)
+                       if sv == "critical" and s == "N")
+    _n_scen_warn = sum(1 for s, _, sv, __ in (all_lv_issues + all_ebct_issues)
+                       if sv == "warning"  and s == "N")
+
+    if n_criticals == 0 and n_warnings == 0 and n_advisories <= 1:
+        overall_risk = "STABLE";   risk_color = "#0a2a0a"; risk_border = "#1a7a1a"; risk_icon = "🟢"
+    elif _n_scen_crit > 1 or (n_criticals > 0 and n_warnings > 2):
+        overall_risk = "CRITICAL"; risk_color = "#2a0000"; risk_border = "#cc0000"; risk_icon = "🔴"
+    elif _n_scen_crit > 0 or n_warnings >= 3:
+        overall_risk = "ELEVATED"; risk_color = "#2a1200"; risk_border = "#cc5500"; risk_icon = "🟠"
+    elif _n_scen_warn > 0 or n_criticals > 0:
+        overall_risk = "MARGINAL"; risk_color = "#2a2000"; risk_border = "#b8860b"; risk_icon = "🟡"
+    else:
+        overall_risk = "STABLE";   risk_color = "#0a2a0a"; risk_border = "#1a7a1a"; risk_icon = "🟢"
+
+    drivers = []
+    if all_lv_issues:
+        _worst_lv = max(all_lv_issues, key=lambda t: t[3])
+        drivers.append(
+            f"Filtration velocity reaches {_worst_lv[3]:.2f} m/h "
+            f"(recommended envelope upper limit {velocity_threshold:.1f} m/h) "
+            f"in scenario {_worst_lv[0]}, layer {_worst_lv[1]}."
+        )
+    if all_ebct_issues:
+        _worst_eb = min(all_ebct_issues, key=lambda t: t[3])
+        drivers.append(
+            f"Contact time reduces to {_worst_eb[3]:.2f} min "
+            f"(recommended lower limit {ebct_threshold:.1f} min) "
+            f"in scenario {_worst_eb[0]}, layer {_worst_eb[1]}."
+        )
+    if not drivers:
+        drivers.append("All hydraulic parameters remain within the recommended operating envelope across all evaluated scenarios.")
+
+    impacts = {
+        "STABLE":   ["Filter performance expected to be consistent across the full redundancy range.",
+                     "Particulate capture efficiency maintains design margin under peak loading.",
+                     "No hydraulic adjustments indicated at current configuration."],
+        "MARGINAL": ["Performance remains acceptable under normal N-scenario operation.",
+                     "One or more standby scenarios approach the hydraulic envelope boundary — review BW cycle frequency.",
+                     "Minor adjustments to filter area or media depth may improve N-1 resilience."],
+        "ELEVATED": ["Elevated velocity or reduced contact time may compromise particulate capture under peak hydraulic loading.",
+                     "Run time between backwash cycles likely shortened by 15–30 % compared to design basis.",
+                     "Consider increasing number of operating filters or filter area to restore operating margin."],
+        "CRITICAL": ["Hydraulic loading significantly exceeds the recommended operating envelope.",
+                     "Risk of particulate breakthrough and accelerated media fouling under sustained operation.",
+                     "System redesign recommended — increase filter area, add filter units, or reduce total flow per vessel."],
+    }
+    recommendations = {
+        "STABLE":   "Maintain current configuration. Review again if flow demand increases or media condition degrades.",
+        "MARGINAL": "Review N-1 scenario performance with the client and confirm acceptance of reduced margin during filter outage.",
+        "ELEVATED": "Increase filter area or reduce per-filter hydraulic loading. Adding one filter unit per stream typically resolves elevated ratings.",
+        "CRITICAL": "Redesign required. The current number of filters or vessel area is insufficient for the specified flow. Consult process design basis before proceeding.",
+    }
+
+    # Robustness index rows
+    rob_rows = []
+    _all_scenarios = [("N", 0)] + [(f"N-{i}", i) for i in range(1, redundancy + 1)]
+    _eval_set = {("N" if x == 0 else f"N-{x}"): q for x, _, q in load_data}
+
+    def _sev_to_label(s):
+        return ("Within envelope" if s is None
+                else "Approaching limit" if s == "advisory"
+                else "Outside envelope")
+
+    for _sc_name, _xr in _all_scenarios:
+        if _sc_name not in _eval_set:
+            rob_rows.append({"Scenario": _sc_name, "Filtration rate": "—",
+                             "Hydraulic status": "Not evaluated",
+                             "EBCT status": "Not evaluated", "Overall": "Not evaluated"})
+            continue
+        _q = _eval_set[_sc_name]
+        _lv_n = _q / avg_area if avg_area > 0 else 0
+        _worst_lv_sev = None
+        _worst_eb_sev = None
+        _sev_rank = {"critical": 3, "warning": 2, "advisory": 1, None: 0}
+        for _b in base:
+            if _b.get("is_support"):
+                continue
+            _v = _q / _b["Area"] if _b["Area"] > 0 else 0
+            _e = (_b["Vol"] / _q) * 60 if _q > 0 else 0
+            _sv = _lv_severity(_v, velocity_threshold)
+            _se = _ebct_severity(_e, ebct_threshold)
+            if _sev_rank.get(_sv, 0) > _sev_rank.get(_worst_lv_sev, 0): _worst_lv_sev = _sv
+            if _sev_rank.get(_se, 0) > _sev_rank.get(_worst_eb_sev, 0): _worst_eb_sev = _se
+        _lv_label = _sev_to_label(_worst_lv_sev)
+        _eb_label = _sev_to_label(_worst_eb_sev)
+        _worst_overall = max(_worst_lv_sev or "", _worst_eb_sev or "",
+                             key=lambda s: {"critical": 3, "warning": 2, "advisory": 1, "": 0}.get(s, 0))
+        _overall_label = ("Stable"   if not _worst_overall
+                          else "Marginal"  if _worst_overall == "advisory"
+                          else "Sensitive" if _worst_overall == "warning"
+                          else "Critical")
+        rob_rows.append({"Scenario": _sc_name, "Filtration rate": f"{_lv_n:.2f} m/h",
+                         "Hydraulic status": _lv_label, "EBCT status": _eb_label,
+                         "Overall": _overall_label})
+
+    # ── Return dict ───────────────────────────────────────────────────────────
+    return {
+        # water
+        "feed_wp": feed_wp, "bw_wp": bw_wp,
+        "rho_feed": rho_feed, "mu_feed": mu_feed, "rho_bw": rho_bw, "mu_bw": mu_bw,
+        # severity functions (tabs need them as callables)
+        "lv_severity_fn": _lv_severity, "ebct_severity_fn": _ebct_severity,
+        # geometry
+        "h_dish": h_dish, "cyl_len": cyl_len, "real_id": real_id,
+        "nominal_id": nominal_id, "total_length": total_length,
+        "end_geometry": end_geometry, "lining_mm": lining_mm,
+        # mechanical
+        "mech": mech, "wt_body": wt_body,
+        # media
+        "geo_rows": geo_rows, "base": base, "avg_area": avg_area,
+        "q_per_filter": q_per_filter,
+        # pressure drop
+        "bw_dp": bw_dp, "np_dp_auto": np_dp_auto,
+        # nozzle plate & nozzles
+        "wt_np": wt_np, "nozzle_sched": nozzle_sched,
+        # supports & internals
+        "wt_sup": wt_sup, "wt_int": wt_int,
+        # backwash
+        "bw_hyd": bw_hyd, "bw_col": bw_col, "bw_exp": bw_exp, "bw_seq": bw_seq,
+        # TSS balance
+        "m_sol_low": m_sol_low, "w_tss_low": w_tss_low, "m_daily_low": m_daily_low,
+        "m_sol_avg": m_sol_avg, "w_tss_avg": w_tss_avg, "m_daily_avg": m_daily_avg,
+        "m_sol_high": m_sol_high, "w_tss_high": w_tss_high, "m_daily_high": m_daily_high,
+        # filtration cycles & matrices
+        "filt_cycles": filt_cycles, "load_data": load_data,
+        "cycle_matrix": cycle_matrix, "tss_labels": tss_labels, "tss_vals": tss_vals,
+        "temp_labels": temp_labels,
+        "feasibility_matrix": feasibility_matrix,
+        # cartridge
+        "cart_result": cart_result, "cart_optim": cart_optim,
+        # hydraulics & energy
+        "hyd_prof": hyd_prof, "energy": energy,
+        # BW sizing
+        "bw_sizing": bw_sizing, "n_bw_systems": _n_bw_systems,
+        # weight
+        "w_noz": w_noz, "w_total": w_total,
+        # lining & surfaces
+        "vessel_areas": vessel_areas, "lining_result": lining_result,
+        # operating weight & saddle
+        "wt_oper": wt_oper, "wt_saddle": wt_saddle,
+        # material (pass-through for tabs)
+        "material_name": material_name, "mat_info": mat_info,
+        # economics
+        "econ_capex": econ_capex, "econ_opex": econ_opex,
+        "econ_carbon": econ_carbon, "econ_bench": econ_bench,
+        # assessment
+        "overall_risk": overall_risk, "risk_color": risk_color,
+        "risk_border": risk_border, "risk_icon": risk_icon,
+        "drivers": drivers, "impacts": impacts, "recommendations": recommendations,
+        "n_criticals": n_criticals, "n_warnings": n_warnings, "n_advisories": n_advisories,
+        "all_lv_issues": all_lv_issues, "all_ebct_issues": all_ebct_issues,
+        "rob_rows": rob_rows,
+    }
