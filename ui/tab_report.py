@@ -3,6 +3,7 @@ import streamlit as st
 from engine.project_io import (
     inputs_to_json, json_to_inputs, get_widget_state_map, default_filename,
 )
+from engine.pdf_report import build_pdf, PDF_OK as _PDF_OK
 
 try:
     from docx import Document as _DocxDocument
@@ -468,8 +469,8 @@ def render_tab_report(inputs: dict, computed: dict):
     st.caption(
         f"{_n_sections} section(s) selected + Identification & Sign-off (always included)")
 
-    dl_col, _ = st.columns([2, 3])
-    with dl_col:
+    dl_word, dl_pdf, _ = st.columns([2, 2, 1])
+    with dl_word:
         if _DOCX_OK:
             st.download_button(
                 label="⬇️  Download Word report (.docx)",
@@ -480,6 +481,21 @@ def render_tab_report(inputs: dict, computed: dict):
             )
         else:
             st.warning("Install python-docx:  `pip install python-docx`")
+    with dl_pdf:
+        if _PDF_OK:
+            _pdf_sections = {
+                "process": s_process, "water": s_water, "media": s_media,
+                "dp": s_dp, "vessel": s_vessel, "bw_hyd": s_bw_hyd,
+                "bw_equip": s_bw_equip, "energy": s_energy,
+            }
+            st.download_button(
+                label="⬇️  Download PDF report (.pdf)",
+                data=build_pdf(inputs, computed, _pdf_sections),
+                file_name=f"{doc_number}_Rev{revision}.pdf",
+                mime="application/pdf",
+            )
+        else:
+            st.warning("Install reportlab:  `pip install reportlab`")
 
     st.divider()
     st.markdown(f"**{project_name}** · {doc_number} · Rev {revision} · {engineer}")
