@@ -66,6 +66,13 @@ def vessel_section_elevation(
     bw_exp: dict,
     show_expansion: bool = True,
     figsize=None,
+    cyl_len: float = None,
+    real_id: float = None,
+    end_geometry: str = "Elliptic 2:1",
+    project_name: str = "",
+    doc_number: str = "",
+    revision: str = "",
+    engineer: str = "",
 ) -> plt.Figure:
     """
     Draw the horizontal MMF vessel theoretical elevation cross-section.
@@ -93,8 +100,8 @@ def vessel_section_elevation(
         figsize = (w, 5.8)
 
     fig, ax = plt.subplots(figsize=figsize)
-    fig.patch.set_facecolor("#f5f7fa")
-    ax.set_facecolor("#f5f7fa")
+    fig.patch.set_facecolor("#ffffff")
+    ax.set_facecolor("#f8f8f8")
 
     # ── Vessel hull ────────────────────────────────────────────────────────
     n = 120
@@ -112,20 +119,27 @@ def vessel_section_elevation(
     hull = mpatches.Polygon(
         np.column_stack([x_hull, y_hull]),
         closed=True,
-        facecolor="#d6e8f7",
-        edgecolor="#1a3a5c",
-        linewidth=2.8,
+        facecolor="#ffffff",
+        edgecolor="#000000",
+        linewidth=2.5,
         zorder=1,
     )
     ax.add_patch(hull)
 
-    # Vessel centre-line (dashed)
-    ax.plot([-h_d * 0.8, L + h_d * 0.8], [R, R],
-            color="#1a3a5c", linewidth=0.6, linestyle="--", alpha=0.4, zorder=2)
+    # Centreline — ISO 128 dash-dot-dash, extends 15 px beyond each head
+    _cl_ext = max(h_d * 0.5, 0.15)
+    ax.plot([-h_d - _cl_ext, L + h_d + _cl_ext], [R, R],
+            color="#888888", linewidth=0.8,
+            linestyle=(0, (12, 4, 2, 4)), zorder=2)
+    ax.text(L + h_d + _cl_ext + R * 0.05, R, "℄",
+            ha="left", va="center", fontsize=9, color="#888888", zorder=2)
 
     # ── Nozzle plate (thick line + symbolic strainer nozzles) ─────────────
     ax.plot([0, L], [nozzle_plate_h_m] * 2,
-            color="#1a3a5c", linewidth=4.0, solid_capstyle="butt", zorder=6)
+            color="#000000", linewidth=3.5, solid_capstyle="butt", zorder=6)
+    ax.text(L * 0.02, nozzle_plate_h_m + R*0.04,
+            f"Nozzle Plate  h={nozzle_plate_h_m:.2f} m",
+            ha="left", va="bottom", fontsize=8, color="#000000", zorder=7)
 
     n_noz = min(14, max(5, int(L / 1.8)))
     for k in range(n_noz):
@@ -143,22 +157,27 @@ def vessel_section_elevation(
     curr_h = nozzle_plate_h_m
     for i, lyr in enumerate(layers):
         depth = lyr["Depth"]
-        color = LAYER_COLORS.get(lyr["Type"], _DEFAULT_COLOR)
-
+        # ISO style: support = light hatch, media = grey bands
+        _iso_fill = "#e0e0e0" if lyr.get("is_support") else "#e8e8e8"
         rect = mpatches.Rectangle(
             (0, curr_h), L, depth,
-            facecolor=color, edgecolor="#555", linewidth=0.7,
-            alpha=0.88, zorder=3,
+            facecolor=_iso_fill, edgecolor="#666666", linewidth=0.5,
+            zorder=3,
         )
         ax.add_patch(rect)
-
-        # Hatching for support layer
-        if lyr.get("is_support"):
-            ax.fill_between(
-                [0, L], curr_h, curr_h + depth,
-                hatch="////", facecolor="none",
-                edgecolor="#888", linewidth=0.3, zorder=4,
-            )
+        # ISO 45° hatching on all layers
+        ax.fill_between(
+            [0, L], curr_h, curr_h + depth,
+            hatch="////" if lyr.get("is_support") else "...",
+            facecolor="none", edgecolor="#aaaaaa", linewidth=0.3, zorder=4,
+        )
+        # Layer label right-aligned inside band
+        ax.text(
+            L * 0.98, curr_h + depth / 2,
+            f"{lyr['Type']}  {depth:.2f} m",
+            ha="right", va="center", fontsize=9,
+            color="#333333", zorder=7,
+        )
 
         # Expanded-bed overlay
         if show_expansion and i < len(exp_by_idx):
@@ -195,13 +214,13 @@ def vessel_section_elevation(
                 zorder=7,
             )
 
-    # ── Collector level (dotted red) ──────────────────────────────────────
+    # ── Collector level — dashed red (ISO hidden line style) ─────────────
     ax.plot([0, L], [collector_h_m] * 2,
-            color="#cc3300", linewidth=1.1, linestyle=":",
-            alpha=0.85, zorder=5)
+            color="#cc0000", linewidth=0.8,
+            linestyle=(0, (6, 3)), zorder=5)
     ax.text(L * 0.02, collector_h_m + 0.012 * ID,
-            f"BW collector  ({collector_h_m * 1000:.0f} mm)",
-            ha="left", va="bottom", fontsize=7, color="#cc3300", zorder=7)
+            f"Collector  h={collector_h_m:.2f} m",
+            ha="left", va="bottom", fontsize=8, color="#cc0000", zorder=7)
 
     # ── Dimension lines (left side) ───────────────────────────────────────
     dx0 = -h_d * 0.35    # arrow x
@@ -239,20 +258,6 @@ def vessel_section_elevation(
     if collector_h_m > settled_top + 0.01:
         _dim(settled_top, collector_h_m, "fn")
 
-    # ── Layer name labels (centred in each band, right half) ──────────────
-    curr_h = nozzle_plate_h_m
-    for lyr in layers:
-        depth = lyr["Depth"]
-        ax.text(
-            L * 0.52, curr_h + depth / 2,
-            lyr["Type"],
-            ha="left", va="center",
-            fontsize=9.5, fontweight="bold",
-            color="#111",
-            zorder=7,
-        )
-        curr_h += depth
-
     # ── Right end: ID double arrow ────────────────────────────────────────
     id_x = L + h_d * 1.15
     ax.annotate("", xy=(id_x, ID), xytext=(id_x, 0),
@@ -286,20 +291,74 @@ def vessel_section_elevation(
                 f"{dist_e:.0f} mm",
                 ha="left", va="center", fontsize=7, color="#3366bb", zorder=7)
 
-    # ── Bottom: T/T length arrow ──────────────────────────────────────────
-    ly = -R * 0.52
-    ax.annotate("", xy=(L, ly), xytext=(0, ly),
-                arrowprops=dict(arrowstyle="<->", color="#1a3a5c",
-                                lw=1.2, mutation_scale=8), zorder=8)
-    ax.text(L / 2, ly - R * 0.10,
-            f"L = {total_length_m:.1f} m  (T/T)",
-            ha="center", va="top",
-            fontsize=9.5, fontweight="bold", color="#1a3a5c", zorder=8)
+    # ── Dimension lines — Shell (T/T) and Total (O/O) ────────────────────
+    _shell_len = cyl_len if cyl_len is not None else total_length_m
+    _dc = "#333333"
+    _akw = dict(arrowstyle="-|>", color=_dc, lw=0.6, mutation_scale=7)
 
-    # Tangent line markers
-    for tx in (0, L):
-        ax.plot([tx, tx], [-R * 0.12, 0],
-                color="#1a3a5c", lw=0.8, linestyle="-", zorder=5)
+    # Line 1 — Shell (T/T): tangent to tangent = cyl_len
+    ly1 = -R * 0.42
+    ax.annotate("", xy=(0, ly1), xytext=(_shell_len, ly1),
+                arrowprops=_akw, zorder=8)
+    ax.annotate("", xy=(_shell_len, ly1), xytext=(0, ly1),
+                arrowprops=_akw, zorder=8)
+    for tx in (0, _shell_len):
+        ax.plot([tx, tx], [ly1 - R*0.07, ly1 + R*0.07], color=_dc, lw=0.6, zorder=8)
+    ax.text(_shell_len / 2, ly1 - R * 0.10,
+            f"Shell (T/T)  {_shell_len:.2f} m",
+            ha="center", va="top", fontsize=8.5, color="#000000", zorder=8)
+
+    # Line 2 — Total (O/O): outer face to outer face = total_length_m
+    ly2 = ly1 - R * 0.40
+    _x0, _x1 = -h_d, _shell_len + h_d
+    ax.annotate("", xy=(_x0, ly2), xytext=(_x1, ly2),
+                arrowprops=_akw, zorder=8)
+    ax.annotate("", xy=(_x1, ly2), xytext=(_x0, ly2),
+                arrowprops=_akw, zorder=8)
+    for tx in (_x0, _x1):
+        ax.plot([tx, tx], [ly2 - R*0.07, ly2 + R*0.07], color=_dc, lw=0.6, zorder=8)
+    ax.text((_x0 + _x1) / 2, ly2 - R * 0.10,
+            f"Total (O/O)  {total_length_m:.2f} m",
+            ha="center", va="top", fontsize=8.5, color="#000000", zorder=8)
+
+    # Tangent line tick markers
+    for tx in (0, _shell_len):
+        ax.plot([tx, tx], [-R * 0.12, 0], color=_dc, lw=0.6, zorder=5)
+
+    # ── Nozzle stubs (ISO schematic style) ───────────────────────────────
+    _sw = L * 0.028          # stub width
+    _sh = R * 0.20           # stub length (protrusion)
+    _nkw = dict(facecolor="white", edgecolor="#000000", linewidth=1.2, zorder=9)
+    _nlkw = dict(fontsize=8, color="#000000", zorder=10)
+    _noz_defs = [
+        (L / 2,   "top",   "Feed\ninlet"),
+        (L / 2,   "bot",   "Filtrate\noutlet"),
+        (0,       "left",  "BW\ninlet"),
+        (L,       "right", "BW\noutlet"),
+        (L * 0.2, "top",   "Vent"),
+        (L * 0.8, "bot",   "Drain"),
+    ]
+    for _xp, _side, _lbl in _noz_defs:
+        if _side == "top":
+            ax.add_patch(mpatches.Rectangle(
+                (_xp - _sw/2, ID), _sw, _sh, **_nkw))
+            ax.text(_xp, ID + _sh + R*0.04, _lbl,
+                    ha="center", va="bottom", **_nlkw)
+        elif _side == "bot":
+            ax.add_patch(mpatches.Rectangle(
+                (_xp - _sw/2, -_sh), _sw, _sh, **_nkw))
+            ax.text(_xp, -_sh - R*0.04, _lbl,
+                    ha="center", va="top", **_nlkw)
+        elif _side == "left":
+            ax.add_patch(mpatches.Rectangle(
+                (-_sh, R - _sw/2), _sh, _sw, **_nkw))
+            ax.text(-_sh - R*0.04, R, _lbl,
+                    ha="right", va="center", **_nlkw)
+        else:
+            ax.add_patch(mpatches.Rectangle(
+                (L, R - _sw/2), _sh, _sw, **_nkw))
+            ax.text(L + _sh + R*0.04, R, _lbl,
+                    ha="left", va="center", **_nlkw)
 
     # ── Colour legend ─────────────────────────────────────────────────────
     legend_handles = []
@@ -328,18 +387,39 @@ def vessel_section_elevation(
         ncol=1,
     )
 
+    # ── Title block (figure coordinates, bottom-right) ────────────────────
+    import datetime as _dt_tb
+    _today_tb = _dt_tb.date.today().strftime("%d-%b-%Y")
+    _tb = (
+        "AQUASIGHT™ MMF\n"
+        "─" * 38 + "\n"
+        f"Project:      {project_name or '—'}\n"
+        f"Doc No:       {doc_number or '—'}   Rev: {revision or 'A'}\n"
+        f"Prepared by:  {engineer or '—'}   Date: {_today_tb}\n"
+        "Scale: NTS    Units: m/mm   Sheet: 1/1"
+    )
+    fig.text(
+        0.75, 0.02, _tb,
+        ha="left", va="bottom", fontsize=7,
+        fontfamily="monospace", color="#000000",
+        transform=fig.transFigure,
+        bbox=dict(boxstyle="square,pad=0.6",
+                  facecolor="white", edgecolor="#000000", linewidth=1.0),
+    )
+
     # ── Title & layout ────────────────────────────────────────────────────
-    ax.set_xlim(-h_d * 3.2, L + h_d * 2.8)
-    ax.set_ylim(-R * 0.80, ID + R * 0.30)
+    _sl = cyl_len if cyl_len is not None else total_length_m
+    ax.set_xlim(-h_d * 4.0, _sl + h_d * 3.5)
+    ax.set_ylim(-R * 1.40, ID + R * 0.65)
     ax.set_aspect("equal", adjustable="datalim")
     ax.axis("off")
 
     ax.set_title(
-        "AQUASIGHT™  |  Horizontal Multi-Media Filter — Theoretical Elevation Section\n"
-        f"ID = {vessel_id_m * 1000:.0f} mm     L (T/T) = {total_length_m:.1f} m     "
-        f"Hₙₚ = {nozzle_plate_h_m * 1000:.0f} mm     "
-        f"{len(layers)}-layer media bed",
-        fontsize=10, pad=8, fontweight="bold", color="#1a3a5c",
+        "Horizontal Multi-Media Filter — Theoretical Elevation Section\n"
+        f"ID {vessel_id_m * 1000:.0f} mm  ·  L(T/T) {_sl:.2f} m  ·  "
+        f"Hₙₚ {nozzle_plate_h_m * 1000:.0f} mm  ·  "
+        f"{len(layers)}-layer bed",
+        fontsize=9.5, pad=6, fontweight="bold", color="#000000",
     )
 
     fig.tight_layout(pad=1.0)
