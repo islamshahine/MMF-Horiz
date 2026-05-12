@@ -77,7 +77,7 @@ MMF-Horiz/
 ├── app.py                    # 182 lines — thin orchestrator
 │
 ├── engine/                   # Pure Python calculation modules (no Streamlit)
-│   ├── compute.py            # compute_all(inputs) → computed dict (814 lines)
+│   ├── compute.py            # compute_all(inputs) → computed dict (816 lines)
 │   ├── water.py              # Water properties (density, viscosity vs T, S)
 │   ├── geometry.py           # segment_area(), dish_volume() for horizontal vessel
 │   ├── process.py            # filter_loading() — flow per filter per scenario
@@ -88,20 +88,23 @@ MMF-Horiz/
 │   ├── cartridge.py          # Cartridge filter design & optimisation
 │   ├── nozzles.py            # Nozzle schedule, DN series, flange ratings
 │   ├── energy.py             # Hydraulic profile, pump/blower energy summary
-│   ├── economics.py          # CAPEX, OPEX, carbon footprint, LCOW benchmarks
-│   ├── drawing.py            # SVG vessel cross-section elevation drawing
-│   └── media.py              # Media database, GAC modes, LV/EBCT ranges
+│   ├── economics.py          # CAPEX, OPEX, carbon footprint, LCOW; capital_recovery_factor()
+│   ├── drawing.py            # ISO 128 vessel elevation: hatching, centreline, title block
+│   ├── media.py              # Media DB (14 types + aliases), get_layer_intelligence()
+│   ├── project_io.py         # JSON save/load: inputs_to_json(), get_widget_state_map()
+│   ├── sensitivity.py        # OAT tornado analysis: run_sensitivity() — 9 params × 4 outputs
+│   └── pdf_report.py         # ReportLab PDF generation: build_pdf() (requires reportlab)
 │
 └── ui/                       # Streamlit rendering modules
-    ├── sidebar.py            # render_sidebar(...) → inputs dict (439 lines)
+    ├── sidebar.py            # render_sidebar(...) → inputs dict (439 lines, all widgets keyed)
     ├── helpers.py            # show_alert() severity box
     ├── tab_filtration.py     # 💧 Filtration tab (226 lines)
     ├── tab_backwash.py       # 🔄 Backwash tab (225 lines)
     ├── tab_mechanical.py     # ⚙️ Mechanical tab (513 lines)
-    ├── tab_media.py          # 🧱 Media tab (149 lines)
-    ├── tab_economics.py      # 💰 Economics tab (195 lines)
-    ├── tab_assessment.py     # 🎯 Assessment tab (149 lines)
-    └── tab_report.py         # 📄 Report tab (642 lines)
+    ├── tab_media.py          # 🧱 Media tab (174 lines) + intelligence expander
+    ├── tab_economics.py      # 💰 Economics tab (199 lines)
+    ├── tab_assessment.py     # 🎯 Assessment tab (210 lines) + OAT tornado chart
+    └── tab_report.py         # 📄 Report tab (693 lines) + JSON save/load + PDF download
 ```
 
 ---
@@ -189,11 +192,11 @@ Three-tier system applied to every scenario × layer combination:
 |---|---|
 | 💧 Filtration | Water properties · flow distribution by scenario · LV and EBCT per layer per scenario · filtration cycle matrix (TSS × temperature) · cartridge filter design |
 | 🔄 Backwash | Collector / carryover check · bed expansion · BW hydraulics · TSS mass balance · BW scheduling feasibility matrix (scenario × temperature × TSS) · BW system sizing (pumps, blower, tank) |
-| ⚙️ Mechanical | Vessel drawing · ASME thickness · nozzle plate · nozzle schedule (editable) · saddle design (Zick) · weight summary · lining/coating |
-| 🧱 Media | Geometric volumes · media properties · pressure drop all scenarios · media inventory · clogging analysis |
-| 💰 Economics | CAPEX breakdown + pie chart · OPEX breakdown + pie chart · carbon footprint · global benchmark comparison |
-| 🎯 Assessment | Overall risk banner · key drivers · operational impacts · violation tables · Design Robustness Index |
-| 📄 Report | Section selector · .docx report generation (Word download) · inline markdown preview |
+| ⚙️ Mechanical | Vessel drawing (ISO 128 style) · ASME thickness · nozzle plate · nozzle schedule · saddle design (Zick) · weight summary · lining/coating |
+| 🧱 Media | Geometric volumes · media properties · pressure drop all scenarios · media inventory · clogging analysis · **Media Engineering Intelligence** (arrangement validation + per-layer role/BW/bio cards) |
+| 💰 Economics | CAPEX breakdown + pie chart · OPEX breakdown + pie chart · carbon footprint · global benchmark with **proper CRF** (i, n user-inputs) |
+| 🎯 Assessment | Overall risk banner · key drivers · operational impacts · violation tables · Design Robustness Index · **OAT Sensitivity tornado chart** (9 inputs × 4 outputs) |
+| 📄 Report | **JSON project save/load** · section selector · **PDF download** (ReportLab) · Word .docx download · inline markdown preview |
 
 ---
 
@@ -209,21 +212,27 @@ Three-tier system applied to every scenario × layer combination:
 
 ---
 
-## Potential Enhancement Areas
+## Implemented Enhancements (v2)
 
-These are areas worth discussing, none implemented yet:
+Added in the refactor session following the initial modular architecture:
 
-1. **Sensitivity / tornado charts** — vary one input at a time (e.g., total_flow ±20%) and plot impact on LV, EBCT, CAPEX
-2. **Optimisation mode** — given constraints (LV < threshold, EBCT > threshold), find minimum n_filters or minimum nominal_id
-3. **Multi-train comparison** — side-by-side comparison of two design configurations
-4. **Vendor nozzle catalogue** — replace estimated nozzle schedule with lookup from real vendor data (e.g., Wavin, Aqseptence)
-5. **PDF report** — add PDF output alongside the existing Word .docx
-6. **Live BW scheduler** — Gantt-style chart showing filter availability and BW train allocation over 24 h
-7. **Media cost database** — pull current media prices from a configurable data source
-8. **Unit toggle** — imperial / metric display toggle (currently metric-only)
-9. **Project save/load** — export/import all inputs as JSON for project continuity across sessions
-10. **ST session persistence** — currently all inputs reset on page refresh; add URL-based state or local storage
-11. **Fouling index model** — incorporate SDI/MFI feed water quality index to auto-adjust `solid_loading`
-12. **Collector hydraulics** — detailed lateral collector ΔP sizing (currently only height check)
-13. **Air scour optimisation** — auto-size air scour rate to achieve target bed expansion
-14. **Multi-media arrangement validation** — check that layer order (heavy coarse bottom → light fine top) is correct for dual/tri-media
+| # | Feature | Files |
+|---|---|---|
+| 1 | **ISO 128 mechanical drawing** — hatching, centreline, dual dimension lines, 6 nozzle stubs, title block | `engine/drawing.py` |
+| 2 | **JSON project save/load** — full session state mapping, 88-key widget map, rerun-on-load | `engine/project_io.py`, `ui/tab_report.py`, `ui/sidebar.py` |
+| 3 | **OAT sensitivity / tornado chart** — 9 inputs × 4 outputs, cached in session_state, Plotly diverging bar | `engine/sensitivity.py`, `ui/tab_assessment.py` |
+| 4 | **PDF report** — ReportLab Platypus, 8 selectable sections, download alongside Word | `engine/pdf_report.py`, `ui/tab_report.py` |
+| 5 | **Media engineering intelligence** — 4 new media types, name aliases (MnO₂/Coarse sand/…), arrangement validation, per-layer role/BW/bio cards | `engine/media.py`, `ui/tab_media.py` |
+| 6 | **Proper CRF-based LCOW** — `capital_recovery_factor(i, n)` replaces hardcoded 0.08; discount_rate wired end-to-end | `engine/economics.py`, `engine/compute.py`, `ui/tab_economics.py` |
+
+## Remaining Enhancement Areas
+
+1. **Optimisation mode** — given constraints (LV < threshold, EBCT > threshold), find minimum n_filters or minimum nominal_id
+2. **Multi-train comparison** — side-by-side comparison of two design configurations
+3. **Vendor nozzle catalogue** — replace estimated nozzle schedule with lookup from real vendor data (e.g., Wavin, Aqseptence)
+4. **Live BW scheduler** — Gantt-style chart showing filter availability and BW train allocation over 24 h
+5. **Media cost database** — pull current media prices from a configurable data source
+6. **Unit toggle** — imperial / metric display toggle (currently metric-only)
+7. **Fouling index model** — incorporate SDI/MFI feed water quality index to auto-adjust `solid_loading`
+8. **Collector hydraulics** — detailed lateral collector ΔP sizing (currently only height check)
+9. **Air scour optimisation** — auto-size air scour rate to achieve target bed expansion
