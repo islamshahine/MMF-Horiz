@@ -1,6 +1,7 @@
 """ui/tab_media.py — Media tab for AQUASIGHT™ MMF."""
 import pandas as pd
 import streamlit as st
+from engine.media import get_layer_intelligence
 from engine.process import filter_loading
 from engine.backwash import pressure_drop
 
@@ -147,3 +148,27 @@ def render_tab_media(inputs: dict, computed: dict):
             "ΔεF shown for reference only — cake model, not voidage reduction, "
             "drives moderate/dirty ΔP."
         )
+
+    with st.expander("6 · Media Engineering Intelligence", expanded=True):
+        _intel, _arr_warns = get_layer_intelligence(layers)
+
+        st.markdown("**Bed arrangement validation**")
+        if _arr_warns:
+            for _w in _arr_warns:
+                (st.warning if _w["level"] == "warning" else st.info)(_w["message"])
+        else:
+            st.success("Density stratification correct — bed will restratify after BW. ✓")
+
+        st.divider()
+        st.markdown("**Per-layer process intelligence**")
+        for _row in _intel:
+            _lbl = f"Layer {_row['layer']} — {_row['media']}"
+            _c1, _c2, _c3 = st.columns(3)
+            _c1.markdown(f"**{_lbl}**")
+            _c2.caption(f"BW expansion: **{_row['bw_tendency']}**")
+            _c3.caption(f"Density class: **{_row['density_class']}**")
+            st.caption(f"Function: {_row['function']}")
+            st.caption(f"Process role: {_row['process_role']}")
+            for _note in _row["notes"]:
+                st.info(_note)
+            st.markdown("---")

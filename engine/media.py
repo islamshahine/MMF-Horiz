@@ -153,6 +153,54 @@ MEDIA_DATABASE = {
         },
     },
 
+    "Biodagene": {
+        "d10": 2.50, "cu": 1.4, "epsilon0": 0.42,
+        "rho_p_eff": 1600, "d60": 3.50, "default_depth": 0.60,
+        "media_category": "mechanical_filtration",
+        "density_class": "medium", "bw_tendency": "medium",
+        "bio_compatible": False,
+        "media_function": "Coarse mechanical filtration",
+        "process_role": "Roughing / pre-filtration layer",
+        "lv_min": 5, "lv_max": 12, "ebct_min": 3, "ebct_max": 8,
+        "gac_modes": None,
+    },
+
+    "Schist": {
+        "d10": 3.30, "cu": 1.5, "epsilon0": 0.47,
+        "rho_p_eff": 1300, "d60": 4.95, "default_depth": 0.30,
+        "media_category": "mechanical_filtration",
+        "density_class": "light", "bw_tendency": "high",
+        "bio_compatible": False,
+        "media_function": "High-rate coarse roughing",
+        "process_role": "Upper coarse roughing layer",
+        "lv_min": 8, "lv_max": 15, "ebct_min": 2, "ebct_max": 5,
+        "gac_modes": None,
+    },
+
+    "Pumice": {
+        "d10": 1.50, "cu": 1.3, "epsilon0": 0.55,
+        "rho_p_eff": 900, "d60": 1.56, "default_depth": 0.60,
+        "media_category": "adsorption_bio",
+        "density_class": "light", "bw_tendency": "high",
+        "bio_compatible": True,
+        "media_function": "Porous bio-support and filtration",
+        "process_role": "Biological roughing / BOD reduction",
+        "lv_min": 5, "lv_max": 10, "ebct_min": 5, "ebct_max": 15,
+        "gac_modes": None,
+    },
+
+    "FILTRALITE clay": {
+        "d10": 1.20, "cu": 1.5, "epsilon0": 0.48,
+        "rho_p_eff": 1250, "d60": 1.80, "default_depth": 0.80,
+        "media_category": "adsorption_bio",
+        "density_class": "light", "bw_tendency": "high",
+        "bio_compatible": True,
+        "media_function": "Expanded clay bio-support and filtration",
+        "process_role": "Biological filtration / NOM reduction",
+        "lv_min": 5, "lv_max": 10, "ebct_min": 5, "ebct_max": 15,
+        "gac_modes": None,
+    },
+
     "Custom": {
         "d10": 0.0, "cu": 1.0, "epsilon0": 0.40,
         "rho_p_eff": 2650, "d60": 0.0, "default_depth": 0.50,
@@ -166,6 +214,11 @@ MEDIA_DATABASE = {
         "gac_modes": None,
     },
 }
+
+# Aliases to match sidebar name variants (case differences + Unicode subscript)
+for _k, _v in [("Fine Sand", "Fine sand"), ("Fine Sand (Extra)", "Fine sand (extra)"),
+                ("Coarse Sand", "Coarse sand"), ("MnO2", "MnO₂")]:
+    MEDIA_DATABASE[_v] = MEDIA_DATABASE[_k]
 
 
 def get_media_names():
@@ -294,3 +347,36 @@ def validate_layer_order(layers):
 def collector_max_height(vessel_id_m, clearance_mm=300):
     c = clearance_mm / 1000.0
     return min(vessel_id_m - c, vessel_id_m * 0.90)
+
+
+def get_layer_intelligence(layers: list) -> tuple[list, list]:
+    """Return (intelligence_rows, arrangement_warnings) for the current bed.
+
+    intelligence_rows: one dict per layer with function / role / BW / bio fields.
+    arrangement_warnings: from validate_layer_order() — level + message dicts.
+    Layer dicts from the sidebar are enriched with media_category from the DB
+    before arrangement validation so density/category checks work correctly.
+    """
+    intel = []
+    enriched = []
+    for i, layer in enumerate(layers):
+        m     = get_media(layer.get("Type", "Custom"))
+        enriched.append({**layer, "media_category": m.get("media_category", "custom")})
+        notes = []
+        if m.get("bio_compatible") and layer.get("gac_mode") == "BAC Biofiltration":
+            notes.append("BAC mode active — use unchlorinated backwash water only.")
+        if m.get("bw_tendency") == "high" and not layer.get("is_support"):
+            notes.append("High BW expansion tendency — verify freeboard is adequate.")
+        if m.get("bio_compatible") and not layer.get("is_support"):
+            notes.append("Bio-compatible media — supports nitrification / BAC activity.")
+        intel.append({
+            "layer":          i + 1,
+            "media":          layer.get("Type", "?"),
+            "function":       m.get("media_function", "—"),
+            "process_role":   m.get("process_role", "—"),
+            "bw_tendency":    m.get("bw_tendency", "—"),
+            "bio_compatible": m.get("bio_compatible", False),
+            "density_class":  m.get("density_class", "—"),
+            "notes":          notes,
+        })
+    return intel, validate_layer_order(enriched)
