@@ -317,8 +317,9 @@ def vessel_section_elevation(
                 arrowprops=_akw, zorder=8)
     for tx in (_x0, _x1):
         ax.plot([tx, tx], [ly2 - R*0.07, ly2 + R*0.07], color=_dc, lw=0.6, zorder=8)
+    _total_oo = _shell_len + 2 * h_d
     ax.text((_x0 + _x1) / 2, ly2 - R * 0.10,
-            f"Total (O/O)  {total_length_m:.2f} m",
+            f"Total (O/O)  {_total_oo:.2f} m",
             ha="center", va="top", fontsize=8.5, color="#000000", zorder=8)
 
     # Tangent line tick markers
@@ -392,11 +393,12 @@ def vessel_section_elevation(
     _today_tb = _dt_tb.date.today().strftime("%d-%b-%Y")
     _tb = (
         "AQUASIGHT™ MMF\n"
-        "─" * 38 + "\n"
-        f"Project:      {project_name or '—'}\n"
-        f"Doc No:       {doc_number or '—'}   Rev: {revision or 'A'}\n"
-        f"Prepared by:  {engineer or '—'}   Date: {_today_tb}\n"
-        "Scale: NTS    Units: m/mm   Sheet: 1/1"
+        + "─" * 38 + "\n"
+        + f"Project:      {project_name or '—'}\n"
+        + f"Doc No:       {doc_number or '—'}   Rev: {revision or 'A'}\n"
+        + f"Prepared by:  {engineer or '—'}   Date: {_today_tb}\n"
+        + "─" * 38 + "\n"
+        + "Scale: NTS    Units: m/mm   Sheet: 1/1"
     )
     fig.text(
         0.75, 0.02, _tb,
