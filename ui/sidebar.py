@@ -70,17 +70,17 @@ def render_sidebar(
     # ── Tab 1: Process ────────────────────────────────────────────────────
     with proc_tab:
         st.markdown("**Project**")
-        out["project_name"] = st.text_input("Project",     value="NPC SWRO 60 000 m³/d")
-        out["doc_number"]   = st.text_input("Doc. No.",    value="EXXXX-VWT-PCS-CAL-2001")
-        out["revision"]     = st.text_input("Revision",    value="A1")
-        out["client"]       = st.text_input("Client",      value="")
-        out["engineer"]     = st.text_input("Prepared by", value="Islam Shahine")
+        out["project_name"] = st.text_input("Project",     value="NPC SWRO 60 000 m³/d", key="project_name")
+        out["doc_number"]   = st.text_input("Doc. No.",    value="EXXXX-VWT-PCS-CAL-2001", key="doc_number")
+        out["revision"]     = st.text_input("Revision",    value="A1",             key="revision")
+        out["client"]       = st.text_input("Client",      value="",               key="client")
+        out["engineer"]     = st.text_input("Prepared by", value="Islam Shahine",  key="engineer")
 
         st.markdown("**Filter configuration**")
-        out["total_flow"] = st.number_input("Total plant flow (m³/h)", value=21000.0, step=100.0)
-        out["streams"]    = int(st.number_input("Streams", value=1, min_value=1))
-        out["n_filters"]  = int(st.number_input("Filters / stream", value=16, min_value=1))
-        out["redundancy"] = int(st.selectbox("Redundancy (per stream)", [0,1,2,3,4], index=1))
+        out["total_flow"] = st.number_input("Total plant flow (m³/h)", value=21000.0, step=100.0, key="total_flow")
+        out["streams"]    = int(st.number_input("Streams", value=1, min_value=1, key="streams"))
+        out["n_filters"]  = int(st.number_input("Filters / stream", value=16, min_value=1, key="n_filters"))
+        out["redundancy"] = int(st.selectbox("Redundancy (per stream)", [0,1,2,3,4], index=1, key="redundancy"))
         q_n = out["total_flow"] / out["streams"] / out["n_filters"]
         st.caption(
             f"Flow / filter (N): **{q_n:.1f} m³/h**  \n"
@@ -95,9 +95,9 @@ def render_sidebar(
         out["feed_temp"] = st.number_input("Feed temp — avg (°C)",   value=fp["temp_c"],        step=1.0, key="f_tmp")
         out["temp_low"]  = st.number_input("Feed temp — min (°C)",   value=15.0, step=1.0, key="t_low")
         out["temp_high"] = st.number_input("Feed temp — max (°C)",   value=35.0, step=1.0, key="t_high")
-        out["tss_low"]   = st.number_input("Feed TSS — low (mg/L)",  value=5.0,  step=1.0)
-        out["tss_avg"]   = st.number_input("Feed TSS — avg (mg/L)",  value=10.0, step=1.0)
-        out["tss_high"]  = st.number_input("Feed TSS — high (mg/L)", value=20.0, step=1.0)
+        out["tss_low"]   = st.number_input("Feed TSS — low (mg/L)",  value=5.0,  step=1.0, key="tss_low")
+        out["tss_avg"]   = st.number_input("Feed TSS — avg (mg/L)",  value=10.0, step=1.0, key="tss_avg")
+        out["tss_high"]  = st.number_input("Feed TSS — high (mg/L)", value=20.0, step=1.0, key="tss_high")
 
         st.markdown("**Water quality — backwash**")
         bw_preset = st.selectbox("BW preset", list(BW_PRESETS.keys()), index=0, key="bw_pre")
@@ -106,8 +106,8 @@ def render_sidebar(
         out["bw_temp"] = st.number_input("BW temp (°C)",      value=bp["temp_c"],       step=1.0, key="b_tmp")
 
         st.markdown("**Performance thresholds**")
-        out["velocity_threshold"] = st.number_input("Max LV (m/h)",   value=12.0)
-        out["ebct_threshold"]     = st.number_input("Min EBCT (min)", value=5.0)
+        out["velocity_threshold"] = st.number_input("Max LV (m/h)",   value=12.0, key="velocity_threshold")
+        out["ebct_threshold"]     = st.number_input("Min EBCT (min)", value=5.0,  key="ebct_threshold")
 
         st.markdown("**Cartridge filter**")
         out["cart_flow"]   = st.number_input("Design flow (m³/h)", value=float(out["total_flow"]),
@@ -137,18 +137,18 @@ def render_sidebar(
     # ── Tab 2: Vessel ─────────────────────────────────────────────────────
     with vessel_tab:
         st.markdown("**Vessel geometry**")
-        out["nominal_id"]   = st.number_input("Nominal internal diameter (m)", value=5.5, step=0.1)
-        out["total_length"] = st.number_input("Total length T/T (m)", value=24.3, step=0.1)
-        out["end_geometry"] = st.selectbox("End geometry", ["Elliptic 2:1", "Torispherical 10%"])
+        out["nominal_id"]   = st.number_input("Nominal internal diameter (m)", value=5.5, step=0.1, key="nominal_id")
+        out["total_length"] = st.number_input("Total length T/T (m)", value=24.3, step=0.1, key="total_length")
+        out["end_geometry"] = st.selectbox("End geometry", ["Elliptic 2:1", "Torispherical 10%"], key="end_geometry")
 
         st.markdown("**Mechanical (ASME)**")
-        out["material_name"]   = st.selectbox("Material", list(MATERIALS.keys()), index=3)
+        out["material_name"]   = st.selectbox("Material", list(MATERIALS.keys()), index=3, key="material_name")
         mat_info               = MATERIALS[out["material_name"]]
         out["mat_info"]        = mat_info
         st.caption(f"*{mat_info['description']}*")
-        out["design_pressure"] = st.number_input("Design pressure (bar)", value=7.0, step=0.5)
-        out["design_temp"]     = st.number_input("Design temperature (°C)", value=50.0, step=5.0)
-        out["corrosion"]       = st.number_input("Corrosion allowance (mm)", value=1.5, step=0.5)
+        out["design_pressure"] = st.number_input("Design pressure (bar)", value=7.0, step=0.5, key="design_pressure")
+        out["design_temp"]     = st.number_input("Design temperature (°C)", value=50.0, step=5.0, key="design_temp")
+        out["corrosion"]       = st.number_input("Corrosion allowance (mm)", value=1.5, step=0.5, key="corrosion")
         st.markdown("*Radiography (ASME UW-11)*")
         rc1, rc2 = st.columns(2)
         with rc1:
@@ -160,7 +160,7 @@ def render_sidebar(
         st.markdown("*Thickness overrides* (0 = use calculated)")
         out["ov_shell"]     = st.number_input("Shell t override (mm)", value=0.0, step=1.0, key="ov_sh")
         out["ov_head"]      = st.number_input("Head t override (mm)",  value=0.0, step=1.0, key="ov_hd")
-        out["steel_density"]= st.number_input("Steel density (kg/m³)", value=STEEL_DENSITY_KG_M3)
+        out["steel_density"]= st.number_input("Steel density (kg/m³)", value=STEEL_DENSITY_KG_M3, key="steel_density")
 
         st.markdown("**Internal protection**")
         out["protection_type"] = st.selectbox("Protection type", PROTECTION_TYPES, index=1, key="prot_type")
@@ -216,7 +216,7 @@ def render_sidebar(
     # ── Tab 3: Media ──────────────────────────────────────────────────────
     with media_tab:
         st.markdown("**Nozzle plate**")
-        out["nozzle_plate_h"] = st.number_input("Nozzle plate height (m)", value=1.0, step=0.05)
+        out["nozzle_plate_h"] = st.number_input("Nozzle plate height (m)", value=1.0, step=0.05, key="nozzle_plate_h")
         out["np_bore_dia"]    = st.number_input("Bore diameter (mm)", value=50.0,
                                                  step=5.0, min_value=10.0, key="np_bd")
         out["np_density"]     = st.number_input("Nozzle density (/m²)", value=NOZZLE_DENSITY_DEFAULT,
@@ -228,7 +228,7 @@ def render_sidebar(
                                                   value=0.0, step=1.0, key="np_ov")
 
         st.markdown("**Media layers**")
-        out["n_layers"] = int(st.selectbox("Layers", [1, 2, 3, 4, 5, 6], index=2))
+        out["n_layers"] = int(st.selectbox("Layers", [1, 2, 3, 4, 5, 6], index=2, key="n_layers"))
         _rho_water_sb   = water_properties(out["feed_temp"], out["feed_sal"])["density_kg_m3"]
         layers = []
         default_types = ["Gravel", "Fine sand", "Anthracite"]
@@ -311,8 +311,8 @@ def render_sidebar(
         out["layers"] = layers
 
         st.markdown("**Filtration performance**")
-        out["solid_loading"]          = st.number_input("Solid loading before BW (kg/m²)", value=1.5, step=0.1)
-        out["captured_solids_density"]= st.number_input("Captured solids density (kg/m³)", value=1020.0, step=10.0)
+        out["solid_loading"]          = st.number_input("Solid loading before BW (kg/m²)", value=1.5, step=0.1, key="solid_loading")
+        out["captured_solids_density"]= st.number_input("Captured solids density (kg/m³)", value=1020.0, step=10.0, key="captured_solids_density")
         alpha_9 = st.number_input("Specific cake resistance α (× 10⁹ m/kg)",
                                    value=0.0, step=5.0, min_value=0.0, key="alpha_res")
         out["alpha_specific"] = alpha_9 * 1e9
@@ -320,14 +320,14 @@ def render_sidebar(
     # ── Tab 4: BW ─────────────────────────────────────────────────────────
     with bw_tab:
         st.markdown("**BW hydraulics**")
-        out["collector_h"]    = st.number_input("BW outlet collector height (m)", value=4.2, step=0.1)
+        out["collector_h"]    = st.number_input("BW outlet collector height (m)", value=4.2, step=0.1, key="collector_h")
         out["freeboard_mm"]   = st.number_input("Min. freeboard (mm)", value=200, step=50,
                                                   min_value=50, key="fb_mm")
-        out["bw_velocity"]    = st.number_input("Proposed BW velocity (m/h)", value=30.0, step=5.0)
-        out["air_scour_rate"] = st.number_input("Air scour rate (m/h)", value=55.0, step=5.0)
+        out["bw_velocity"]    = st.number_input("Proposed BW velocity (m/h)", value=30.0, step=5.0, key="bw_velocity")
+        out["air_scour_rate"] = st.number_input("Air scour rate (m/h)", value=55.0, step=5.0, key="air_scour_rate")
 
         st.markdown("**BW sequence**")
-        out["bw_cycles_day"]  = int(st.number_input("BW cycles / filter / day", value=1, min_value=1))
+        out["bw_cycles_day"]  = int(st.number_input("BW cycles / filter / day", value=1, min_value=1, key="bw_cycles_day"))
         out["dp_trigger_bar"] = st.number_input("BW initiation ΔP setpoint (bar)", value=1.0,
                                                   step=0.1, min_value=0.01, key="dp_trig")
         out["bw_s_drain"]  = st.number_input("① Gravity drain (min)",       value=10, step=1, min_value=0, key="bws1")
@@ -353,12 +353,12 @@ def render_sidebar(
                                                         step=1.0, min_value=1.0, key="bw_hd")
 
         st.markdown("**Nozzles & supports**")
-        out["default_rating"]  = st.selectbox("Flange rating", FLANGE_RATINGS, index=1)
-        out["nozzle_stub_len"] = st.number_input("Nozzle stub length (mm)", value=350, step=50)
-        out["strainer_mat"]    = st.selectbox("Strainer material", list(STRAINER_WEIGHT_KG.keys()), index=0)
+        out["default_rating"]  = st.selectbox("Flange rating", FLANGE_RATINGS, index=1, key="default_rating")
+        out["nozzle_stub_len"] = st.number_input("Nozzle stub length (mm)", value=350, step=50, key="nozzle_stub_len")
+        out["strainer_mat"]    = st.selectbox("Strainer material", list(STRAINER_WEIGHT_KG.keys()), index=0, key="strainer_mat")
         out["air_header_dn"]   = st.number_input("Air scour header DN (mm)", value=200, step=50, key="ah_dn")
-        out["manhole_dn"]      = st.selectbox("Manhole size", list(MANHOLE_WEIGHT_KG.keys()), index=0)
-        out["n_manholes"]      = int(st.number_input("No. of manholes", value=1, min_value=0, step=1))
+        out["manhole_dn"]      = st.selectbox("Manhole size", list(MANHOLE_WEIGHT_KG.keys()), index=0, key="manhole_dn")
+        out["n_manholes"]      = int(st.number_input("No. of manholes", value=1, min_value=0, step=1, key="n_manholes"))
         out["support_type"]    = st.selectbox("Support type", SUPPORT_TYPES, key="sup_t")
         if "Saddle" in out["support_type"]:
             out["saddle_h"]             = st.number_input("Saddle height (m)", value=0.8, step=0.05, key="sad_h")

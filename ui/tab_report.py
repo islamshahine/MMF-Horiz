@@ -1,5 +1,8 @@
 """ui/tab_report.py — Report tab for AQUASIGHT™ MMF."""
 import streamlit as st
+from engine.project_io import (
+    inputs_to_json, json_to_inputs, get_widget_state_map, default_filename,
+)
 
 try:
     from docx import Document as _DocxDocument
@@ -79,6 +82,38 @@ def render_tab_report(inputs: dict, computed: dict):
                    + wt_sup["weight_all_supports_kg"]
                    + wt_int["weight_internals_kg"])
     _has_lining = lining_result["protection_type"] != "None"
+
+    # ── Project Save / Load ──────────────────────────────────────────────────
+    with st.expander("💾 Project Save / Load", expanded=False):
+        io_c1, io_c2 = st.columns(2)
+        with io_c1:
+            st.markdown("**Save current project**")
+            _json_str  = inputs_to_json(inputs)
+            _fname     = default_filename(inputs.get("project_name", "project"),
+                                          inputs.get("doc_number", ""))
+            st.download_button(
+                label="⬇ Download project JSON",
+                data=_json_str,
+                file_name=_fname,
+                mime="application/json",
+                use_container_width=True,
+            )
+            st.caption("Saves all inputs. Load the file in a future session to restore.")
+        with io_c2:
+            st.markdown("**Load project from file**")
+            _uploaded = st.file_uploader("Upload .mmf.json", type=["json"],
+                                          label_visibility="collapsed")
+            if _uploaded is not None:
+                try:
+                    _loaded  = json_to_inputs(_uploaded.read().decode("utf-8"))
+                    _wgt_map = get_widget_state_map(_loaded)
+                    for _wk, _wv in _wgt_map.items():
+                        st.session_state[_wk] = _wv
+                    st.success("Project loaded — refreshing…")
+                    st.rerun()
+                except Exception as _err:
+                    st.error(f"Load failed: {_err}")
+    st.divider()
 
     st.markdown("### Report builder")
     st.caption(
