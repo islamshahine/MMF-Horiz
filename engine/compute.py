@@ -147,9 +147,7 @@ def compute_all(inputs: dict) -> dict:
     grid_intensity       = inputs["grid_intensity"]
     steel_carbon_kg      = inputs["steel_carbon_kg"]
     concrete_carbon_kg   = inputs["concrete_carbon_kg"]
-    media_co2_gravel     = inputs["media_co2_gravel"]
-    media_co2_sand       = inputs["media_co2_sand"]
-    media_co2_anthracite = inputs["media_co2_anthracite"]
+    media_co2_by_type    = inputs.get("media_co2", {})
 
     # ── Block 2: Water properties ──────────────────────────────────────────
     feed_wp = water_properties(feed_temp, feed_sal)
@@ -554,9 +552,7 @@ def compute_all(inputs: dict) -> dict:
         _media_usd_kg[_mt] = (econ_media_gravel if _is_grav
                               else econ_media_anthracite if _is_anth
                               else econ_media_sand) / 1000.0
-        _media_co2_kg[_mt] = (media_co2_gravel if _is_grav
-                              else media_co2_anthracite if _is_anth
-                              else media_co2_sand)
+        _media_co2_kg[_mt] = media_co2_by_type.get(_mt, 0.05)
 
     econ_capex = capex_breakdown(
         weight_total_kg     = w_total,

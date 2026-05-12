@@ -434,8 +434,28 @@ def render_sidebar(
         out["grid_intensity"]       = st.number_input("Grid intensity (kgCO₂/kWh)", value=0.45, step=0.01, key="grid_co2")
         out["steel_carbon_kg"]      = st.number_input("Steel embodied carbon (kgCO₂/kg)", value=1.85, step=0.05, key="st_co2")
         out["concrete_carbon_kg"]   = st.number_input("Concrete embodied carbon (kgCO₂/kg)", value=0.13, step=0.01, key="con_co2")
-        out["media_co2_gravel"]     = st.number_input("Gravel carbon (kgCO₂/kg)", value=0.004, step=0.001, format="%.3f", key="mco_gr")
-        out["media_co2_sand"]       = st.number_input("Sand carbon (kgCO₂/kg)", value=0.006, step=0.001, format="%.3f", key="mco_sd")
-        out["media_co2_anthracite"] = st.number_input("Anthracite carbon (kgCO₂/kg)", value=0.15, step=0.01, key="mco_an")
+        _CARBON_DEFAULTS = {
+            "Gravel": 0.004, "Fine sand": 0.006, "Fine sand (extra)": 0.006,
+            "Coarse sand": 0.006, "Anthracite": 0.150, "Garnet": 0.010,
+            "MnO₂": 0.080, "MnO2": 0.080, "Limestone": 0.020,
+            "Medium GAC": 2.500, "Biodagene": 0.020, "Schist": 0.010,
+            "Pumice": 0.015, "FILTRALITE clay": 0.030, "Custom": 0.050,
+        }
+        st.markdown("**Media embodied carbon**")
+        st.caption("One value per media type in the current layer selection.")
+        _seen_media: list = []
+        for _layer in layers:
+            _mt = _layer.get("Type", "Custom")
+            if _mt not in _seen_media:
+                _seen_media.append(_mt)
+        _media_co2: dict = {}
+        for _mt in _seen_media:
+            _media_co2[_mt] = st.number_input(
+                f"{_mt} (kgCO₂/kg)",
+                value=_CARBON_DEFAULTS.get(_mt, 0.050),
+                min_value=0.0, step=0.001, format="%.3f",
+                key=f"carbon_{_mt.replace(' ', '_')}",
+            )
+        out["media_co2"] = _media_co2
 
     return out

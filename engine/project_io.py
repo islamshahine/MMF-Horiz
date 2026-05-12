@@ -68,8 +68,7 @@ WIDGET_KEY_MAP: dict[str, str] = {
     "labour_usd_filter_yr": "lab_usd", "chemical_cost_m3": "chem_m3",
     # Econ — carbon
     "grid_intensity": "grid_co2",    "steel_carbon_kg": "st_co2",
-    "concrete_carbon_kg": "con_co2", "media_co2_gravel": "mco_gr",
-    "media_co2_sand": "mco_sd",      "media_co2_anthracite": "mco_an",
+    "concrete_carbon_kg": "con_co2",
 }
 
 
@@ -98,6 +97,9 @@ def get_widget_state_map(inputs: dict) -> dict:
             continue
         if isinstance(val, (bool, int, float, str)):
             result[inp_key] = val
+    # Media carbon intensities — dynamic widget keys per selected type
+    for _mt, _co2 in inputs.get("media_co2", {}).items():
+        result[f"carbon_{_mt.replace(' ', '_')}"] = _co2
     # Layer widgets
     for i, layer in enumerate(inputs.get("layers", [])):
         result[f"lt_{i}"]  = layer.get("Type", "Fine sand")
