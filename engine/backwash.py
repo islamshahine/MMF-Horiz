@@ -3,12 +3,14 @@ engine/backwash.py
 ──────────────────
 Backwash and media expansion for horizontal multi-media filters.
 
-Four modules
-------------
+Key exports
+-----------
 1. backwash_hydraulics   BW pump flow, air-scour blower capacity
 2. bed_expansion         Richardson-Zaki fluidisation per layer
-3. pressure_drop         Ergun equation  — clean / moderate / dirty
-4. bw_sequence           BW step schedule, waste volumes & TSS
+3. solve_equivalent_velocity_for_target_expansion_pct  — inverse (target % → m/h)
+4. filter_bw_timeline_24h — idealised 24 h filter duty / BW Gantt data
+5. pressure_drop         Ergun equation  — clean / moderate / dirty
+6. bw_sequence           BW step schedule, waste volumes & TSS
 """
 
 import math
@@ -271,6 +273,207 @@ def bed_expansion(
         "bw_velocity_m_h":      bw_velocity_m_h,
         "water_temp_c":         water_temp_c,
         "any_warning":          any_warn,
+    }
+
+
+def solve_equivalent_velocity_for_target_expansion_pct(
+    layers: list,
+    target_expansion_pct: float,
+    water_temp_c: float = 27.0,
+    rho_water: float = _RHO_WATER_DEF,
+    u_scan_max_m_h: float = 200.0,
+    scan_step_m_h: float = 1.0,
+) -> dict:
+    """
+    Find superficial velocity (m/h) such that ``bed_expansion`` net total ≈ target %.
+
+    Uses the same Richardson–Zaki stack model as ``bed_expansion``.  In the MMF
+    workflow this velocity is applied as an **equivalent m³/m²·h** surrogate for the
+    air-scour / combined-phase check (see Backwash tab) — it is **not** a
+    rigorous two-fluid CFD solution.
+
+    Returns the **smallest** velocity in the scanned range that reaches the target
+    (first crossing when scanning upward), then refines by bisection.
+    """
+    tgt = float(target_expansion_pct)
+    note = (
+        "Equivalent superficial velocity from R–Z bed model (same surrogate as "
+        "combined-phase expansion table); vendor air-grid data may differ."
+    )
+
+    def _exp_pct(u: float) -> float:
+        return float(
+            bed_expansion(layers, u, water_temp_c, rho_water)["total_expansion_pct"]
+        )
+
+    if tgt <= 0.0:
+        e0 = _exp_pct(0.0)
+        return {
+            "ok": True,
+            "velocity_m_h": 0.0,
+            "expansion_at_velocity_pct": round(e0, 2),
+            "target_expansion_pct": tgt,
+            "bound_hit": "none",
+            "note": note + " Target ≤ 0 — returning zero velocity.",
+        }
+
+    e0 = _exp_pct(0.0)
+    if e0 >= tgt:
+        return {
+            "ok": True,
+            "velocity_m_h": 0.0,
+            "expansion_at_velocity_pct": round(e0, 2),
+            "target_expansion_pct": tgt,
+            "bound_hit": "none",
+            "note": note + " Target already met at u = 0.",
+        }
+
+    prev_u, prev_e = 0.0, e0
+    u_hi = None
+    u = scan_step_m_h
+    while u <= u_scan_max_m_h + 1e-9:
+        e = _exp_pct(u)
+        if e >= tgt:
+            u_hi = u
+            break
+        prev_u, prev_e = u, e
+        u += scan_step_m_h
+
+    if u_hi is None:
+        e_max = _exp_pct(u_scan_max_m_h)
+        return {
+            "ok": False,
+            "velocity_m_h": round(u_scan_max_m_h, 2),
+            "expansion_at_velocity_pct": round(e_max, 2),
+            "target_expansion_pct": tgt,
+            "bound_hit": "u_max",
+            "note": note + f" Target not reached by {u_scan_max_m_h:g} m/h "
+            f"(expansion {e_max:.1f} %).",
+        }
+
+    lo, hi = prev_u, u_hi
+    for _ in range(55):
+        mid = 0.5 * (lo + hi)
+        if _exp_pct(mid) >= tgt:
+            hi = mid
+        else:
+            lo = mid
+    u_sol = round(0.5 * (lo + hi), 3)
+    e_sol = _exp_pct(u_sol)
+
+    return {
+        "ok": True,
+        "velocity_m_h": u_sol,
+        "expansion_at_velocity_pct": round(e_sol, 2),
+        "target_expansion_pct": tgt,
+        "bound_hit": "none",
+        "note": note,
+    }
+
+
+def actual_m3m2h_to_nm3_m2h(
+    q_m3_per_m2_h: float,
+    temp_c: float,
+    pressure_gauge_bar: float,
+) -> float:
+    """
+    Ideal-gas correction: in-situ m³/(m²·h) → Nm³/(m²·h) at 0 °C, 1 atm.
+
+    Uses absolute pressure = atmospheric + gauge (bar).
+    """
+    p_abs_bar = 1.01325 + max(float(pressure_gauge_bar), 0.0)
+    t_k = max(float(temp_c) + 273.15, 200.0)
+    t_n = 273.15
+    p_n = 1.01325
+    return float(q_m3_per_m2_h) * (t_n / t_k) * (p_abs_bar / p_n)
+
+
+def filter_bw_timeline_24h(
+    n_filters_total: int,
+    t_cycle_h: float,
+    bw_duration_h: float,
+    horizon_h: float = 24.0,
+) -> dict:
+    """
+    Stylised filter duty chart: evenly staggered BW starts, repeating cycle.
+
+    Each filter operates for ``t_cycle_h`` then backwashes for ``bw_duration_h``.
+    Start phases are spread uniformly across ``period = t_cycle_h + bw_duration_h``
+    so plant demand is smoothed (idealised — site logic may differ).
+    """
+    if n_filters_total < 1:
+        return {
+            "filters": [],
+            "peak_concurrent_bw": 0,
+            "horizon_h": horizon_h,
+            "t_cycle_h": t_cycle_h,
+            "bw_duration_h": bw_duration_h,
+            "period_h": 0.0,
+            "note": "No filters — empty timeline.",
+        }
+
+    tc = float(t_cycle_h)
+    if not math.isfinite(tc) or tc <= 0:
+        tc = 24.0
+    bd = float(bw_duration_h)
+    if not math.isfinite(bd) or bd <= 0:
+        bd = 0.05
+
+    period = tc + bd
+    if period <= 0:
+        period = 24.0
+
+    filters: list[dict] = []
+    for i in range(int(n_filters_total)):
+        phi = (i / float(n_filters_total)) * period
+        bws: list[tuple[float, float]] = []
+        k_lo = int(math.floor((0.0 - phi - bd) / period)) - 1
+        k_hi = int(math.ceil((horizon_h - phi) / period)) + 2
+        for k in range(k_lo, k_hi + 1):
+            start = phi + k * period
+            t0 = max(0.0, start)
+            t1 = min(horizon_h, start + bd)
+            if t0 + 1e-9 < t1:
+                bws.append((t0, t1))
+        merged: list[tuple[float, float]] = []
+        for a, b in bws:
+            if merged and a <= merged[-1][1] + 1e-9:
+                merged[-1] = (merged[-1][0], max(merged[-1][1], b))
+            else:
+                merged.append((a, b))
+
+        segs: list[dict[str, float | str]] = []
+        cursor = 0.0
+        for a, b in merged:
+            if cursor + 1e-9 < a:
+                segs.append({"state": "operate", "t0": cursor, "t1": a})
+            segs.append({"state": "bw", "t0": a, "t1": b})
+            cursor = b
+        if cursor + 1e-9 < horizon_h:
+            segs.append({"state": "operate", "t0": cursor, "t1": horizon_h})
+
+        filters.append({"filter_index": i + 1, "segments": segs})
+
+    peak = 0
+    t = 0.0
+    while t < horizon_h - 1e-9:
+        c = 0
+        for f in filters:
+            for s in f["segments"]:
+                if s["state"] == "bw" and float(s["t0"]) <= t < float(s["t1"]):
+                    c += 1
+                    break
+        peak = max(peak, c)
+        t += 0.05
+
+    return {
+        "filters": filters,
+        "peak_concurrent_bw": int(peak),
+        "horizon_h": horizon_h,
+        "t_cycle_h": round(tc, 3),
+        "bw_duration_h": round(bd, 4),
+        "period_h": round(period, 3),
+        "note": "Idealised uniform staggering; align with feasibility matrix BW trains.",
     }
 
 

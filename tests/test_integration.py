@@ -59,7 +59,9 @@ _INPUTS = {
     "layers": _LAYERS,
     "solid_loading": 1.5, "captured_solids_density": 1020.0,
     "alpha_specific": 1e12, "dp_trigger_bar": 1.0,
-    "bw_velocity": 30.0, "air_scour_rate": 55.0, "bw_cycles_day": 1,
+    "bw_velocity": 30.0, "air_scour_rate": 55.0,
+    "air_scour_mode": "manual", "air_scour_target_expansion_pct": 20.0,
+    "bw_cycles_day": 1,
     "bw_s_drain": 10, "bw_s_air": 1, "bw_s_airw": 5,
     "bw_s_hw": 10, "bw_s_settle": 2, "bw_s_fill": 10, "bw_total_min": 38,
     "vessel_pressure_bar": 4.0, "blower_eta": 0.70, "blower_inlet_temp_c": 30.0,
@@ -69,6 +71,13 @@ _INPUTS = {
     "support_type": "Saddle", "saddle_h": 0.8, "saddle_contact_angle": 120.0,
     "leg_h": 1.2, "leg_section": 150.0, "base_plate_t": 20.0, "gusset_t": 12.0,
     "protection_type": "Rubber lining",
+    "external_environment": "Non-marine (industrial / inland)",
+    "seismic_design_category": "Not evaluated",
+    "seismic_importance_factor": 1.0,
+    "spectral_accel_sds": 0.0,
+    "site_class_asce": "B",
+    "basic_wind_ms": 0.0,
+    "wind_exposure": "C",
     "rubber_type_sel": "EPDM", "rubber_layers": 2,
     "rubber_cost_m2": 0.0, "rubber_labor_m2": 0.0,
     "epoxy_type_sel": "High-build epoxy", "epoxy_dft_um": 350.0,
@@ -125,8 +134,13 @@ class TestSmoke:
         """Core output sections must all be present in the result dict."""
         for key in ["mech", "bw_exp", "bw_dp", "bw_hyd", "bw_col",
                     "load_data", "econ_capex", "econ_opex", "econ_carbon",
-                    "feed_wp", "rho_feed", "q_per_filter"]:
+                    "feed_wp", "rho_feed", "q_per_filter", "env_structural"]:
             assert key in result, f"Missing key: {key}"
+
+    def test_env_structural_wind_zero_when_no_wind(self, result):
+        es = result["env_structural"]
+        assert es["basic_wind_ms"] == 0.0
+        assert es["wind_dynamic_pressure_pa"] == 0.0
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -231,6 +245,27 @@ class TestBackwashIntegration:
     def test_bw_q_positive(self, result):
         """BW flow must be positive."""
         assert result["bw_hyd"]["q_bw_m3h"] > 0
+
+    def test_bw_timeline_present(self, result):
+        """24 h duty chart data must match filter count."""
+        tl = result["bw_timeline"]
+        assert tl["horizon_h"] == pytest.approx(24.0, rel=0.01)
+        assert len(tl["filters"]) == 16
+        assert tl["peak_concurrent_bw"] >= 1
+
+
+def test_air_scour_auto_expansion_solve():
+    """Auto mode solves air rate from target expansion and sizes blower consistently."""
+    inp = dict(_INPUTS)
+    inp["air_scour_mode"] = "auto_expansion"
+    inp["air_scour_target_expansion_pct"] = 12.0
+    r = compute_all(inp)
+    sol = r["air_scour_solve"]
+    assert sol is not None
+    assert sol["ok"] is True
+    assert "nm3_m2_h" in sol
+    assert 9.0 <= sol["expansion_at_velocity_pct"] <= 15.0
+    assert r["bw_hyd"]["air_scour_rate_m_h"] == pytest.approx(sol["velocity_m_h"], rel=0.02)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

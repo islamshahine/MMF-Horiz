@@ -14,6 +14,8 @@ def render_tab_backwash(inputs: dict, computed: dict):
     bw_hyd       = computed["bw_hyd"]
     bw_seq       = computed["bw_seq"]
     bw_sizing    = computed["bw_sizing"]
+    air_scour_solve = computed.get("air_scour_solve")
+    bw_timeline  = computed.get("bw_timeline") or {}
     filt_cycles  = computed["filt_cycles"]
     feasibility_matrix = computed["feasibility_matrix"]
     _load_data_cyc     = computed["load_data"]
@@ -97,11 +99,13 @@ def render_tab_backwash(inputs: dict, computed: dict):
                 "Expansion (%)": L["expansion_pct"], "Status": _status,
             })
         st.dataframe(pd.DataFrame(exp_rows), use_container_width=True, hide_index=True)
-        exp_combined = _bed_exp(layers=layers, bw_velocity_m_h=air_scour_rate,
-                                water_temp_c=bw_temp, rho_water=rho_bw)
+        exp_combined = _bed_exp(
+            layers=layers,
+            bw_velocity_m_h=float(bw_hyd.get("air_scour_rate_m_h", air_scour_rate)),
+            water_temp_c=bw_temp, rho_water=rho_bw)
         st.markdown(
-            f"**Air + water combined phase** (equivalent velocity = "
-            f"{fmt(air_scour_rate, 'velocity_m_h', 0)}):"
+            f"**Air + water combined phase** (equivalent superficial velocity = "
+            f"{fmt(float(bw_hyd.get('air_scour_rate_m_h', air_scour_rate)), 'velocity_m_h', 0)}):"
         )
         comb_rows = [{
             "Media": L["media_type"],
@@ -134,6 +138,17 @@ def render_tab_backwash(inputs: dict, computed: dict):
         bh2.metric(f"BW LV actual ({ulbl('velocity_m_h')})",  fmt(bw_hyd['bw_lv_actual_m_h'], 'velocity_m_h', 1))
         bh3.metric(f"Air scour flow ({ulbl('flow_m3h')})",    fmt(bw_hyd['q_air_m3h'], 'flow_m3h', 0))
         bh4.metric(f"Blower est. ({ulbl('power_kw')})",       fmt(bw_hyd['p_blower_est_kw'], 'power_kw', 1))
+        if air_scour_solve is not None:
+            _nm = air_scour_solve.get("nm3_m2_h")
+            _nm_txt = f"{_nm:.1f}" if isinstance(_nm, (int, float)) else "—"
+            st.success(
+                f"**Auto-sized air scour** — target **{air_scour_solve['target_expansion_pct']:.1f} %** net expansion → "
+                f"**{fmt(float(bw_hyd.get('air_scour_rate_m_h', 0)), 'velocity_m_h', 2)}** "
+                f"in-situ m³/m²·h  (~**{_nm_txt}** Nm³/m²·h @ 0 °C, 1 atm).  "
+                f"Modelled expansion **{air_scour_solve['expansion_at_velocity_pct']:.1f} %**."
+                + ("" if air_scour_solve.get("ok") else "  ⚠️ Target not reached within solver scan limit.")
+            )
+            st.caption(air_scour_solve.get("note", ""))
         st.table(pd.DataFrame([
             ["Governing BW flow",
              f"{fmt(bw_hyd['q_bw_m3h'], 'flow_m3h', 1)} ({bw_hyd['bw_governs']})"],
@@ -279,6 +294,78 @@ def render_tab_backwash(inputs: dict, computed: dict):
             ["Recommended tank volume",
              f"{fmt(bw_sizing['v_tank_m3'], 'volume_m3', 0)}  (governs: {bw_sizing['tank_governs']})"],
         ], columns=["Parameter", "Value"]))
+
+    with st.expander("6 · Filter duty timeline (24 h schematic)", expanded=False):
+        st.caption(
+            "Each row is one filter. **Green** — operating (in service); **Red** — backwash window "
+            "(total sequence duration). Filters are **evenly staggered** over one "
+            "filtration-cycle + BW period — a smoothed idealisation; compare peak count to "
+            "**BW systems required** in the feasibility matrix."
+        )
+        _tl = bw_timeline
+        _frows = _tl.get("filters") or []
+        if not _frows:
+            st.info("No filter rows for timeline (check filter count).")
+        else:
+            try:
+                import plotly.graph_objects as go
+            except ImportError:
+                st.warning("Plotly is not installed — cannot render the duty chart.")
+            else:
+                fig = go.Figure()
+                colors = {"operate": "#27ae60", "bw": "#c0392b"}
+                legend_seen: set[str] = set()
+                for row in _frows:
+                    fid = int(row["filter_index"])
+                    y = f"Filter {fid}"
+                    for s in row["segments"]:
+                        stt = str(s["state"])
+                        t0 = float(s["t0"])
+                        t1 = float(s["t1"])
+                        dur = t1 - t0
+                        if dur <= 1e-9:
+                            continue
+                        leg = "Backwash" if stt == "bw" else "Operate / online"
+                        show = leg not in legend_seen
+                        legend_seen.add(leg)
+                        fig.add_trace(
+                            go.Bar(
+                                orientation="h",
+                                y=[y],
+                                x=[dur],
+                                base=t0,
+                                name=leg,
+                                marker_color=colors.get(stt, "#7f8c8d"),
+                                legendgroup=leg,
+                                showlegend=show,
+                                customdata=[[t1]],
+                                hovertemplate=(
+                                    "%{y}<br>%{base:.2f}–%{customdata[0]:.2f} h<br>"
+                                    + leg + "<extra></extra>"
+                                ),
+                            )
+                        )
+                _hor = float(_tl.get("horizon_h", 24.0))
+                fig.update_layout(
+                    barmode="overlay",
+                    height=max(360, min(920, 26 * len(_frows))),
+                    margin=dict(l=72, r=24, t=48, b=48),
+                    xaxis_title="Time (h)",
+                    title="24 h filter state (schematic stagger)",
+                    template="plotly_white",
+                )
+                fig.update_xaxes(range=[0.0, _hor])
+                st.plotly_chart(fig, use_container_width=True)
+                _pk = _tl.get("peak_concurrent_bw", 0)
+                st.metric(
+                    "Peak filters in BW (this stagger model)",
+                    str(int(_pk)) if _pk is not None else "—",
+                )
+                st.caption(
+                    f"Filtration cycle (design TSS) ≈ **{_tl.get('t_cycle_h', '—')}** h · "
+                    f"BW duration **{_tl.get('bw_duration_h', '—')}** h · "
+                    f"repeat period **{_tl.get('period_h', '—')}** h.  {_tl.get('note', '')}"
+                )
 
     st.divider()
     bm1, bm2, bm3, bm4 = st.columns(4)

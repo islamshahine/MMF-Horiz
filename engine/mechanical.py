@@ -691,6 +691,7 @@ def saddle_weight(
     base_plate_thickness_mm: float    = 20.0,
     gusset_thickness_mm: float        = 12.0,
     density_kg_m3: float              = STEEL_DENSITY_KG_M3,
+    n_supports_override: int | None   = None,
 ) -> dict:
     """
     Estimate support structure weight for a horizontal pressure vessel.
@@ -723,6 +724,8 @@ def saddle_weight(
     base_plate_thickness_mm: Thickness of base plate under each saddle/leg, mm
     gusset_thickness_mm    : Thickness of each triangular gusset plate, mm
     density_kg_m3          : Steel density, kg/m³
+    n_supports_override    : If set and support_type is **Saddle**, use this count
+                             instead of parsing the support_type string.
 
     Returns
     -------
@@ -742,7 +745,9 @@ def saddle_weight(
     t_g = gusset_thickness_mm     / 1000.0
 
     # Number of supports
-    if "2-support" in support_type or "2-saddle" in support_type.lower():
+    if n_supports_override is not None and "Saddle" in support_type:
+        n = max(1, min(int(n_supports_override), 12))
+    elif "2-support" in support_type or "2-saddle" in support_type.lower():
         n = 2
     elif "3-support" in support_type or "3-saddle" in support_type.lower():
         n = 3
@@ -946,6 +951,49 @@ def _n_ribs_from_width(piece_length_m: float, rib_pitch_m: float = 0.45) -> int:
     return max(2, round(piece_length_m / rib_pitch_m) + 1)
 
 
+def _zick_saddle_positions_raw(total_length_m: float, a_m: float, n: int) -> list[float]:
+    """Axial centres of saddle supports along shell (tangent x = 0 to x = L), metres."""
+    if n <= 0:
+        return []
+    if n == 1:
+        return [round(total_length_m / 2.0, 3)]
+    if n == 2:
+        return [round(a_m, 3), round(total_length_m - a_m, 3)]
+    inner_gap = (total_length_m - 2 * a_m) / (n - 1)
+    return [round(a_m + i * inner_gap, 3) for i in range(n)]
+
+
+def _nudge_saddle_centres_clear_nozzles(
+    xs: list[float],
+    shell_len: float,
+    saddle_half_w_m: float,
+) -> list[float]:
+    """
+    Shift saddle centroids along the shell so they do not sit under the schematic
+    vent (≈0.2L) or drain (≈0.8L) nozzle stubs on the GA elevation.
+    """
+    if shell_len <= 0 or not xs:
+        return xs
+    clearance = max(0.42, saddle_half_w_m * 1.25)
+    zones = [(0.2 * shell_len, clearance), (0.72 * shell_len, clearance)]
+    out: list[float] = []
+    for xc in sorted(xs):
+        xcf = float(xc)
+        for cz, cl in zones:
+            if abs(xcf - cz) < cl:
+                direction = -1.0 if xcf > shell_len * 0.5 else 1.0
+                step = max(0.05, 0.015 * shell_len)
+                for _ in range(80):
+                    xcf += direction * step
+                    if xcf < 0.05 * shell_len or xcf > 0.95 * shell_len:
+                        xcf = float(xc)
+                        break
+                    if all(abs(xcf - zc2) >= cl2 for zc2, cl2 in zones):
+                        break
+        out.append(round(xcf, 3))
+    return sorted(out)
+
+
 def saddle_design(
     total_length_m: float,
     vessel_od_m: float,
@@ -958,31 +1006,12 @@ def saddle_design(
     """
     Zick-based saddle positioning, section selection, and structural weight.
 
-    Saddle spacing (fraction of total length from each head tangent)
-    ---------------------------------------------------------------
-    α = 0.25   if L/D < 3   (short vessel — heads carry significant load)
-    α = 0.22   if L/D < 5   (medium vessel — balanced bending)
-    α = 0.20   if L/D ≥ 5   (long vessel — minimise mid-span moment)
+    If the requested ``n_saddles`` produces a reaction above catalogue capacity,
+    the model **automatically uses the smallest n** from the alternatives table
+    that fits (e.g. 3 saddles when 2 are overstressed).
 
-    Zick parameter a/R
-    ------------------
-    a = α × L  (distance from tangent line to saddle centre)
-    R = vessel_id / 2
-    Recommended a/R ≤ 0.5 for shell stresses within limits (Zick, 1951).
-
-    Section selection
-    -----------------
-    Vertical reaction per saddle = W_operating / n_saddles (uniform distribution).
-    Smallest catalogue entry whose capacity [t] ≥ reaction is chosen.
-    If reaction exceeds the maximum catalogue entry (350 t), the maximum is
-    flagged and the engineer should verify with a bespoke saddle calculation.
-
-    Saddle structural weight estimate
-    -----------------------------------
-    The saddle assembly consists of:
-      • n_ribs vertical rib sections (one catalogue piece each)
-      • Wear plate + base plate (estimated as +10 % of rib mass → rib_plate_factor)
-    n_ribs = f(vessel_id): 2 / 4 / 6 / 8 / 10  for ID ≤ 1.5 / 2.5 / 4.0 / 5.5 / > 5.5 m
+    Saddle centres are nudged along the shell to reduce overlap with schematic
+    vent (≈0.2L) and drain (≈0.72L) locations on the elevation GA.
     """
     # ── Spacing factor ────────────────────────────────────────────────────
     ld_ratio = total_length_m / vessel_od_m if vessel_od_m > 0 else 0.0
@@ -993,59 +1022,14 @@ def saddle_design(
     else:
         alpha = 0.20
 
-    a_m         = alpha * total_length_m        # saddle to nearest head tangent
-    saddle_1_m  = a_m                            # from left tangent
-    saddle_2_m  = total_length_m - a_m          # from left tangent
-    saddle_gap_m = saddle_2_m - saddle_1_m       # span between saddles
-
-    R_m     = vessel_id_m / 2.0
-    a_over_R = a_m / R_m if R_m > 0 else 0.0
-
-    # ── Zick bending moment parameters ───────────────────────────────────
-    # Moment at saddle (approximation — full Zick requires shell stress calcs)
-    # M_saddle = (W/2) × A  (for symmetric 2-saddle arrangement, conservative)
-    reaction_kg  = w_operating_kg / max(n_saddles, 1)
-    reaction_t   = reaction_kg / 1000.0
-    reaction_kN  = reaction_kg * 9.81 / 1000.0
-
-    m_saddle_kNm = reaction_kN * a_m            # simplified saddle moment
-
-    # ── Contact arc ───────────────────────────────────────────────────────
+    a_m = alpha * total_length_m
+    R_m = vessel_id_m / 2.0
     arc_m = math.pi * R_m * contact_angle_deg / 180.0
 
-    # ── Section selection ─────────────────────────────────────────────────
-    selected = None
-    overstressed = False
-    for cap_t, section, kg_m, piece_len, paint_m2m in SADDLE_CATALOGUE:
-        if cap_t >= reaction_t:
-            selected = (cap_t, section, kg_m, piece_len, paint_m2m)
-            break
-    if selected is None:
-        selected = SADDLE_CATALOGUE[-1]   # use maximum available
-        overstressed = True
-
-    cap_t, section, kg_m, piece_len, paint_m2m = selected
-    piece_wt_kg  = kg_m * piece_len
-    piece_paint_m2 = paint_m2m * piece_len
-
-    n_ribs        = _n_ribs_from_width(piece_len)
-    w_ribs_kg     = n_ribs * piece_wt_kg
-    w_saddle_kg   = w_ribs_kg * rib_plate_factor    # +10% for wear plate & base plate
-    w_two_saddles_kg = w_saddle_kg * n_saddles
-
-    # ── Base plate bearing (informational) ───────────────────────────────
-    # Base plate width ≈ 0.8 × OD, length = piece_len (saddle width)
-    base_w_m    = min(vessel_od_m * 0.8, 3.0)
-    base_area_m2 = base_w_m * piece_len
-    bearing_kPa  = (reaction_kN / base_area_m2) if base_area_m2 > 0 else 0.0
-
-    # ── Alternatives: what changes if user switches n_saddles ────────────────
-    # For 3-saddle: α applies only to the outer two; centre saddle at L/2.
-    # Positions reported as list so display code can show them.
-    alternatives = []
+    # ── Alternatives (reaction vs catalogue) ─────────────────────────────
+    alternatives: list[dict] = []
     max_catalogue_t = SADDLE_CATALOGUE[-1][0]
-    min_n_needed = math.ceil(w_operating_kg / 1000.0 / max_catalogue_t)
-    min_n_needed = max(min_n_needed, 1)
+    min_n_needed = max(1, math.ceil(w_operating_kg / 1000.0 / max_catalogue_t))
 
     for alt_n in range(1, 6):
         alt_reaction_t = w_operating_kg / alt_n / 1000.0
@@ -1059,90 +1043,148 @@ def saddle_design(
             alt_sel = SADDLE_CATALOGUE[-1]
 
         alt_cap_t, alt_sec, alt_kgm, alt_len, alt_paint = alt_sel
-        alt_pw   = alt_kgm * alt_len
+        alt_pw = alt_kgm * alt_len
         alt_n_rib = _n_ribs_from_width(alt_len)
-        alt_w_ea  = alt_pw * alt_n_rib * rib_plate_factor
+        alt_w_ea = alt_pw * alt_n_rib * rib_plate_factor
 
-        # Saddle positions for this alt_n
         if alt_n == 1:
             alt_positions = [round(total_length_m / 2.0, 3)]
         elif alt_n == 2:
             alt_positions = [round(a_m, 3), round(total_length_m - a_m, 3)]
         else:
-            # Outer two at α×L from each end; remainder evenly spaced inside
-            outer = round(a_m, 3)
             inner_gap = (total_length_m - 2 * a_m) / (alt_n - 1)
             alt_positions = [round(a_m + i * inner_gap, 3) for i in range(alt_n)]
 
         alternatives.append({
-            "n_saddles":      alt_n,
-            "reaction_t":     round(alt_reaction_t, 2),
-            "reaction_kN":    round(alt_reaction_t * 1000 * 9.81 / 1000, 0),
+            "n_saddles": alt_n,
+            "reaction_t": round(alt_reaction_t, 2),
+            "reaction_kN": round(alt_reaction_t * 1000 * 9.81 / 1000, 0),
             "fits_catalogue": fits,
-            "capacity_t":     alt_cap_t,
-            "section":        alt_sec,
+            "capacity_t": alt_cap_t,
+            "section": alt_sec,
             "struct_wt_ea_kg": round(alt_w_ea, 0),
             "struct_wt_total_kg": round(alt_w_ea * alt_n, 0),
-            "positions_m":    alt_positions,
-            "is_current":     alt_n == n_saddles,
+            "positions_m": alt_positions,
+            "is_current": False,
         })
 
-    # ── Per-saddle catalogue table (for BOM display) ──────────────────────
+    n_requested = max(1, int(n_saddles))
+    user_fits = next(
+        (a["fits_catalogue"] for a in alternatives if a["n_saddles"] == n_requested),
+        False,
+    )
+    n_eff = n_requested if user_fits else next(
+        (a["n_saddles"] for a in alternatives if a["fits_catalogue"]),
+        n_requested,
+    )
+    auto_escalated_saddles = n_eff != n_requested
+
+    for a in alternatives:
+        a["is_current"] = a["n_saddles"] == n_eff
+
+    saddle_hw = max(vessel_od_m * _SADDLE_WIDTH_RATIO * 0.55, total_length_m * 0.012)
+    raw_positions = _zick_saddle_positions_raw(total_length_m, a_m, n_eff)
+    saddle_positions_m = _nudge_saddle_centres_clear_nozzles(
+        raw_positions, total_length_m, saddle_hw,
+    )
+    saddle_1_m = saddle_positions_m[0]
+    saddle_2_m = (
+        saddle_positions_m[-1] if len(saddle_positions_m) > 1 else saddle_positions_m[0]
+    )
+    saddle_spacings_m = [
+        round(saddle_positions_m[i + 1] - saddle_positions_m[i], 3)
+        for i in range(len(saddle_positions_m) - 1)
+    ]
+    saddle_gap_m = (
+        saddle_spacings_m[0]
+        if len(saddle_spacings_m) == 1
+        else (min(saddle_spacings_m) if saddle_spacings_m else 0.0)
+    )
+
+    a_for_zick = min(saddle_positions_m[0], total_length_m - saddle_positions_m[-1])
+    a_over_R = a_for_zick / R_m if R_m > 0 else 0.0
+
+    reaction_kg = w_operating_kg / max(n_eff, 1)
+    reaction_t = reaction_kg / 1000.0
+    reaction_kN = reaction_kg * 9.81 / 1000.0
+    m_saddle_kNm = reaction_kN * a_for_zick
+
+    selected = None
+    overstressed = False
+    for cap_t, section, kg_m, piece_len, paint_m2m in SADDLE_CATALOGUE:
+        if cap_t >= reaction_t:
+            selected = (cap_t, section, kg_m, piece_len, paint_m2m)
+            break
+    if selected is None:
+        selected = SADDLE_CATALOGUE[-1]
+        overstressed = True
+
+    cap_t, section, kg_m, piece_len, paint_m2m = selected
+    piece_wt_kg = kg_m * piece_len
+    piece_paint_m2 = paint_m2m * piece_len
+
+    n_ribs = _n_ribs_from_width(piece_len)
+    w_ribs_kg = n_ribs * piece_wt_kg
+    w_saddle_kg = w_ribs_kg * rib_plate_factor
+    w_two_saddles_kg = w_saddle_kg * n_eff
+
+    base_w_m = min(vessel_od_m * 0.8, 3.0)
+    base_area_m2 = base_w_m * piece_len
+    bearing_kPa = (reaction_kN / base_area_m2) if base_area_m2 > 0 else 0.0
+
     catalogue_rows = []
     for c_t, c_sec, c_kgm, c_len, c_paint in SADDLE_CATALOGUE:
         c_pw = c_kgm * c_len
-        c_n  = _n_ribs_from_width(c_len)
+        c_n = _n_ribs_from_width(c_len)
         catalogue_rows.append({
-            "Capacity (t)":    c_t,
-            "Section":         c_sec,
-            "kg/m":            c_kgm,
-            "Piece L (m)":     c_len,
-            "Piece wt (kg)":   round(c_pw, 1),
-            "Ribs/saddle":     c_n,
+            "Capacity (t)": c_t,
+            "Section": c_sec,
+            "kg/m": c_kgm,
+            "Piece L (m)": c_len,
+            "Piece wt (kg)": round(c_pw, 1),
+            "Ribs/saddle": c_n,
             "Struct. wt/saddle (kg)": round(c_pw * c_n * rib_plate_factor, 1),
-            "Paint m²/piece":  round(c_paint * c_len, 2),
-            "Selected":        "✅" if c_sec == section else "",
+            "Paint m²/piece": round(c_paint * c_len, 2),
+            "Selected": "✅" if c_sec == section else "",
         })
 
     return {
-        # Geometry
-        "ld_ratio":             round(ld_ratio,   2),
-        "alpha":                alpha,
-        "alpha_pct":            int(alpha * 100),
-        "saddle_1_from_left_m": round(saddle_1_m,  3),
-        "saddle_2_from_left_m": round(saddle_2_m,  3),
-        "saddle_gap_m":         round(saddle_gap_m, 3),
-        "a_over_R":             round(a_over_R,    3),
-        "a_over_R_ok":          a_over_R <= 0.5,
-        "contact_angle_deg":    contact_angle_deg,
-        "arc_m":                round(arc_m,       3),
-        # Loads
-        "n_saddles":            n_saddles,
-        "w_operating_kg":       round(w_operating_kg, 1),
-        "reaction_kg":          round(reaction_kg,    1),
-        "reaction_t":           round(reaction_t,     3),
-        "reaction_kN":          round(reaction_kN,    1),
-        "m_saddle_kNm":         round(m_saddle_kNm,  1),
-        # Section
-        "capacity_t":           cap_t,
-        "section":              section,
-        "kg_per_m":             kg_m,
-        "piece_length_m":       piece_len,
-        "piece_weight_kg":      round(piece_wt_kg,  1),
-        "piece_paint_m2":       round(piece_paint_m2, 2),
-        "n_ribs":               n_ribs,
-        "overstressed":         overstressed,
-        # Saddle weight
-        "w_ribs_kg":            round(w_ribs_kg,        1),
-        "w_one_saddle_kg":      round(w_saddle_kg,      1),
-        "w_two_saddles_kg":     round(w_two_saddles_kg, 1),
-        # Base plate
-        "base_width_m":         round(base_w_m,     3),
-        "base_area_m2":         round(base_area_m2, 3),
-        "bearing_kPa":          round(bearing_kPa,  1),
-        # Tables
-        "catalogue_rows":       catalogue_rows,
-        # Alternatives
-        "alternatives":         alternatives,
-        "min_n_needed":         min_n_needed,
+        "ld_ratio": round(ld_ratio, 2),
+        "alpha": alpha,
+        "alpha_pct": int(alpha * 100),
+        "saddle_1_from_left_m": round(saddle_1_m, 3),
+        "saddle_2_from_left_m": round(saddle_2_m, 3),
+        "saddle_gap_m": round(saddle_gap_m, 3),
+        "saddle_positions_m": saddle_positions_m,
+        "saddle_spacings_m": saddle_spacings_m,
+        "n_saddles_requested": n_requested,
+        "n_saddles_effective": n_eff,
+        "auto_escalated_saddles": auto_escalated_saddles,
+        "a_over_R": round(a_over_R, 3),
+        "a_over_R_ok": a_over_R <= 0.5,
+        "contact_angle_deg": contact_angle_deg,
+        "arc_m": round(arc_m, 3),
+        "n_saddles": n_eff,
+        "w_operating_kg": round(w_operating_kg, 1),
+        "reaction_kg": round(reaction_kg, 1),
+        "reaction_t": round(reaction_t, 3),
+        "reaction_kN": round(reaction_kN, 1),
+        "m_saddle_kNm": round(m_saddle_kNm, 1),
+        "capacity_t": cap_t,
+        "section": section,
+        "kg_per_m": kg_m,
+        "piece_length_m": piece_len,
+        "piece_weight_kg": round(piece_wt_kg, 1),
+        "piece_paint_m2": round(piece_paint_m2, 2),
+        "n_ribs": n_ribs,
+        "overstressed": overstressed,
+        "w_ribs_kg": round(w_ribs_kg, 1),
+        "w_one_saddle_kg": round(w_saddle_kg, 1),
+        "w_two_saddles_kg": round(w_two_saddles_kg, 1),
+        "base_width_m": round(base_w_m, 3),
+        "base_area_m2": round(base_area_m2, 3),
+        "bearing_kPa": round(bearing_kPa, 1),
+        "catalogue_rows": catalogue_rows,
+        "alternatives": alternatives,
+        "min_n_needed": min_n_needed,
     }

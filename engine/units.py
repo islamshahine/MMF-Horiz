@@ -385,6 +385,7 @@ INPUT_QUANTITY_MAP = {
     "steel_density":      "density_kg_m3",
     "bw_head_mwc":        "pressure_mwc",
     "static_head":        "pressure_mwc",
+    "basic_wind_ms":      "velocity_m_s",
     "saddle_h":           "length_m",
     "leg_h":              "length_m",
     "tss_low":            "concentration_mg_l",

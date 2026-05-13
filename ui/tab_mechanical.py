@@ -35,6 +35,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
     total_length   = computed["total_length"]
     vessel_areas   = computed["vessel_areas"]
     bw_exp         = computed["bw_exp"]
+    env_structural = computed.get("env_structural") or {}
 
     layers          = inputs["layers"]
     shell_radio     = inputs["shell_radio"]
@@ -53,6 +54,10 @@ def render_tab_mechanical(inputs: dict, computed: dict):
     redundancy      = inputs["redundancy"]
     nozzle_plate_h  = inputs["nozzle_plate_h"]
     collector_h     = inputs["collector_h"]
+
+    _ec = str(env_structural.get("external_coating_note") or "").strip()
+    _iso = str(env_structural.get("paint_system_iso_note") or "").strip()
+    _ext_coating_drawing = (_ec + (" | " + _iso if _iso else ""))[:140]
 
     st.subheader("Vessel geometry & mechanical")
 
@@ -296,23 +301,36 @@ def render_tab_mechanical(inputs: dict, computed: dict):
 
     with st.expander("8 · Saddle positioning & section selection", expanded=True):
         st.markdown("### Positioning (Zick method)")
+        if wt_saddle.get("auto_escalated_saddles"):
+            st.warning(
+                f"Support count was **raised from {wt_saddle.get('n_saddles_requested')} to "
+                f"{wt_saddle.get('n_saddles_effective')} saddles** so reaction fits the "
+                "catalogue. Empty weight and operating loads were rebalanced automatically."
+            )
+        _mh_lay = computed.get("manhole_layout") or {}
         _aov_color = "🟢" if wt_saddle["a_over_R_ok"] else "🔴"
         sp1, sp2, sp3, sp4 = st.columns(4)
         sp1.metric("L / D ratio",        f"{wt_saddle['ld_ratio']:.2f}")
         sp2.metric("Spacing factor α",   f"{wt_saddle['alpha_pct']} %")
-        sp3.metric("Saddle 1 from head", fmt(wt_saddle["saddle_1_from_left_m"], "length_m", 3))
-        sp4.metric("Saddle 2 from head", fmt(wt_saddle["saddle_2_from_left_m"], "length_m", 3))
+        sp3.metric("Saddles (effective)", str(wt_saddle.get("n_saddles_effective", wt_saddle["n_saddles"])))
+        _pos_m = wt_saddle.get("saddle_positions_m") or []
+        sp4.metric("Saddle chainage (m)", ", ".join(f"{p:.2f}" for p in _pos_m[:6]) or "—")
         st.table(pd.DataFrame([
             ["Total vessel length (T/T)", fmt(total_length, "length_m", 3)],
             ["Vessel OD",                  fmt(mech["od_m"], "length_m", 4)],
             ["L / D ratio",                f"{wt_saddle['ld_ratio']:.2f}"],
             ["Spacing factor α",          f"{wt_saddle['alpha_pct']} %"],
-            ["Saddle 1 — from left head", fmt(wt_saddle["saddle_1_from_left_m"], "length_m", 3)],
-            ["Saddle 2 — from left head", fmt(wt_saddle["saddle_2_from_left_m"], "length_m", 3)],
-            ["Span between saddles",      fmt(wt_saddle["saddle_gap_m"], "length_m", 3)],
+            ["Saddle 1 — from left tangent", fmt(wt_saddle["saddle_1_from_left_m"], "length_m", 3)],
+            ["Saddle last — from left tangent", fmt(wt_saddle["saddle_2_from_left_m"], "length_m", 3)],
+            ["Centre-to-centre spacings",
+             "   ".join(f"{s*1000:.0f} mm" for s in (wt_saddle.get("saddle_spacings_m") or [])) or "—"],
+            ["Min. span (between adjacent)", fmt(wt_saddle["saddle_gap_m"], "length_m", 3)],
             ["a / R  (Zick parameter)",   f"{wt_saddle['a_over_R']:.3f}  {_aov_color}"],
             ["Contact arc length (120°)", fmt(wt_saddle["arc_m"], "length_m", 3)],
             ["Simplified saddle moment",  fmt(wt_saddle["m_saddle_kNm"], "moment_knm", 0)],
+            ["Manholes (user / recommended)",
+             f"{_mh_lay.get('n_user', '—')} / {_mh_lay.get('n_recommended', '—')}  "
+             f"(rule: ≈1 per 7.5 m shell)"],
         ], columns=["Parameter", "Value"]))
         st.markdown("### Vertical reaction & section selection")
         _over = wt_saddle["overstressed"]
@@ -395,6 +413,23 @@ def render_tab_mechanical(inputs: dict, computed: dict):
             collector_h_m    = collector_h,
             bw_exp           = bw_exp,
             show_expansion   = _show_exp_mech,
+            cyl_len          = cyl_len,
+            real_id          = real_id,
+            end_geometry     = end_geometry,
+            project_name     = project_name,
+            doc_number       = doc_number,
+            revision         = revision,
+            engineer         = engineer,
+            nozzle_schedule  = nozzle_sched,
+            mech             = mech,
+            wt_np            = wt_np,
+            wt_saddle        = wt_saddle,
+            protection_type  = protection_type,
+            lining_result    = lining_result,
+            material_name    = material_name,
+            external_coating_note=_ext_coating_drawing,
+            manhole_layout   = computed.get("manhole_layout"),
+            show_fabrication_panel=True,
         )
         st.pyplot(_sec_fig_mech, use_container_width=True)
         _sec_buf_mech = io.BytesIO()
@@ -492,7 +527,24 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                 collector_h_m    = collector_h,
                 bw_exp           = bw_exp,
                 show_expansion   = True,
-                figsize          = (10, 4.5),
+                figsize          = (13.5, 5.2),
+                cyl_len          = cyl_len,
+                real_id          = real_id,
+                end_geometry     = end_geometry,
+                project_name     = project_name,
+                doc_number       = doc_number,
+                revision         = revision,
+                engineer         = engineer,
+                nozzle_schedule  = nozzle_sched,
+                mech             = mech,
+                wt_np            = wt_np,
+                wt_saddle        = wt_saddle,
+                protection_type  = protection_type,
+                lining_result    = lining_result,
+                material_name    = material_name,
+                external_coating_note=_ext_coating_drawing,
+                manhole_layout   = computed.get("manhole_layout"),
+                show_fabrication_panel=True,
             )
             st.pyplot(_ds_fig, use_container_width=True)
             st.markdown("### Media Bed")
@@ -541,6 +593,36 @@ def render_tab_mechanical(inputs: dict, computed: dict):
             ["Corrosion allow.", fmt(corrosion, "length_mm", 1)],
             ["Internal coating", protection_type],
         ], columns=["Standard / Item", "Reference / Value"]))
+
+    with st.expander("12 · Seismic, wind & external painting", expanded=False):
+        st.info(
+            "These inputs live under **Vessel** in the sidebar (*External environment & structural loads*). "
+            "They document seismic/wind **design basis** and **external** paint philosophy for datasheets and GA. "
+            "They do **not** replace structural calculation of anchors, saddles, or wind on platforms."
+        )
+        u1, u2 = st.columns(2)
+        with u1:
+            st.markdown("**Seismic (reference)**")
+            st.table(pd.DataFrame(
+                env_structural.get("seismic_table_rows", []),
+                columns=["Item", "Value"],
+            ))
+        with u2:
+            st.markdown("**Wind**")
+            st.table(pd.DataFrame(
+                env_structural.get("wind_table_rows", []),
+                columns=["Item", "Value"],
+            ))
+        st.markdown("**External painting (outside steel)**")
+        st.table(pd.DataFrame(
+            env_structural.get("paint_table_rows", []),
+            columns=["Item", "Value"],
+        ))
+        st.caption(
+            f"Indicative velocity pressure at V = {fmt(float(inputs.get('basic_wind_ms') or 0), 'velocity_m_s', 1)}: "
+            f"{env_structural.get('wind_dynamic_pressure_kpa', 0):.3f} kPa  "
+            "(½ρV² only — not ASCE 7 factored pressure)."
+        )
 
     st.divider()
     mm1, mm2, mm3, mm4 = st.columns(4)

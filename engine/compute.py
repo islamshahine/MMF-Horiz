@@ -13,6 +13,9 @@ from engine.nozzles    import estimate_nozzle_schedule
 from engine.backwash   import (
     backwash_hydraulics, bed_expansion, pressure_drop,
     bw_sequence, filtration_cycle, bw_system_sizing,
+    solve_equivalent_velocity_for_target_expansion_pct,
+    actual_m3m2h_to_nm3_m2h,
+    filter_bw_timeline_24h,
 )
 from engine.collector_ext import collector_check_ext
 from engine.coating    import internal_surface_areas, lining_cost
@@ -23,6 +26,7 @@ from engine.economics  import (
     global_benchmark_comparison,
 )
 from engine.validators import REFERENCE_FALLBACK_INPUTS, validate_inputs
+from engine.environment_loads import compute_environment_structural
 
 
 def compute_all(inputs: dict) -> dict:
@@ -107,6 +111,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         dp_trigger_bar  = _work["dp_trigger_bar"]
         bw_velocity     = _work["bw_velocity"]
         air_scour_rate  = _work["air_scour_rate"]
+        air_scour_mode  = str(_work.get("air_scour_mode", "manual")).strip().lower()
+        air_scour_target_pct = float(_work.get("air_scour_target_expansion_pct", 20.0))
         bw_cycles_day   = _work["bw_cycles_day"]
         bw_s_drain      = _work["bw_s_drain"]
         bw_s_air        = _work["bw_s_air"]
@@ -298,10 +304,32 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         )
 
         # ── Block 5: Backwash ─────────────────────────────────────────────────────
+        air_scour_solve = None
+        air_scour_used = float(air_scour_rate)
+        if air_scour_mode == "auto_expansion":
+            air_scour_solve = solve_equivalent_velocity_for_target_expansion_pct(
+                layers=layers,
+                target_expansion_pct=air_scour_target_pct,
+                water_temp_c=bw_temp,
+                rho_water=rho_bw,
+            )
+            air_scour_used = float(air_scour_solve["velocity_m_h"])
+            air_scour_solve = {
+                **air_scour_solve,
+                "nm3_m2_h": round(
+                    actual_m3m2h_to_nm3_m2h(
+                        air_scour_used,
+                        float(blower_inlet_temp_c),
+                        float(vessel_pressure_bar),
+                    ),
+                    2,
+                ),
+            }
+
         bw_hyd = backwash_hydraulics(
             filter_area_m2=avg_area,
             bw_rate_m_h=bw_velocity,
-            air_scour_rate_m_h=air_scour_rate,
+            air_scour_rate_m_h=air_scour_used,
             filtration_flow_m3h=q_per_filter,
         )
         bw_col = collector_check_ext(
@@ -435,6 +463,28 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                     feasibility_matrix[_sc][_t_key][_tss_key] = _feas_kpis(
                         _t_cyc, _bw_dur_h, _nact, streams
                     )
+
+        _tl_tcyc = 24.0
+        try:
+            _fc_tr = filt_cycles["N"]["tss_results"]
+            _tr_m = next(
+                (r for r in _fc_tr if abs(float(r["TSS (mg/L)"]) - float(tss_avg)) < 1e-6),
+                None,
+            )
+            if _tr_m is None and _fc_tr:
+                _tr_m = _fc_tr[len(_fc_tr) // 2]
+            if _tr_m is not None:
+                _v_tc = float(_tr_m["Cycle duration (h)"])
+                if _math.isfinite(_v_tc) and _v_tc > 0:
+                    _tl_tcyc = _v_tc
+        except (KeyError, IndexError, TypeError, ValueError):
+            pass
+        bw_timeline = filter_bw_timeline_24h(
+            n_filters_total=int(streams * n_filters),
+            t_cycle_h=_tl_tcyc,
+            bw_duration_h=_bw_dur_h,
+            horizon_h=24.0,
+        )
 
         # ── Cartridge design ──────────────────────────────────────────────────────
         _cart_mu_cP = mu_feed * 1000.0
@@ -572,6 +622,54 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             n_saddles         = wt_sup["n_supports"],
             contact_angle_deg = saddle_contact_angle,
         )
+        n_s_eff = int(wt_saddle.get("n_saddles_effective", wt_sup["n_supports"]))
+        n_s_user = int(wt_sup["n_supports"])
+        if "Saddle" in str(support_type) and n_s_eff != n_s_user:
+            wt_sup = saddle_weight(
+                vessel_od_m=mech["od_m"],
+                support_type=support_type,
+                saddle_height_m=saddle_h,
+                leg_height_m=leg_h,
+                leg_section_mm=leg_section,
+                base_plate_thickness_mm=base_plate_t,
+                gusset_thickness_mm=gusset_t,
+                density_kg_m3=steel_density,
+                n_supports_override=n_s_eff,
+            )
+            w_sup = wt_sup["weight_all_supports_kg"]
+            w_total = w_body + w_np + w_sup + w_noz + w_int
+            wt_oper = operating_weight(
+                layers=layers,
+                avg_area_m2=avg_area,
+                vessel_id_m=real_id,
+                cyl_len_m=cyl_len,
+                h_dish_m=h_dish,
+                end_type=end_geometry,
+                w_empty_kg=w_total,
+                n_supports=n_s_eff,
+                rho_water_kg_m3=rho_feed,
+                w_lining_kg=lining_result["weight_kg"],
+            )
+            wt_saddle = saddle_design(
+                total_length_m=total_length,
+                vessel_od_m=mech["od_m"],
+                vessel_id_m=real_id,
+                w_operating_kg=wt_oper["w_operating_kg"],
+                n_saddles=n_s_eff,
+                contact_angle_deg=saddle_contact_angle,
+            )
+
+        _mh_n = max(0, int(n_manholes))
+        _mh_rec = max(1, min(6, int(_math.ceil(float(cyl_len) / 7.5))))
+        manhole_layout = {
+            "n_user": _mh_n,
+            "n_recommended": _mh_rec,
+            "cyl_len_m": round(float(cyl_len), 4),
+            "positions_shell_m": [
+                round(float(cyl_len) * (i + 1) / (_mh_n + 1), 3)
+                for i in range(_mh_n)
+            ],
+        }
 
         # ── Economics ─────────────────────────────────────────────────────────────
         _n_total_vessels = streams * n_filters
@@ -787,6 +885,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                              "Hydraulic status": _lv_label, "EBCT status": _eb_label,
                              "Overall": _overall_label})
 
+        env_structural = compute_environment_structural(_work)
+
         # ── Return dict ───────────────────────────────────────────────────────────
         return {
             # water
@@ -811,6 +911,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             "wt_sup": wt_sup, "wt_int": wt_int,
             # backwash
             "bw_hyd": bw_hyd, "bw_col": bw_col, "bw_exp": bw_exp, "bw_seq": bw_seq,
+            "air_scour_solve": air_scour_solve,
+            "bw_timeline": bw_timeline,
             # TSS balance
             "m_sol_low": m_sol_low, "w_tss_low": w_tss_low, "m_daily_low": m_daily_low,
             "m_sol_avg": m_sol_avg, "w_tss_avg": w_tss_avg, "m_daily_avg": m_daily_avg,
@@ -833,6 +935,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             "vessel_areas": vessel_areas, "lining_result": lining_result,
             # operating weight & saddle
             "wt_oper": wt_oper, "wt_saddle": wt_saddle,
+            "manhole_layout": manhole_layout,
             # material (pass-through for tabs)
             "material_name": material_name, "mat_info": mat_info,
             # economics
@@ -847,4 +950,5 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             "rob_rows": rob_rows,
             "input_validation": input_validation,
             "compute_used_reference_fallback": (not input_validation["valid"]),
+            "env_structural": env_structural,
         }

@@ -317,6 +317,85 @@ def render_sidebar(
             out["ceramic_dft_um"] = 500.0; out["ceramic_coats"] = 2
             out["ceramic_cost_m2"] = 0.0; out["ceramic_labor_m2"] = DEFAULT_LABOR_CERAMIC_M2
 
+        st.markdown("**External environment & structural loads**")
+        out["external_environment"] = st.selectbox(
+            "External atmosphere (outside painting)",
+            [
+                "Non-marine (industrial / inland)",
+                "Marine / coastal (aggressive external)",
+            ],
+            index=0,
+            key="ext_env",
+        )
+        st.caption(
+            "Sets the **external** paint philosophy (ISO 12944 corrosivity band). "
+            "Internal protection remains under *Internal protection* above."
+        )
+        eq1, eq2 = st.columns(2)
+        with eq1:
+            out["seismic_design_category"] = st.selectbox(
+                "Seismic design category (SDC)",
+                [
+                    "Not evaluated",
+                    "SDC A",
+                    "SDC B",
+                    "SDC C",
+                    "SDC D",
+                    "SDC E",
+                    "SDC F",
+                ],
+                index=0,
+                key="sdc_sel",
+            )
+            out["seismic_importance_factor"] = st.number_input(
+                "Seismic importance factor Ie",
+                min_value=0.5,
+                max_value=1.5,
+                value=1.0,
+                step=0.05,
+                format="%.2f",
+                key="Ie_seismic",
+                help="Per IBC risk category (Table 1.5-2). Typical Category II → Ie = 1.0.",
+            )
+        with eq2:
+            out["spectral_accel_sds"] = st.number_input(
+                "S_DS (short-period spectral accel., g)",
+                min_value=0.0,
+                max_value=3.0,
+                value=0.0,
+                step=0.05,
+                format="%.2f",
+                key="sds_inp",
+                help="From site hazard / geotech; leave 0 if seismic not in scope.",
+            )
+            out["site_class_asce"] = st.selectbox(
+                "Site class (ASCE 7)",
+                ["A", "B", "C", "D", "E", "F"],
+                index=1,
+                key="site_cl",
+            )
+        wn1, wn2 = st.columns(2)
+        with wn1:
+            _lbl_wv = f"Basic wind speed — 3 s gust ({unit_label('velocity_m_s', unit_system)})"
+            _def_wv = display_value(40.0, "velocity_m_s", unit_system)
+            _stp_wv = display_value(2.0, "velocity_m_s", unit_system)
+            out["basic_wind_ms"] = st.number_input(
+                _lbl_wv,
+                value=_def_wv,
+                step=_stp_wv,
+                min_value=0.0,
+                key="basic_wind_ms",
+                help="Ultimate wind speed for structural loads; use 0 to omit from summary.",
+            )
+        with wn2:
+            out["wind_exposure"] = st.selectbox(
+                "Wind exposure category (ASCE 7)",
+                ["B", "C", "D"],
+                index=1,
+                key="wind_exp",
+                help="B — urban/suburban, C — open, D — flat/coastal open.",
+            )
+
     # ── Tab 3: Media ──────────────────────────────────────────────────────
     with media_tab:
         st.markdown("**Nozzle plate**")
@@ -465,9 +544,49 @@ def render_sidebar(
         _def_bwv = display_value(30.0, "velocity_m_h", unit_system)
         _stp_bwv = display_value(5.0, "velocity_m_h", unit_system)
         out["bw_velocity"]    = st.number_input(_lbl_bwv, value=_def_bwv, step=_stp_bwv, key="bw_velocity")
+
+        out["air_scour_mode"] = st.radio(
+            "Air scour sizing",
+            options=["manual", "auto_expansion"],
+            format_func=lambda m: (
+                "Manual air scour rate (m³/m²·h)"
+                if m == "manual"
+                else "Auto — target net bed expansion (%)"
+            ),
+            horizontal=True,
+            key="air_scour_mode_sel",
+        )
+        if out["air_scour_mode"] == "auto_expansion":
+            out["air_scour_target_expansion_pct"] = float(st.number_input(
+                "Target net bed expansion (air scour surrogate) (%)",
+                value=20.0,
+                min_value=0.0, max_value=80.0, step=1.0,
+                key="air_scour_target_expansion_pct",
+                help="Engine solves equivalent m³/m²·h using the same Richardson–Zaki stack "
+                     "as the combined-phase table on the Backwash tab (not CFD).",
+            ))
+            st.caption(
+                "Blower sizing uses the **solved** rate. Switch to manual to type your own air rate."
+            )
+        else:
+            out["air_scour_target_expansion_pct"] = float(
+                st.session_state.get("air_scour_target_expansion_pct", 20.0)
+            )
+
+        _manual_air_disabled = out["air_scour_mode"] == "auto_expansion"
         _lbl_asr = f"Air scour rate ({unit_label('velocity_m_h', unit_system)})"
         _def_asr = display_value(55.0, "velocity_m_h", unit_system)
-        out["air_scour_rate"] = st.number_input(_lbl_asr, value=_def_asr, step=_stp_bwv, key="air_scour_rate")
+        out["air_scour_rate"] = st.number_input(
+            _lbl_asr,
+            value=_def_asr,
+            step=_stp_bwv,
+            key="air_scour_rate",
+            disabled=_manual_air_disabled,
+            help=(
+                "Ignored while Auto expansion is selected — rate comes from the solver."
+                if _manual_air_disabled else None
+            ),
+        )
 
         st.markdown("**BW sequence**")
         out["bw_cycles_day"]  = int(st.number_input("BW cycles / filter / day", value=1, min_value=1, key="bw_cycles_day"))
@@ -512,6 +631,10 @@ def render_sidebar(
         out["air_header_dn"]   = st.number_input("Air scour header DN (mm)", value=200, step=50, key="ah_dn")
         out["manhole_dn"]      = st.selectbox("Manhole size", list(MANHOLE_WEIGHT_KG.keys()), index=0, key="manhole_dn")
         out["n_manholes"]      = int(st.number_input("No. of manholes", value=1, min_value=0, step=1, key="n_manholes"))
+        st.caption(
+            "Rule of thumb: **one manhole per ~7–8 m** of cylindrical shell for access; "
+            "the Mechanical tab shows a recommended count from the computed shell length."
+        )
         out["support_type"]    = st.selectbox("Support type", SUPPORT_TYPES, key="sup_t")
         if "Saddle" in out["support_type"]:
             _lbl_sh = f"Saddle height ({unit_label('length_m', unit_system)})"

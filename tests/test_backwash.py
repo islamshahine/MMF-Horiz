@@ -34,6 +34,9 @@ from engine.backwash import (
     pressure_drop,
     backwash_hydraulics,
     collector_check,
+    solve_equivalent_velocity_for_target_expansion_pct,
+    actual_m3m2h_to_nm3_m2h,
+    filter_bw_timeline_24h,
 )
 
 
@@ -285,3 +288,31 @@ class TestCollectorCheck:
         r30 = collector_check(standard_layers, 1.0, 4.2, 30.0)
         r50 = collector_check(standard_layers, 1.0, 4.2, 50.0)
         assert r50["freeboard_m"] < r30["freeboard_m"]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Air scour auto-size & duty timeline
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestAirScourSolveAndTimeline:
+
+    def test_solve_hits_target_sand_stack(self, standard_layers):
+        tgt = 15.0
+        sol = solve_equivalent_velocity_for_target_expansion_pct(
+            standard_layers, tgt, water_temp_c=27.0, rho_water=1025.0,
+        )
+        assert sol["ok"]
+        assert sol["velocity_m_h"] > 0
+        assert abs(sol["expansion_at_velocity_pct"] - tgt) < 2.5
+
+    def test_nm3_conversion_order_of_magnitude(self):
+        q = 55.0
+        nm = actual_m3m2h_to_nm3_m2h(q, 30.0, 0.0)
+        assert nm > 0
+        assert 40.0 < nm < q
+
+    def test_timeline_peak_and_rows(self):
+        tl = filter_bw_timeline_24h(4, t_cycle_h=8.0, bw_duration_h=38 / 60.0)
+        assert len(tl["filters"]) == 4
+        assert tl["peak_concurrent_bw"] >= 1
+        assert tl["horizon_h"] == 24.0

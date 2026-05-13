@@ -336,13 +336,26 @@ def render_tab_report(inputs: dict, computed: dict):
         if s_saddle:
             _sec("Saddle Design (Zick Method)")
             _sd = wt_saddle
+            _pos_sd = _sd.get("saddle_positions_m") or [
+                _sd.get("saddle_1_from_left_m"),
+                _sd.get("saddle_2_from_left_m"),
+            ]
+            _pos_sd = [p for p in _pos_sd if p is not None]
+            _pos_txt = ", ".join(
+                fmt(float(p), "length_m", 3) for p in _pos_sd
+            ) or "—"
+            _sp_sd = _sd.get("saddle_spacings_m") or []
+            _sp_txt = (
+                " / ".join(f"{float(s) * 1000:.0f} mm" for s in _sp_sd)
+                if _sp_sd else "—"
+            )
             _tbl([
                 ("Saddle spacing factor α",
                  f"{_sd['alpha']:.2f}"),
-                ("Saddle 1 position",
-                 f"{fmt(_sd['saddle_1_from_left_m'], 'length_m', 3)} from left T/L"),
-                ("Saddle 2 position",
-                 f"{fmt(_sd['saddle_2_from_left_m'], 'length_m', 3)} from left T/L"),
+                ("Saddle positions (from left T/L)",
+                 f"{_pos_txt} m"),
+                ("Centre-to-centre spacings",
+                 _sp_txt),
                 ("Reaction per saddle",       fmt(_sd["reaction_t"], "mass_t", 3)),
                 ("Section selected",          str(_sd.get("section", "—"))),
                 ("Section capacity",          (
@@ -612,12 +625,24 @@ def render_tab_report(inputs: dict, computed: dict):
 
     if s_saddle:
         _sd2 = wt_saddle
+        _pos2 = _sd2.get("saddle_positions_m") or [
+            _sd2.get("saddle_1_from_left_m"),
+            _sd2.get("saddle_2_from_left_m"),
+        ]
+        _pos2 = [p for p in _pos2 if p is not None]
+        _pos2_txt = ", ".join(fmt(float(p), "length_m", 3) for p in _pos2) or "—"
+        _sp2 = _sd2.get("saddle_spacings_m") or []
+        _sp2_txt = (
+            " / ".join(f"{float(s) * 1000:.0f} mm" for s in _sp2)
+            if _sp2 else "—"
+        )
         st.markdown("### C5 · Saddle Design")
         st.markdown(f"""
 | Parameter | Value |
 |---|---|
 | Spacing factor α | {_sd2['alpha']:.2f} |
-| Saddle 1 / Saddle 2 position | {fmt(_sd2['saddle_1_from_left_m'], 'length_m', 3)} / {fmt(_sd2['saddle_2_from_left_m'], 'length_m', 3)} from left T/L |
+| Saddle positions (from left T/L, m) | {_pos2_txt} |
+| Centre-to-centre spacings | {_sp2_txt} |
 | Reaction per saddle | {fmt(_sd2['reaction_t'], 'mass_t', 3)} |
 | Section selected | {_sd2.get('section', '—')} — capacity {fmt(float(_sd2['capacity_t']), 'mass_t', 3) if isinstance(_sd2.get('capacity_t'), (int, float)) else _sd2.get('capacity_t', '—')} |
 | Status | {"OVERSTRESSED" if _sd2.get('overstressed') else "OK"} |
