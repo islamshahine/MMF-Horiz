@@ -30,21 +30,20 @@ The app was refactored from a 3,059-line monolithic `app.py` into a clean modula
 ```
 app.py
   │
-  ├─ with ctx:  render_sidebar(...) → inputs: dict
+  ├─ with ctx:  render_sidebar(...) → inputs: dict   ← display units in, SI out
+  │               └─ convert_inputs(out, unit_system) converts widget values to SI
   │
-  ├─ compute_all(inputs) → computed: dict
+  ├─ compute_all(inputs) → computed: dict             ← always receives SI
   │
   ├─ with ctx:  status badges (uses inputs + computed)
   │
   └─ with main:
-        render_tab_filtration(inputs, computed)
-        render_tab_backwash(inputs, computed)
-        render_tab_mechanical(inputs, computed)
-        render_tab_media(inputs, computed)
-        render_tab_economics(inputs, computed)
-        render_tab_assessment(inputs, computed)
-        render_tab_report(inputs, computed)
+        render_tab_*(inputs, computed)               ← fmt()/ulbl()/dv() at display boundary
 ```
+
+**Unit system rule:** engine always works in SI. Conversion happens only at the UI boundary:
+- Input widgets → `si_value()` / `convert_inputs()` before engine
+- Computed SI results → `fmt()` / `dv()` / `ulbl()` before displaying
 
 ### Layout
 
@@ -74,10 +73,12 @@ st.columns([1, 4])
 
 ```
 MMF-Horiz/
-├── app.py                    # 182 lines — thin orchestrator
+├── app.py                    # ~186 lines — thin orchestrator
 │
 ├── engine/                   # Pure Python calculation modules (no Streamlit)
 │   ├── compute.py            # compute_all(inputs) → computed dict (816 lines)
+│   ├── units.py              # Unit conversion: display_value/si_value/unit_label/
+│   │                         #   format_value/convert_inputs — metric ↔ imperial
 │   ├── water.py              # Water properties (density, viscosity vs T, S)
 │   ├── geometry.py           # segment_area(), dish_volume() for horizontal vessel
 │   ├── process.py            # filter_loading() — flow per filter per scenario
@@ -95,16 +96,30 @@ MMF-Horiz/
 │   ├── sensitivity.py        # OAT tornado analysis: run_sensitivity() — 9 params × 4 outputs
 │   └── pdf_report.py         # ReportLab PDF generation: build_pdf() (requires reportlab)
 │
-└── ui/                       # Streamlit rendering modules
-    ├── sidebar.py            # render_sidebar(...) → inputs dict (439 lines, all widgets keyed)
-    ├── helpers.py            # show_alert() severity box
-    ├── tab_filtration.py     # 💧 Filtration tab (226 lines)
-    ├── tab_backwash.py       # 🔄 Backwash tab (225 lines)
-    ├── tab_mechanical.py     # ⚙️ Mechanical tab (513 lines)
-    ├── tab_media.py          # 🧱 Media tab (174 lines) + intelligence expander
-    ├── tab_economics.py      # 💰 Economics tab (199 lines)
-    ├── tab_assessment.py     # 🎯 Assessment tab (210 lines) + OAT tornado chart
-    └── tab_report.py         # 📄 Report tab (693 lines) + JSON save/load + PDF download
+├── ui/                       # Streamlit rendering modules
+│   ├── sidebar.py            # render_sidebar(...) → inputs dict (531 lines, all widgets keyed)
+│   │                         #   Unit toggle (metric/imperial radio) at top; on_change callback
+│   │                         #   clears unit-dependent widget keys; return path calls convert_inputs()
+│   ├── helpers.py            # fmt(si_val, qty, decimals) · ulbl(qty) · dv(si_val, qty)
+│   │                         #   · show_alert() — all read unit_system from st.session_state
+│   ├── tab_filtration.py     # 💧 Filtration tab
+│   ├── tab_backwash.py       # 🔄 Backwash tab
+│   ├── tab_mechanical.py     # ⚙️ Mechanical tab
+│   ├── tab_media.py          # 🧱 Media tab + intelligence expander
+│   ├── tab_economics.py      # 💰 Economics tab
+│   ├── tab_assessment.py     # 🎯 Assessment tab + OAT tornado chart
+│   └── tab_report.py         # 📄 Report tab + JSON save/load + PDF download
+│
+└── tests/                    # pytest regression suite — 261 passed, 2 skipped
+    ├── conftest.py           # Shared fixtures (standard_layers)
+    ├── test_water.py         # Water property functions
+    ├── test_process.py       # filter_loading(), filter_area()
+    ├── test_mechanical.py    # ASME thickness, weight, saddle
+    ├── test_backwash.py      # Ergun ΔP, bed expansion, Wen-Yu, BW hydraulics
+    ├── test_economics.py     # CRF, CAPEX, OPEX, carbon
+    ├── test_media.py         # Media catalogue, collector_max_height
+    ├── test_units.py         # Unit conversion — 83 tests, all quantities
+    └── test_integration.py   # compute_all() end-to-end smoke (25 tests)
 ```
 
 ---
@@ -224,6 +239,8 @@ Added in the refactor session following the initial modular architecture:
 | 4 | **PDF report** — ReportLab Platypus, 8 selectable sections, download alongside Word | `engine/pdf_report.py`, `ui/tab_report.py` |
 | 5 | **Media engineering intelligence** — 4 new media types, name aliases (MnO₂/Coarse sand/…), arrangement validation, per-layer role/BW/bio cards | `engine/media.py`, `ui/tab_media.py` |
 | 6 | **Proper CRF-based LCOW** — `capital_recovery_factor(i, n)` replaces hardcoded 0.08; discount_rate wired end-to-end | `engine/economics.py`, `engine/compute.py`, `ui/tab_economics.py` |
+| 7 | **Metric / Imperial unit toggle** — radio at top of sidebar; engine always receives/returns SI; `fmt()`/`ulbl()`/`dv()` at every display boundary; `convert_inputs()` converts widget values to SI before engine; `_on_unit_system_change()` clears widget keys on switch | `engine/units.py`, `ui/sidebar.py`, `ui/helpers.py`, all tab files |
+| 8 | **Regression test suite** — 261 tests (2 skipped for Gravel support media); pure pytest, no mocking, no Streamlit; covers water, process, mechanical, backwash, economics, media, unit conversion, integration | `tests/` |
 
 ## Remaining Enhancement Areas
 
@@ -232,7 +249,6 @@ Added in the refactor session following the initial modular architecture:
 3. **Vendor nozzle catalogue** — replace estimated nozzle schedule with lookup from real vendor data (e.g., Wavin, Aqseptence)
 4. **Live BW scheduler** — Gantt-style chart showing filter availability and BW train allocation over 24 h
 5. **Media cost database** — pull current media prices from a configurable data source
-6. **Unit toggle** — imperial / metric display toggle (currently metric-only)
-7. **Fouling index model** — incorporate SDI/MFI feed water quality index to auto-adjust `solid_loading`
-8. **Collector hydraulics** — detailed lateral collector ΔP sizing (currently only height check)
-9. **Air scour optimisation** — auto-size air scour rate to achieve target bed expansion
+6. **Fouling index model** — incorporate SDI/MFI feed water quality index to auto-adjust `solid_loading`
+7. **Collector hydraulics** — detailed lateral collector ΔP sizing (currently only height check)
+8. **Air scour optimisation** — auto-size air scour rate to achieve target bed expansion

@@ -32,6 +32,7 @@ from engine.nozzles import FLANGE_RATINGS
 
 from engine.compute import compute_all
 from ui.sidebar import render_sidebar
+from ui.helpers import fmt
 from ui.tab_filtration  import render_tab_filtration
 from ui.tab_backwash    import render_tab_backwash
 from ui.tab_mechanical  import render_tab_mechanical
@@ -152,7 +153,7 @@ with ctx:
         _cols_status[i % 2].markdown(f"{icon} {label}")
     if _bw_col["media_loss_risk"]:
         st.warning(f"⚠️ Media carryover risk — max safe BW rate: "
-                   f"{_bw_col['max_safe_bw_m_h']:.1f} m/h")
+                   f"{fmt(_bw_col['max_safe_bw_m_h'], 'velocity_m_h', 1)}")
     st.caption("AQUASIGHT™ | Proprietary")
 
 with main:
