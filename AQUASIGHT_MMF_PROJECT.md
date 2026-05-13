@@ -80,6 +80,7 @@ MMF-Horiz/
 ├── engine/                   # Pure Python calculation modules (no Streamlit)
 │   ├── compute.py            # compute_all(inputs) → computed dict (~810 lines)
 │   ├── comparison.py         # Design A vs B: diff_value, compare_designs, COMPARISON_METRICS (~110 lines)
+│   ├── compare.py            # Public facade: re-exports comparison + compare_numeric, compare_severity, generate_delta_summary
 │   ├── units.py              # Unit catalogue: display_value/si_value/unit_label/
 │   │                         #   format_value, convert_inputs, transpose_display_value;
 │   │                         #   extended qty keys (e.g. pressure_kpa, energy_kwh_m3,

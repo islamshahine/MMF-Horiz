@@ -12,6 +12,8 @@ tests/
   test_process.py       Filter loading, flow distribution by scenario
   test_economics.py     CAPEX, OPEX, CRF, carbon footprint
   test_integration.py   End-to-end compute_all() smoke test
+  test_comparison.py    compare_designs / diff_value / metric matrix
+  test_compare.py       engine.compare facade (aliases + severity + summary)
 ```
 
 ## Running tests
