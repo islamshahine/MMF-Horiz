@@ -144,15 +144,56 @@ def render_sidebar(
         _stp_flow = display_value(100.0, "flow_m3h", unit_system)
         out["total_flow"] = st.number_input(_lbl_flow, value=_def_flow, step=_stp_flow, key="total_flow")
         out["streams"]    = int(st.number_input("Streams", value=1, min_value=1, key="streams"))
-        out["n_filters"]  = int(st.number_input("Filters / stream", value=16, min_value=1, key="n_filters"))
-        out["redundancy"] = int(st.selectbox("Redundancy (per stream)", [0,1,2,3,4], index=1, key="redundancy"))
+        out["n_filters"]  = int(st.number_input(
+            "Total physical number of filters / stream",
+            value=16,
+            min_value=1,
+            key="n_filters",
+        ))
+        if "hydraulic_assist" not in st.session_state:
+            st.session_state["hydraulic_assist"] = 0
+        out["hydraulic_assist"] = int(st.selectbox(
+            "Standby filters (physical / stream)",
+            options=[0, 1, 2, 3, 4],
+            format_func=lambda k: (
+                "0 — no spare (all installed in hydraulic N)"
+                if k == 0
+                else f"{k} spare(s) — design N = installed − {k} (N+{k} bank)"
+            ),
+            key="hydraulic_assist",
+        ))
+        _n_design_raw = int(out["n_filters"]) - int(out["hydraulic_assist"])
+        # Drive display from session_state: fixed key + value= is stale after first run.
+        st.session_state["sidebar_n_design_display"] = str(_n_design_raw)
+        st.text_input(
+            "Calculated N filters / stream",
+            disabled=True,
+            key="sidebar_n_design_display",
+            help=(
+                "Total physical number of filters / stream minus "
+                "Standby filters (physical / stream). "
+                "This is design **N** for flow / filter (hydraulics use max(1, N) if invalid)."
+            ),
+        )
+        out["redundancy"] = int(st.selectbox(
+            "Outage depth modelled (per stream)",
+            [0, 1, 2, 3, 4],
+            index=1,
+            key="redundancy",
+            help="Hydraulic rows N, N-1, … for this many **extra** installed units offline "
+            "(beyond standby). Standby filters are excluded from design N but remain on the BW chart.",
+        ))
         _tf_si = si_value(out["total_flow"], "flow_m3h", unit_system)
-        q_n_si = _tf_si / out["streams"] / out["n_filters"]
+        _n_design = max(1, out["n_filters"] - out["hydraulic_assist"])
+        q_n_si = _tf_si / out["streams"] / max(_n_design, 1)
         q_n_disp = display_value(q_n_si, "flow_m3h", unit_system)
         st.caption(
-            f"Flow / filter (N): **{q_n_disp:.1f} {unit_label('flow_m3h', unit_system)}**  \n"
-            f"Redundancy = {out['redundancy']} standby filter(s) per stream  \n"
-            f"Total active filters (N scenario): **{out['streams'] * out['n_filters']} plant-wide**"
+            f"Flow / filter (**design N** = **{_n_design}** paths/stream): **{q_n_disp:.1f} "
+            f"{unit_label('flow_m3h', unit_system)}**  \n"
+            f"Physical installed / stream: **{out['n_filters']}** (BW duty chart rows)  \n"
+            f"Standby (not in hydraulic N): **{out['hydraulic_assist']}** · "
+            f"outage levels modelled: **{out['redundancy']}**  \n"
+            f"Total physical plant-wide: **{out['streams'] * out['n_filters']}**"
         )
 
         st.markdown("**Water quality — feed**")
@@ -545,6 +586,18 @@ def render_sidebar(
         _stp_bwv = display_value(5.0, "velocity_m_h", unit_system)
         out["bw_velocity"]    = st.number_input(_lbl_bwv, value=_def_bwv, step=_stp_bwv, key="bw_velocity")
 
+        _lbl_aw = f"③ Air + low-rate water — superficial water ({unit_label('velocity_m_h', unit_system)})"
+        _def_aw = display_value(12.5, "velocity_m_h", unit_system)
+        out["airwater_step_water_m_h"] = st.number_input(
+            _lbl_aw,
+            value=_def_aw,
+            step=_stp_bwv,
+            min_value=0.0,
+            key="airwater_step_water_m_h",
+            help="Fixed water leg during the air+water step. Auto air-scour sizing solves the **air** "
+                 "equivalent for target expansion at (this rate + air).",
+        )
+
         out["air_scour_mode"] = st.radio(
             "Air scour sizing",
             options=["manual", "auto_expansion"],
@@ -603,6 +656,17 @@ def render_sidebar(
         out["bw_total_min"] = (out["bw_s_drain"] + out["bw_s_air"] + out["bw_s_airw"]
                                + out["bw_s_hw"] + out["bw_s_settle"] + out["bw_s_fill"])
         st.metric("Total BW duration", f"{out['bw_total_min']} min")
+        out["bw_timeline_stagger"] = st.radio(
+            "24 h duty chart stagger (Backwash tab)",
+            options=["feasibility_trains", "uniform"],
+            format_func=lambda x: (
+                "From feasibility BW trains (recommended)"
+                if x == "feasibility_trains"
+                else "Uniform (legacy comparison only)"
+            ),
+            horizontal=True,
+            key="bw_timeline_stagger_sel",
+        )
 
         st.markdown("**Equipment sizing**")
         out["vessel_pressure_bar"]  = st.number_input(

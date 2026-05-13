@@ -37,6 +37,7 @@ from engine.backwash import (
     solve_equivalent_velocity_for_target_expansion_pct,
     actual_m3m2h_to_nm3_m2h,
     filter_bw_timeline_24h,
+    timeline_plant_operating_hours,
 )
 
 
@@ -162,9 +163,13 @@ class TestBedExpansion:
         result = bed_expansion(standard_layers, 30.0, 27.0, 1025.0)
         assert result["total_expanded_m"] >= result["total_settled_m"]
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-# Ergun pressure drop
+    def test_bed_expansion_per_layer_is_support_passthrough(self, standard_layers):
+        """Layer dict is_support mirrors inputs for UI / integrity rules."""
+        result = bed_expansion(standard_layers, 30.0, 27.0, 1025.0)
+        ly = result["layers"]
+        assert ly[0]["is_support"] is True
+        assert ly[1]["is_support"] is False
+        assert ly[2]["is_support"] is False
 # ═════════════════════════════════════════════════════════════════════════════
 
 class TestErgunPressureDrop:
@@ -312,7 +317,72 @@ class TestAirScourSolveAndTimeline:
         assert 40.0 < nm < q
 
     def test_timeline_peak_and_rows(self):
-        tl = filter_bw_timeline_24h(4, t_cycle_h=8.0, bw_duration_h=38 / 60.0)
+        tl = filter_bw_timeline_24h(
+            4,
+            t_cycle_h=8.0,
+            bw_duration_h=38 / 60.0,
+            stagger_model="uniform",
+            bw_trains=None,
+        )
         assert len(tl["filters"]) == 4
         assert tl["peak_concurrent_bw"] >= 1
         assert tl["horizon_h"] == 24.0
+        assert tl["stagger_model"] == "uniform"
+
+    def test_timeline_feasibility_trains_peak_capped(self):
+        tl = filter_bw_timeline_24h(
+            16,
+            t_cycle_h=8.0,
+            bw_duration_h=38 / 60.0,
+            bw_trains=3,
+            stagger_model="feasibility_trains",
+            sim_demand=2.1,
+        )
+        assert tl["stagger_model"] == "feasibility_trains"
+        assert tl["bw_trains"] == 3
+        assert tl["peak_concurrent_bw"] <= 3
+
+    def test_timeline_operating_hours_sum_to_horizon(self):
+        tl = filter_bw_timeline_24h(
+            4,
+            t_cycle_h=10.0,
+            bw_duration_h=0.5,
+            horizon_h=24.0,
+            stagger_model="uniform",
+            bw_trains=None,
+        )
+        st = timeline_plant_operating_hours(
+            tl["filters"],
+            horizon_h=24.0,
+            n_design_online_total=4,
+        )
+        assert st["n_physical_timeline"] == 4
+        s = (
+            st["hours_operating_eq_design_n_h"]
+            + st["hours_operating_gt_design_n_h"]
+            + st["hours_operating_eq_n_minus_1_h"]
+            + st["hours_operating_below_n_minus_1_h"]
+        )
+        assert s == pytest.approx(24.0, abs=0.05)
+        assert st["hours_operating_ge_design_n_h"] == pytest.approx(
+            st["hours_operating_eq_design_n_h"] + st["hours_operating_gt_design_n_h"],
+            abs=0.02,
+        )
+
+    def test_solve_with_low_rate_water_reduces_air_need(self, standard_layers):
+        s0 = solve_equivalent_velocity_for_target_expansion_pct(
+            standard_layers,
+            18.0,
+            water_temp_c=27.0,
+            rho_water=1025.0,
+            low_rate_water_m_h=0.0,
+        )
+        s12 = solve_equivalent_velocity_for_target_expansion_pct(
+            standard_layers,
+            18.0,
+            water_temp_c=27.0,
+            rho_water=1025.0,
+            low_rate_water_m_h=12.5,
+        )
+        assert s0["ok"] and s12["ok"]
+        assert s12["velocity_m_h"] < s0["velocity_m_h"] - 1e-3

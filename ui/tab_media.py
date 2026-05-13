@@ -27,6 +27,7 @@ def render_tab_media(inputs: dict, computed: dict):
     streams                  = inputs["streams"]
     n_filters                = inputs["n_filters"]
     redundancy               = inputs["redundancy"]
+    hydraulic_assist         = int(inputs.get("hydraulic_assist", 0))
     layers                   = inputs["layers"]
 
     _layers_disp_df, _layers_clog_df = pressure_drop_layers_display_frames(bw_dp["layers"])
@@ -54,7 +55,9 @@ def render_tab_media(inputs: dict, computed: dict):
             f"M_max = {fmt(solid_loading, 'loading_kg_m2', 2)}  |  "
             f"Feed: ρ={fmt(rho_feed, 'density_kg_m3', 1)}, μ={fmt(mu_feed * 1000.0, 'viscosity_cp', 4)}"
         )
-        _load_data_dp = filter_loading(total_flow, streams, n_filters, redundancy)
+        _load_data_dp = filter_loading(
+            total_flow, streams, n_filters, redundancy, hydraulic_assist,
+        )
         _dp_summary = []
         for x, _n_act, q in _load_data_dp:
             sc_label = "N" if x == 0 else f"N-{x}"

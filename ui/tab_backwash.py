@@ -38,6 +38,7 @@ def render_tab_backwash(inputs: dict, computed: dict):
     layers             = inputs["layers"]
     freeboard_mm       = inputs["freeboard_mm"]
     air_scour_rate     = inputs["air_scour_rate"]
+    airwater_step_water_m_h = float(inputs.get("airwater_step_water_m_h", 12.5))
     bw_temp            = inputs["bw_temp"]
     bw_s_drain         = inputs["bw_s_drain"]
     bw_s_air           = inputs["bw_s_air"]
@@ -47,7 +48,9 @@ def render_tab_backwash(inputs: dict, computed: dict):
     bw_s_fill          = inputs["bw_s_fill"]
     bw_total_min       = inputs["bw_total_min"]
     vessel_pressure_bar = inputs["vessel_pressure_bar"]
-    streams            = inputs["streams"]
+    streams             = inputs["streams"]
+    n_filters             = inputs["n_filters"]
+    hydraulic_assist_bw = int(inputs.get("hydraulic_assist", 0))
     tss_low            = inputs["tss_low"]
     tss_avg            = inputs["tss_avg"]
     tss_high           = inputs["tss_high"]
@@ -75,7 +78,9 @@ def render_tab_backwash(inputs: dict, computed: dict):
         exp_rows = []
         _bw_integrity_alerts = []
         for L in bw_col["per_layer"]:
-            if L.get("elutriation_risk"):
+            if L.get("is_support"):
+                _status = "Support layer — hydraulic bed lift not required"
+            elif L.get("elutriation_risk"):
                 _status = "Approaching terminal velocity"
                 _bw_integrity_alerts.append(("critical",
                     f"{L['media_type']}: backwash velocity approaches terminal settling velocity",
@@ -99,13 +104,18 @@ def render_tab_backwash(inputs: dict, computed: dict):
                 "Expansion (%)": L["expansion_pct"], "Status": _status,
             })
         st.dataframe(pd.DataFrame(exp_rows), use_container_width=True, hide_index=True)
+        _u_air = float(bw_hyd.get("air_scour_rate_m_h", air_scour_rate))
+        _u_combined = airwater_step_water_m_h + _u_air
         exp_combined = _bed_exp(
             layers=layers,
-            bw_velocity_m_h=float(bw_hyd.get("air_scour_rate_m_h", air_scour_rate)),
-            water_temp_c=bw_temp, rho_water=rho_bw)
+            bw_velocity_m_h=_u_combined,
+            water_temp_c=bw_temp,
+            rho_water=rho_bw,
+        )
         st.markdown(
-            f"**Air + water combined phase** (equivalent superficial velocity = "
-            f"{fmt(float(bw_hyd.get('air_scour_rate_m_h', air_scour_rate)), 'velocity_m_h', 0)}):"
+            f"**Air + water combined phase (step ③ surrogate)** — "
+            f"water **{fmt(airwater_step_water_m_h, 'velocity_m_h', 1)}** + air **{fmt(_u_air, 'velocity_m_h', 1)}** "
+            f"→ **{fmt(_u_combined, 'velocity_m_h', 1)}** equivalent superficial:"
         )
         comb_rows = [{
             "Media": L["media_type"],
@@ -115,7 +125,10 @@ def render_tab_backwash(inputs: dict, computed: dict):
             f"Settled ({ulbl('length_m')})": round(dv(L["depth_settled_m"], "length_m"), 3),
             f"Expanded ({ulbl('length_m')})": round(dv(L["depth_expanded_m"], "length_m"), 3),
             "Expansion (%)": L["expansion_pct"],
-            "Note": L["warning"] if L["warning"] else "OK",
+            "Note": (
+                "Support layer — lift not required"
+                if L.get("is_support")
+                else (L["warning"] if L["warning"] else "OK")),
         } for L in exp_combined["layers"]]
         st.dataframe(pd.DataFrame(comb_rows), use_container_width=True, hide_index=True)
         if _bw_integrity_alerts:
@@ -136,16 +149,19 @@ def render_tab_backwash(inputs: dict, computed: dict):
         bh1, bh2, bh3, bh4 = st.columns(4)
         bh1.metric(f"BW flow ({ulbl('flow_m3h')})",            fmt(bw_hyd['q_bw_m3h'], 'flow_m3h', 0),           help=bw_hyd["bw_governs"])
         bh2.metric(f"BW LV actual ({ulbl('velocity_m_h')})",  fmt(bw_hyd['bw_lv_actual_m_h'], 'velocity_m_h', 1))
-        bh3.metric(f"Air scour flow ({ulbl('flow_m3h')})",    fmt(bw_hyd['q_air_m3h'], 'flow_m3h', 0))
+        bh3.metric(f"Air scour flow ({ulbl('air_flow_nm3h')})", fmt(bw_hyd["q_air_nm3h"], "air_flow_nm3h", 0))
         bh4.metric(f"Blower est. ({ulbl('power_kw')})",       fmt(bw_hyd['p_blower_est_kw'], 'power_kw', 1))
         if air_scour_solve is not None:
             _nm = air_scour_solve.get("nm3_m2_h")
             _nm_txt = f"{_nm:.1f}" if isinstance(_nm, (int, float)) else "—"
+            _ew = air_scour_solve.get("expansion_water_only_pct", "—")
+            _dair = air_scour_solve.get("expansion_increment_from_air_pct", "—")
             st.success(
-                f"**Auto-sized air scour** — target **{air_scour_solve['target_expansion_pct']:.1f} %** net expansion → "
-                f"**{fmt(float(bw_hyd.get('air_scour_rate_m_h', 0)), 'velocity_m_h', 2)}** "
-                f"in-situ m³/m²·h  (~**{_nm_txt}** Nm³/m²·h @ 0 °C, 1 atm).  "
-                f"Modelled expansion **{air_scour_solve['expansion_at_velocity_pct']:.1f} %**."
+                f"**Auto-sized air scour** — target **{air_scour_solve['target_expansion_pct']:.1f} %** net expansion "
+                f"at **{fmt(float(air_scour_solve.get('low_rate_water_m_h', 0)), 'velocity_m_h', 1)}** water + air.  "
+                f"Air equivalent **{fmt(float(bw_hyd.get('air_scour_rate_m_h', 0)), 'velocity_m_h', 2)}** "
+                f"m³/m²·h  (~**{_nm_txt}** Nm³/m²·h @ 0 °C, 1 atm).  "
+                f"R–Z split: water-only **{_ew} %** · increment from air **{_dair} %** · total **{air_scour_solve['expansion_at_velocity_pct']:.1f} %**."
                 + ("" if air_scour_solve.get("ok") else "  ⚠️ Target not reached within solver scan limit.")
             )
             st.caption(air_scour_solve.get("note", ""))
@@ -153,7 +169,7 @@ def render_tab_backwash(inputs: dict, computed: dict):
             ["Governing BW flow",
              f"{fmt(bw_hyd['q_bw_m3h'], 'flow_m3h', 1)} ({bw_hyd['bw_governs']})"],
             ["BW design capacity (×1.10)", fmt(bw_hyd['q_bw_design_m3h'], 'flow_m3h', 1)],
-            ["Air design capacity (×1.10)", fmt(bw_hyd['q_air_design_m3h'], 'flow_m3h', 1)],
+            ["Air design capacity (×1.10)", fmt(bw_hyd["q_air_design_nm3h"], "air_flow_nm3h", 1)],
             ["Blower power (est., η=0.65)", fmt(bw_hyd['p_blower_est_kw'], 'power_kw', 1)],
             ["BW water: ρ | μ",
              f"{fmt(rho_bw, 'density_kg_m3', 2)}  |  {fmt(mu_bw * 1000.0, 'viscosity_cp', 4)}"],
@@ -263,14 +279,13 @@ def render_tab_backwash(inputs: dict, computed: dict):
         ], columns=["Parameter", "Value"]))
         st.markdown("### Air blower")
         b1, b2, b3, b4 = st.columns(4)
-        b1.metric(f"Design flow ({ulbl('flow_m3h')})",      fmt(bw_sizing['q_air_design_m3h'], 'flow_m3h', 0))
+        b1.metric(f"Design flow ({ulbl('air_flow_nm3h')})", fmt(bw_sizing["q_air_design_nm3h"], "air_flow_nm3h", 0))
         b2.metric(f"ΔP total ({ulbl('pressure_bar')})",    fmt(bw_sizing['dp_total_bar'], 'pressure_bar', 3))
         b3.metric(f"Shaft power ({ulbl('power_kw')})",     fmt(bw_sizing['p_blower_shaft_kw'], 'power_kw', 0))
         b4.metric(f"Motor power ({ulbl('power_kw')})",     fmt(bw_sizing['p_blower_motor_kw'], 'power_kw', 0))
         st.table(pd.DataFrame([
-            ["Inlet volume flow",
-             f"{fmt(bw_sizing['q_air_design_m3h'], 'flow_m3h', 1)}  "
-             f"({fmt(bw_sizing['q_air_design_m3min'], 'flow_m3_min', 1)})"],
+            ["Inlet volume flow (normal / standard)",
+             fmt(bw_sizing["q_air_design_nm3h"], "air_flow_nm3h", 1)],
             ["Vessel back-pressure",
              f"{fmt(vessel_pressure_bar, 'pressure_bar', 2)} g"],
             ["Water submergence (≈ ID/2)",
@@ -296,12 +311,48 @@ def render_tab_backwash(inputs: dict, computed: dict):
         ], columns=["Parameter", "Value"]))
 
     with st.expander("6 · Filter duty timeline (24 h schematic)", expanded=False):
+        _sm = bw_timeline.get("stagger_model", "—")
+        _ktr = bw_timeline.get("bw_trains")
+        _ktr_s = str(_ktr) if _ktr is not None else "—"
+        _sd = bw_timeline.get("sim_demand")
+        _sd_s = f"{_sd:.2f}" if isinstance(_sd, (int, float)) else "—"
         st.caption(
-            "Each row is one filter. **Green** — operating (in service); **Red** — backwash window "
-            "(total sequence duration). Filters are **evenly staggered** over one "
-            "filtration-cycle + BW period — a smoothed idealisation; compare peak count to "
-            "**BW systems required** in the feasibility matrix."
+            f"**Stagger:** `{_sm}` · **bw_trains** (scenario N, design temp, avg TSS): {_ktr_s} · "
+            f"**sim_demand:** {_sd_s}.  "
+            "Green = operating; red = full BW sequence. **Feasibility-train** mode uses start spacing "
+            "**Δt_bw / bw_trains** (see Backwash section 4). **Uniform** is a legacy smooth-stagger comparison only."
         )
+        _hge = bw_timeline.get("hours_operating_ge_design_n_h")
+        _heq = bw_timeline.get("hours_operating_eq_design_n_h")
+        _hgt = bw_timeline.get("hours_operating_gt_design_n_h")
+        _hn1 = bw_timeline.get("hours_operating_eq_n_minus_1_h")
+        _hlt = bw_timeline.get("hours_operating_below_n_minus_1_h")
+        _ndes = bw_timeline.get("n_design_online_total")
+        _nphys = bw_timeline.get("n_physical_timeline")
+        _horz = float(bw_timeline.get("horizon_h", 24.0))
+        if isinstance(_hge, (int, float)) and _ndes is not None:
+            _n1 = float(_hn1) if isinstance(_hn1, (int, float)) else 0.0
+            _lt = float(_hlt) if isinstance(_hlt, (int, float)) else 0.0
+            _eq = float(_heq) if isinstance(_heq, (int, float)) else float(_hge)
+            _gt = float(_hgt) if isinstance(_hgt, (int, float)) else 0.0
+            _nper = max(1, n_filters - hydraulic_assist_bw)
+            _phys_txt = (
+                f"{_nphys} physical" if isinstance(_nphys, int) else f"{streams}×{n_filters} physical"
+            )
+            st.info(
+                f"**Plant-wide duty ({_phys_txt} on chart, {_horz:.0f} h window):** "
+                f"**At N** — exactly **{_ndes}** units not in BW (rated set): **{_eq:.2f}** h · "
+                f"**At N−1** — exactly **{_ndes - 1}** not in BW: **{_n1:.2f}** h · "
+                f"**Below N−1**: **{_lt:.2f}** h.  "
+                + (
+                    f"**N+1 margin** (>{_ndes} online, spare filtering): **{_gt:.2f}** h · "
+                    if hydraulic_assist_bw > 0
+                    else ""
+                )
+                + f"*(≥ N total = **{float(_hge):.2f}** h = at N + margin.)*  "
+                f"Design **N** = **{_nper}** / stream × **{streams}** → **{_ndes}** plant-wide.  "
+                "Overlapping backwashes increase N−1 / below-N−1 time."
+            )
         _tl = bw_timeline
         _frows = _tl.get("filters") or []
         if not _frows:
@@ -361,15 +412,23 @@ def render_tab_backwash(inputs: dict, computed: dict):
                     "Peak filters in BW (this stagger model)",
                     str(int(_pk)) if _pk is not None else "—",
                 )
+                _cap_n = _tl.get("hours_operating_eq_design_n_h")
+                _cap_n1 = _tl.get("hours_operating_eq_n_minus_1_h")
+                _duty_line = ""
+                if isinstance(_cap_n, (int, float)) and isinstance(_cap_n1, (int, float)):
+                    _duty_line = (
+                        f" **Duty (plant-wide):** ≈ **{float(_cap_n):.1f}** h at **N** · "
+                        f"≈ **{float(_cap_n1):.1f}** h at **N−1** (not in BW count vs design N)."
+                    )
                 st.caption(
                     f"Filtration cycle (design TSS) ≈ **{_tl.get('t_cycle_h', '—')}** h · "
                     f"BW duration **{_tl.get('bw_duration_h', '—')}** h · "
-                    f"repeat period **{_tl.get('period_h', '—')}** h.  {_tl.get('note', '')}"
+                    f"repeat period **{_tl.get('period_h', '—')}** h.{_duty_line}  {_tl.get('note', '')}"
                 )
 
     st.divider()
     bm1, bm2, bm3, bm4 = st.columns(4)
     bm1.metric(f"BW flow, design ({ulbl('flow_m3h')})", fmt(bw_hyd['q_bw_design_m3h'], 'flow_m3h', 0))
-    bm2.metric(f"Air scour flow ({ulbl('flow_m3h')})", fmt(bw_hyd['q_air_design_m3h'], 'flow_m3h', 0))
+    bm2.metric(f"Air scour flow ({ulbl('air_flow_nm3h')})", fmt(bw_hyd["q_air_design_nm3h"], "air_flow_nm3h", 0))
     bm3.metric("BW duration",                          f"{bw_total_min} min")
     bm4.metric("Plant waste / day", fmt(bw_seq["waste_vol_daily_m3"], "volume_m3_per_day", 0))

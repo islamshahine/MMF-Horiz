@@ -269,6 +269,37 @@ class TestOpexAnnual:
         r_high = _opex(electricity_tariff=0.15)
         assert r_high["energy_cost_usd_yr"] > r_low["energy_cost_usd_yr"]
 
+    def test_opex_energy_uses_metered_kwh_when_passed(self):
+        """When annual kWh by component is passed, energy cost = Σ kWh × tariff."""
+        r = opex_annual(
+            filtration_power_kw=50.0,
+            bw_power_kw=20.0,
+            blower_power_kw=10.0,
+            n_vessels=2,
+            electricity_tariff=0.10,
+            operating_hours=8_760.0,
+            media_inventory_kg_by_type={"Fine sand": 50_000, "Anthracite": 20_000},
+            media_costs_by_type={"Fine sand": 0.50, "Anthracite": 3.00},
+            media_interval_years=10.0,
+            n_strainer_nozzles=100,
+            nozzle_cost_usd=25.0,
+            nozzle_interval_years=5.0,
+            labour_usd_per_filter_year=15_000.0,
+            n_filters_total=16,
+            chemical_cost_usd_m3=0.005,
+            total_flow_m3h=21_000.0,
+            energy_kwh_yr_by_component={
+                "filtration": 100_000.0,
+                "bw_pump": 2_000.0,
+                "blower": 800.0,
+            },
+        )
+        assert r["energy_cost_usd_yr"] == pytest.approx(10_280.0, rel=1e-6)
+        assert r["energy_kwh_yr"] == 102_800
+        assert r["energy_kwh_filtration_yr"] == 100_000
+        assert r["energy_kwh_bw_pump_yr"] == 2_000
+        assert r["energy_kwh_blower_yr"] == 800
+
 
 # ═════════════════════════════════════════════════════════════════════════════
 # Carbon footprint
@@ -282,6 +313,29 @@ class TestCarbonFootprint:
         """
         r = _carbon()
         assert r["co2_operational_kg_yr"] == pytest.approx(245_280, rel=0.001)
+
+    def test_carbon_operational_uses_metered_kwh_when_passed(self):
+        r = carbon_footprint(
+            filtration_power_kw=50.0,
+            bw_power_kw=20.0,
+            blower_power_kw=10.0,
+            operating_hours=8_760.0,
+            grid_intensity_kg_kwh=0.4,
+            weight_steel_kg=500_000,
+            steel_carbon_kg_kg=1.8,
+            weight_concrete_kg=200_000,
+            concrete_carbon_kg_kg=0.15,
+            media_mass_by_type_kg={"Fine sand": 50_000, "Anthracite": 20_000},
+            media_carbon_by_type={"Fine sand": 0.006, "Anthracite": 0.150},
+            design_life_years=20,
+            total_flow_m3h=21_000.0,
+            energy_kwh_yr_by_component={
+                "filtration": 100_000.0,
+                "bw_pump": 2_000.0,
+                "blower": 800.0,
+            },
+        )
+        assert r["co2_operational_kg_yr"] == pytest.approx(102_800.0 * 0.4, rel=1e-6)
 
     def test_steel_co2(self):
         """co2_steel = 500 000 kg × 1.8 kg CO₂/kg = 900 000 kg CO₂."""

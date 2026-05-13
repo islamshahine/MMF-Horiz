@@ -22,6 +22,43 @@ Energy consumers:
 GRAVITY = 9.81   # m/s²
 
 
+def bw_equipment_hours_per_event(
+    steps: list[dict] | None,
+    *,
+    fallback_total_h: float,
+) -> tuple[float, float]:
+    """
+    Split one BW cycle into **BW water-pump active hours** vs **air scour hours**
+    using the step table from ``bw_sequence`` (avg durations).
+
+    - **Pump** — any step with ``Water rate (m/h)`` > 0 (drain, air+water, high-rate, rinse).
+    - **Blower** — any step whose ``Source`` mentions air (``Air``, ``Air + brine``).
+
+    If ``steps`` is empty, returns ``(fallback_total_h, fallback_total_h)`` so callers
+    still behave like the legacy single-duration model.
+    """
+    fb = max(0.0, float(fallback_total_h))
+    if not steps:
+        return fb, fb
+    pump_min = 0.0
+    blow_min = 0.0
+    for s in steps:
+        try:
+            da = float(s.get("Dur avg (min)", 0) or 0)
+        except (TypeError, ValueError):
+            da = 0.0
+        try:
+            rate = float(s.get("Water rate (m/h)", 0) or 0)
+        except (TypeError, ValueError):
+            rate = 0.0
+        src = str(s.get("Source", "") or "")
+        if rate > 0.0:
+            pump_min += da
+        if "Air" in src:
+            blow_min += da
+    return pump_min / 60.0, blow_min / 60.0
+
+
 # ── helpers ────────────────────────────────────────────────────────────────
 
 def _mwc_to_bar(mwc: float, rho: float = 1025.0) -> float:
@@ -151,6 +188,8 @@ def energy_summary(
     blower_motor_eta: float  = 0.95,
     # BW scheduling
     bw_duration_h: float     = 0.633,
+    bw_pump_hours_per_event_h: float | None = None,
+    blower_hours_per_event_h: float | None = None,
     bw_per_day_design: float = 3.6,
     availability_pct: float  = 90.0,
     # Economics
@@ -166,8 +205,10 @@ def energy_summary(
         Consumed = P_dirty × op_hours × n_filters_total
 
     BW pump + blower:
-        Intermittent; runs bw_per_day_design times per filter × bw_duration_h.
-        Consumed = P_bw × bw_duration_h × bw_per_day_design × 365 × n_filters_total
+        Intermittent; each filter runs ``bw_per_day_design`` cycles per day.
+        Default: both use **full** ``bw_duration_h`` per event (legacy).
+        If ``bw_pump_hours_per_event_h`` / ``blower_hours_per_event_h`` are set (from
+        ``bw_sequence`` steps), energy uses those **in-cycle** duty splits at rated power.
 
     Returns
     -------
@@ -187,11 +228,23 @@ def energy_summary(
     p_bw_kw          = _pump_power_kw(q_bw_m3h, bw_head_mwc,
                                        rho_bw_kg_m3, bw_pump_eta * bw_motor_eta)
     bw_events_yr     = bw_per_day_design * 365.0 * n_filters_total
-    e_bw_pump_kwh_yr = p_bw_kw * bw_duration_h * bw_events_yr
+    _h_pump_evt = (
+        float(bw_pump_hours_per_event_h)
+        if bw_pump_hours_per_event_h is not None
+        else float(bw_duration_h)
+    )
+    _h_blow_evt = (
+        float(blower_hours_per_event_h)
+        if blower_hours_per_event_h is not None
+        else float(bw_duration_h)
+    )
+    _h_pump_evt = max(0.0, _h_pump_evt)
+    _h_blow_evt = max(0.0, _h_blow_evt)
+    e_bw_pump_kwh_yr = p_bw_kw * _h_pump_evt * bw_events_yr
 
     # Air blower
     p_blower_shaft_kw = p_blower_kw / blower_motor_eta  # shaft → electrical
-    e_blower_kwh_yr   = p_blower_shaft_kw * bw_duration_h * bw_events_yr
+    e_blower_kwh_yr   = p_blower_shaft_kw * _h_blow_evt * bw_events_yr
 
     # Totals
     e_total_kwh_yr    = e_filt_kwh_yr + e_bw_pump_kwh_yr + e_blower_kwh_yr
@@ -225,4 +278,10 @@ def energy_summary(
         "op_hours_per_year":   op_hours_per_year,
         "bw_per_day_design":   round(bw_per_day_design, 2),
         "bw_events_yr":        round(bw_events_yr,      0),
+        "h_bw_pump_per_event_h":   round(_h_pump_evt, 4),
+        "h_blower_per_event_h":    round(_h_blow_evt, 4),
+        "h_bw_pump_plant_day":     round(_h_pump_evt * bw_per_day_design * n_filters_total, 3),
+        "h_blower_plant_day":      round(_h_blow_evt * bw_per_day_design * n_filters_total, 3),
+        "h_bw_pump_plant_yr":      round(_h_pump_evt * bw_events_yr, 1),
+        "h_blower_plant_yr":       round(_h_blow_evt * bw_events_yr, 1),
     }

@@ -23,7 +23,8 @@ _REF_LAYERS = [
      "rho_p_eff": 1450, "psi": 0.70, "is_porous": False, "is_support": False},
 ]
 REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
-    "total_flow": 21000.0, "streams": 1, "n_filters": 16, "redundancy": 1,
+    "total_flow": 21000.0, "streams": 1, "n_filters": 16,
+    "hydraulic_assist": 0, "redundancy": 1,
     "feed_temp": 27.0, "feed_sal": 35.0,
     "temp_low": 15.0, "temp_high": 35.0,
     "tss_low": 5.0, "tss_avg": 10.0, "tss_high": 20.0,
@@ -43,6 +44,8 @@ REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
     "alpha_specific": 1e12, "dp_trigger_bar": 1.0,
     "bw_velocity": 30.0, "air_scour_rate": 55.0,
     "air_scour_mode": "manual", "air_scour_target_expansion_pct": 20.0,
+    "airwater_step_water_m_h": 12.5,
+    "bw_timeline_stagger": "feasibility_trains",
     "bw_cycles_day": 1,
     "bw_s_drain": 10, "bw_s_air": 1, "bw_s_airw": 5,
     "bw_s_hw": 10, "bw_s_settle": 2, "bw_s_fill": 10, "bw_total_min": 38,
@@ -206,6 +209,29 @@ def validate_inputs(inputs: dict) -> dict:
             errors.append("n_filters: must be an integer >= 1.")
     except (TypeError, ValueError):
         errors.append("n_filters: must be an integer >= 1.")
+
+    try:
+        ha = int(inputs.get("hydraulic_assist", 0))
+        if ha < 0 or ha > 4:
+            errors.append("hydraulic_assist: must be an integer from 0 to 4.")
+    except (TypeError, ValueError):
+        errors.append("hydraulic_assist: must be an integer from 0 to 4.")
+
+    try:
+        _nf = int(inputs["n_filters"])
+        _ha = int(inputs.get("hydraulic_assist", 0))
+        _rd = int(inputs.get("redundancy", 0))
+        if _ha >= _nf:
+            errors.append(
+                "hydraulic_assist (physical spares / stream): must be < total physical number of filters / stream."
+            )
+        if _nf - _ha - _rd < 1:
+            errors.append(
+                "filters/stream − standby − outage depth must leave ≥1 active path "
+                "in the worst hydraulic scenario."
+            )
+    except (TypeError, ValueError):
+        pass
 
     validate_positive("nominal_id", inputs["nominal_id"], errors)
 

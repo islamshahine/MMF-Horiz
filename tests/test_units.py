@@ -220,6 +220,7 @@ class TestRoundTrip:
         ("mass_kg",       5000.0),
         ("power_kw",      250.0),
         ("density_kg_m3", 1022.7),
+        ("air_flow_nm3h",   1699.0),
     ])
     def test_si_display_si_roundtrip(self, qty, val):
         disp = display_value(val, qty, "imperial")
@@ -279,6 +280,12 @@ class TestUnitLabel:
     def test_power_imperial(self):
         assert unit_label("power_kw", "imperial") == "hp"
 
+    def test_air_flow_nm3h_metric(self):
+        assert unit_label("air_flow_nm3h", "metric") == "Nm³/h"
+
+    def test_air_flow_nm3h_imperial(self):
+        assert unit_label("air_flow_nm3h", "imperial") == "SCFM"
+
     def test_unknown_quantity_returns_empty(self):
         assert unit_label("no_such_qty", "metric") == ""
         assert unit_label("no_such_qty", "imperial") == ""
@@ -301,6 +308,16 @@ class TestFormatValue:
     def test_imperial_flow_contains_gpm(self):
         result = format_value(1.0, "flow_m3h", "imperial", 2)
         assert "gpm" in result
+
+    def test_air_flow_metric_nm3h(self):
+        result = format_value(1699.0, "air_flow_nm3h", "metric", 1)
+        assert "Nm³/h" in result
+        assert "1,699.0" in result
+
+    def test_air_flow_imperial_scfm(self):
+        result = format_value(1.699, "air_flow_nm3h", "imperial", 2)
+        assert "SCFM" in result
+        assert display_value(1.699, "air_flow_nm3h", "imperial") == pytest.approx(1.0)
 
     def test_metric_pressure_bar(self):
         result = format_value(7.0, "pressure_bar", "metric", 2)

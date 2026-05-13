@@ -16,6 +16,7 @@ def render_tab_economics(inputs: dict, computed: dict):
     econ_opex   = computed["econ_opex"]
     econ_bench  = computed["econ_bench"]
     econ_carbon = computed["econ_carbon"]
+    energy      = computed.get("energy") or {}
 
     steel_cost_usd_kg  = inputs["steel_cost_usd_kg"]
     engineering_pct    = inputs["engineering_pct"]
@@ -115,6 +116,23 @@ def render_tab_economics(inputs: dict, computed: dict):
                 f"Annual flow: {fmt_annual_flow_volume(econ_opex['annual_flow_m3'])}  ·  "
                 f"Media interval: {media_replace_years:.0f} yr"
             )
+            _hpd = float(energy.get("h_bw_pump_plant_day", 0) or 0)
+            _had = float(energy.get("h_blower_plant_day", 0) or 0)
+            st.info(
+                "**BW electricity duty (plant-wide, design case)** — hours per day summed over all "
+                "filters at rated power: **BW water pump** ≈ "
+                f"**{_hpd:.2f}** h/day · **air scour blower** ≈ **{_had:.2f}** h/day "
+                "(from BW step durations × feasibility **N** cycles/filter/day). "
+                "Annual energy and operational CO₂ use **kWh = kW × these hours** for BW loads, "
+                "not 24/7 pump power."
+            )
+            if econ_opex.get("energy_kwh_filtration_yr") is not None:
+                st.caption(
+                    f"Annual electricity (metered-style): filtration "
+                    f"**{econ_opex['energy_kwh_filtration_yr']:,.0f}** kWh/yr · BW pump "
+                    f"**{econ_opex['energy_kwh_bw_pump_yr']:,.0f}** · blower "
+                    f"**{econ_opex['energy_kwh_blower_yr']:,.0f}**."
+                )
         with o_right:
             if _PLOTLY_OK:
                 _fig_op = _go.Figure(_go.Pie(

@@ -87,6 +87,21 @@ class TestValidateInputs:
         r = validate_inputs(b)
         assert r["valid"] is False
 
+    def test_invalid_hydraulic_assist(self):
+        b = _base()
+        b["hydraulic_assist"] = 5
+        r = validate_inputs(b)
+        assert r["valid"] is False
+        assert any("hydraulic_assist" in e for e in r["errors"])
+
+    def test_standby_must_be_lt_n_filters(self):
+        b = _base()
+        b["n_filters"] = 3
+        b["hydraulic_assist"] = 3
+        r = validate_inputs(b)
+        assert r["valid"] is False
+        assert any("hydraulic_assist" in e for e in r["errors"])
+
     def test_collector_below_nozzle_plate(self):
         b = _base()
         b["nozzle_plate_h"] = 2.0
@@ -112,6 +127,10 @@ class TestComputeAllValidationHook:
         assert r["q_per_filter"] == pytest.approx(
             REFERENCE_FALLBACK_INPUTS["total_flow"]
             / REFERENCE_FALLBACK_INPUTS["streams"]
-            / REFERENCE_FALLBACK_INPUTS["n_filters"],
+            / max(
+                1,
+                REFERENCE_FALLBACK_INPUTS["n_filters"]
+                - int(REFERENCE_FALLBACK_INPUTS.get("hydraulic_assist", 0)),
+            ),
             rel=1e-6,
         )

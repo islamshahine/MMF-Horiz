@@ -80,8 +80,11 @@ def build_pdf(
         tf=inputs["total_flow"]; ns=inputs["streams"]; nf=inputs["n_filters"]
         _h("B1 · Process Basis")
         _add([["Total flow", fv(tf, "flow_m3h", 0)],
-              ["Streams × filters",f"{ns} × {nf} = {ns*nf} vessels"],
-              ["Redundancy",f"N-{inputs['redundancy']} per stream"],
+              ["Streams", str(ns)],
+              ["Total physical number of filters / stream", str(nf)],
+              ["Total physical filters (plant-wide)", f"{ns * nf} vessels"],
+              ["Standby (physical)", str(int(inputs.get("hydraulic_assist", 0)))],
+              ["Outage depth", f"N-{inputs['redundancy']} per stream"],
               ["Flow / filter (N)", fv(q, "flow_m3h", 1)],
               ["Filtration rate (N)", fv(q/ar, "velocity_m_h", 2)],
               ["Filter cross-section", fv(ar, "area_m2", 3)]])
@@ -146,7 +149,7 @@ def build_pdf(
         _add([["BW pump flow", fv(sz.get("q_bw_design_m3h",0), "flow_m3h", 1)],
               ["BW pump head", fv(sz.get("bw_head_mwc",0), "pressure_mwc", 2)],
               ["BW pump motor", fv(sz.get("p_pump_motor_kw",0), "power_kw", 1)],
-              ["Blower flow", fv(sz.get("q_air_design_m3h",0), "flow_m3h", 1)],
+              ["Blower flow", fv(sz.get("q_air_design_nm3h", 0), "air_flow_nm3h", 1)],
               ["Blower motor", fv(sz.get("p_blower_motor_kw",0), "power_kw", 1)],
               ["BW tank", fv(sz.get("v_tank_m3",0), "volume_m3", 1)]])
 

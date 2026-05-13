@@ -39,6 +39,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
     streams            = inputs["streams"]
     n_filters          = inputs["n_filters"]
     redundancy         = inputs["redundancy"]
+    hydraulic_assist   = int(inputs.get("hydraulic_assist", 0))
     temp_low           = inputs["temp_low"]
     temp_high          = inputs["temp_high"]
     tss_low            = inputs["tss_low"]
@@ -143,7 +144,9 @@ def render_tab_filtration(inputs: dict, computed: dict):
             f"α ({bw_dp['alpha_source']}) = {bw_dp['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg  |  "
             f"M_max = {fmt(solid_loading, 'loading_kg_m2', 2)}"
         )
-        _load_data_dp = filter_loading(total_flow, streams, n_filters, redundancy)
+        _load_data_dp = filter_loading(
+            total_flow, streams, n_filters, redundancy, hydraulic_assist,
+        )
         _dp_summary = []
         for x, n_act, q in _load_data_dp:
             sc_label = "N" if x == 0 else f"N-{x}"

@@ -36,12 +36,40 @@ def render_tab_compare(inputs: dict, computed: dict) -> None:
     with bc1:
         st.markdown("**Process**")
         b["n_filters"] = int(st.number_input(
-            "Filters / stream", value=int(b.get("n_filters", 16)), min_value=1, step=1, key="b_n_filters"))
+            "Total physical number of filters / stream",
+            value=int(b.get("n_filters", 16)),
+            min_value=1,
+            step=1,
+            key="b_n_filters",
+        ))
         b["streams"] = int(st.number_input(
             "Streams", value=int(b.get("streams", 1)), min_value=1, step=1, key="b_streams"))
+        _ha = [0, 1, 2, 3, 4]
+        _hi = min(max(int(b.get("hydraulic_assist", 0)), 0), 4)
+        b["hydraulic_assist"] = int(st.selectbox(
+            "Standby (physical / stream)",
+            _ha,
+            format_func=lambda k: (
+                "0 — no spare" if k == 0 else f"{k} spare(s) — N+{k} bank"
+            ),
+            index=_ha.index(_hi),
+            key="b_hydraulic_assist",
+        ))
+        _n_b_design = int(b["n_filters"]) - int(b["hydraulic_assist"])
+        st.session_state["b_n_design_display"] = str(_n_b_design)
+        st.text_input(
+            "Calculated N filters / stream",
+            disabled=True,
+            key="b_n_design_display",
+            help=(
+                "Total physical number of filters / stream minus "
+                "standby (physical / stream); design N for hydraulics."
+            ),
+        )
         _ro = [0, 1, 2, 3, 4]
         _r = min(max(int(b.get("redundancy", 0)), 0), 4)
-        b["redundancy"] = int(st.selectbox("Redundancy", _ro, index=_ro.index(_r), key="b_redundancy"))
+        b["redundancy"] = int(st.selectbox(
+            "Outage depth", _ro, index=_ro.index(_r), key="b_redundancy"))
         st.markdown("**Vessel geometry**")
         b["nominal_id"] = st.number_input(
             f"Nominal ID ({ulbl('length_m')})",

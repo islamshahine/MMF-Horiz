@@ -55,6 +55,13 @@ QUANTITIES = {
         4.40287,    # 1 m³/h = 4.40287 gpm
         0.22712,    # 1 gpm  = 0.22712 m³/h
     ),
+    # Blower inlet flow: SI base value is Nm³/h (0 °C, 1.01325 bar); imperial = SCFM
+    # (≈ 60 °F, 14.696 psia).  1 SCFM ≈ 1.699 Nm³/h (common HVAC / blower catalogue factor).
+    "air_flow_nm3h": (
+        "Nm³/h", "SCFM",
+        1.0 / 1.699,
+        1.699,
+    ),
     "flow_m3_min": (
         "m³/min", "ft³/min",
         35.3147,
@@ -378,6 +385,7 @@ INPUT_QUANTITY_MAP = {
     "leg_section":        "length_mm",
     "bw_velocity":        "velocity_m_h",
     "air_scour_rate":     "velocity_m_h",
+    "airwater_step_water_m_h": "velocity_m_h",
     "velocity_threshold": "velocity_m_h",
     "cart_flow":          "flow_m3h",
     "solid_loading":      "loading_kg_m2",

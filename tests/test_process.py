@@ -5,14 +5,21 @@ Tests for engine/process.py — filter_loading() flow distribution.
 
 Reference calculations
 ----------------------
-filter_loading(total_flow, streams, n_filters, redundancy)
-  Returns list of tuples: (standby_count, active_count, flow_per_filter_m3h)
-  One tuple per scenario from N (0 standby) up to N-redundancy.
+filter_loading(...) returns ``(standby_count, active_count, flow_per_filter_m3h)`` per row.
 
-N scenario (16 filters, 1 stream, total=21 000 m³/h):
+filter_loading(total_flow, streams, n_filters, redundancy, hydraulic_assist=0)
+  ``n_filters`` = physical installed per stream (includes spares).
+  ``hydraulic_assist`` = physical **standby** count excluded from design **N**::
+
+      active = n_filters - hydraulic_assist - x
+
+N scenario (16 physical, 0 standby, 1 stream, 21 000 m³/h):
   active = 16,  flow = 21000 / 16 = 1312.5 m³/h  ✓
 
-N-1 scenario (1 standby out of 16):
+N+1 physical (17 filters, 1 standby, assist=1), N case:
+  active = 16,  flow = 21000 / 16 = 1312.5 m³/h  ✓
+
+N-1 scenario (16 physical, 0 standby, 1 offline):
   active = 15,  flow = 21000 / 15 = 1400.0 m³/h  ✓
 
 N-2 scenario (2 standby out of 16):
@@ -179,3 +186,19 @@ class TestEdgeCases:
         result = filter_loading(21000, 1, 16, 2)
         for i, row in enumerate(result):
             assert row[0] == i
+
+
+class TestHydraulicAssist:
+    """Physical standby filters: design N = installed − spares (true N+1 bank)."""
+
+    def test_n_plus_one_matches_nominal_n_flow(self):
+        """17 physical, 1 spare → design N=16 → same q as 16/0."""
+        r = filter_loading(21000, 1, 17, 1, hydraulic_assist=1)[0]
+        assert r[0] == 0 and r[1] == 16
+        assert r[2] == pytest.approx(1312.5, rel=1e-6)
+
+    def test_n_plus_one_n_minus_1_row(self):
+        """With 1 spare, one extra outage → 15 paths."""
+        row = filter_loading(21000, 1, 17, 1, hydraulic_assist=1)[1]
+        assert row[0] == 1 and row[1] == 15
+        assert row[2] == pytest.approx(21000.0 / 15.0, rel=1e-6)

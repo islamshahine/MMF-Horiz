@@ -51,7 +51,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
     design_temp     = inputs["design_temp"]
     streams         = inputs["streams"]
     n_filters       = inputs["n_filters"]
-    redundancy      = inputs["redundancy"]
+    hydraulic_assist = int(inputs.get("hydraulic_assist", 0))
     nozzle_plate_h  = inputs["nozzle_plate_h"]
     collector_h     = inputs["collector_h"]
 
@@ -465,8 +465,8 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                 ["Prepared by", engineer],
             ], columns=["Field", "Value"]))
         with tb3:
-            st.metric("Filters",     streams * n_filters)
-            st.metric("Active (N)",  streams * n_filters - redundancy * streams)
+            st.metric("Installed filters", streams * n_filters)
+            st.metric("Hydraulic paths (design N)", streams * max(1, n_filters - hydraulic_assist))
         st.divider()
         ds_left, ds_right = st.columns([1, 1.1])
         with ds_left:

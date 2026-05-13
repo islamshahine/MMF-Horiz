@@ -258,6 +258,7 @@ def bed_expansion(
             rho_water=rho_water,
         )
         r["media_type"] = L.get("Type", "—")
+        r["is_support"] = bool(L.get("is_support", False))
         results.append(r)
         total_settled  += L.get("Depth", 0.0)
         total_expanded += r["depth_expanded_m"]
@@ -283,38 +284,53 @@ def solve_equivalent_velocity_for_target_expansion_pct(
     rho_water: float = _RHO_WATER_DEF,
     u_scan_max_m_h: float = 200.0,
     scan_step_m_h: float = 1.0,
+    low_rate_water_m_h: float = 0.0,
 ) -> dict:
     """
-    Find superficial velocity (m/h) such that ``bed_expansion`` net total ≈ target %.
+    Find **air-equivalent** superficial velocity (m/h) such that the R–Z stack
+    matches the target net expansion at the **air + low-rate water** step.
 
-    Uses the same Richardson–Zaki stack model as ``bed_expansion``.  In the MMF
-    workflow this velocity is applied as an **equivalent m³/m²·h** surrogate for the
-    air-scour / combined-phase check (see Backwash tab) — it is **not** a
-    rigorous two-fluid CFD solution.
+    The combined superficial velocity passed to ``bed_expansion`` is::
 
-    Returns the **smallest** velocity in the scanned range that reaches the target
+        u_total = max(0, low_rate_water_m_h) + u_air_equivalent
+
+    ``low_rate_water_m_h`` is the fixed water leg (step ③); the solver searches
+    ``u_air_equivalent`` only.  This is still a single-phase surrogate, not CFD.
+
+    Returns the **smallest** air-equivalent velocity that reaches the target
     (first crossing when scanning upward), then refines by bisection.
     """
     tgt = float(target_expansion_pct)
+    u_w = max(0.0, float(low_rate_water_m_h))
     note = (
-        "Equivalent superficial velocity from R–Z bed model (same surrogate as "
-        "combined-phase expansion table); vendor air-grid data may differ."
+        "Air-equivalent superficial velocity from R–Z bed model (combined-phase "
+        "surrogate: u_total = low-rate water + air equivalent); vendor air-grid data may differ."
     )
 
-    def _exp_pct(u: float) -> float:
+    def _exp_pct(u_air: float) -> float:
         return float(
-            bed_expansion(layers, u, water_temp_c, rho_water)["total_expansion_pct"]
+            bed_expansion(
+                layers, u_w + max(0.0, u_air), water_temp_c, rho_water,
+            )["total_expansion_pct"]
         )
+
+    e_water_only = float(
+        bed_expansion(layers, u_w, water_temp_c, rho_water)["total_expansion_pct"]
+    )
 
     if tgt <= 0.0:
         e0 = _exp_pct(0.0)
         return {
             "ok": True,
             "velocity_m_h": 0.0,
+            "low_rate_water_m_h": round(u_w, 3),
+            "combined_superficial_m_h": round(u_w, 3),
+            "expansion_water_only_pct": round(e_water_only, 2),
+            "expansion_increment_from_air_pct": round(e0 - e_water_only, 2),
             "expansion_at_velocity_pct": round(e0, 2),
             "target_expansion_pct": tgt,
             "bound_hit": "none",
-            "note": note + " Target ≤ 0 — returning zero velocity.",
+            "note": note + " Target ≤ 0 — returning zero air-equivalent velocity.",
         }
 
     e0 = _exp_pct(0.0)
@@ -322,10 +338,14 @@ def solve_equivalent_velocity_for_target_expansion_pct(
         return {
             "ok": True,
             "velocity_m_h": 0.0,
+            "low_rate_water_m_h": round(u_w, 3),
+            "combined_superficial_m_h": round(u_w, 3),
+            "expansion_water_only_pct": round(e_water_only, 2),
+            "expansion_increment_from_air_pct": round(e0 - e_water_only, 2),
             "expansion_at_velocity_pct": round(e0, 2),
             "target_expansion_pct": tgt,
             "bound_hit": "none",
-            "note": note + " Target already met at u = 0.",
+            "note": note + " Target already met with low-rate water only (u_air = 0).",
         }
 
     prev_u, prev_e = 0.0, e0
@@ -344,6 +364,10 @@ def solve_equivalent_velocity_for_target_expansion_pct(
         return {
             "ok": False,
             "velocity_m_h": round(u_scan_max_m_h, 2),
+            "low_rate_water_m_h": round(u_w, 3),
+            "combined_superficial_m_h": round(u_w + u_scan_max_m_h, 3),
+            "expansion_water_only_pct": round(e_water_only, 2),
+            "expansion_increment_from_air_pct": round(e_max - e_water_only, 2),
             "expansion_at_velocity_pct": round(e_max, 2),
             "target_expansion_pct": tgt,
             "bound_hit": "u_max",
@@ -364,6 +388,10 @@ def solve_equivalent_velocity_for_target_expansion_pct(
     return {
         "ok": True,
         "velocity_m_h": u_sol,
+        "low_rate_water_m_h": round(u_w, 3),
+        "combined_superficial_m_h": round(u_w + u_sol, 3),
+        "expansion_water_only_pct": round(e_water_only, 2),
+        "expansion_increment_from_air_pct": round(e_sol - e_water_only, 2),
         "expansion_at_velocity_pct": round(e_sol, 2),
         "target_expansion_pct": tgt,
         "bound_hit": "none",
@@ -393,13 +421,19 @@ def filter_bw_timeline_24h(
     t_cycle_h: float,
     bw_duration_h: float,
     horizon_h: float = 24.0,
+    *,
+    bw_trains: int | None = None,
+    stagger_model: str = "feasibility_trains",
+    sim_demand: float | None = None,
 ) -> dict:
     """
-    Stylised filter duty chart: evenly staggered BW starts, repeating cycle.
+    Filter duty chart: operate vs backwash over ``horizon_h``.
 
-    Each filter operates for ``t_cycle_h`` then backwashes for ``bw_duration_h``.
-    Start phases are spread uniformly across ``period = t_cycle_h + bw_duration_h``
-    so plant demand is smoothed (idealised — site logic may differ).
+    * ``stagger_model="uniform"`` — phases ``i/N`` of ``period`` (legacy smooth fiction).
+
+    * ``stagger_model="feasibility_trains"`` — BW start spacing ``Δt_bw / bw_trains``
+      so the **integer** ``bw_trains`` caps concurrent BW in the schematic (aligned with
+      the feasibility matrix). If ``bw_trains < ceil(N·Δt_bw/T)``, a shortfall note is added.
     """
     if n_filters_total < 1:
         return {
@@ -409,6 +443,9 @@ def filter_bw_timeline_24h(
             "t_cycle_h": t_cycle_h,
             "bw_duration_h": bw_duration_h,
             "period_h": 0.0,
+            "stagger_model": stagger_model,
+            "bw_trains": bw_trains,
+            "sim_demand": sim_demand,
             "note": "No filters — empty timeline.",
         }
 
@@ -423,9 +460,46 @@ def filter_bw_timeline_24h(
     if period <= 0:
         period = 24.0
 
+    n_int = int(n_filters_total)
+    K_raw = int(bw_trains) if bw_trains is not None else 1
+    K = max(1, min(K_raw, n_int))
+    min_k = int(math.ceil(n_int * bd / max(period, 1e-9)))
+    notes: list[str] = []
+
+    use_uniform = stagger_model == "uniform" or bw_trains is None or K_raw < 1
+    train_shortfall = False
+
+    if use_uniform:
+        notes.append("Uniform stagger (i/N of period).")
+
+        def _phi(i: int) -> float:
+            return (i / float(n_int)) * period
+
+        stagger_model_out = "uniform"
+        bw_trains_out = None
+    else:
+        notes.append(
+            f"Feasibility-train stagger: start spacing = Δt_bw / bw_trains "
+            f"({bd:.3f} h / {K})."
+        )
+
+        def _phi(i: int) -> float:
+            return (i * bd) / float(K)
+
+        stagger_model_out = "feasibility_trains"
+        bw_trains_out = K
+        train_shortfall = K < min_k
+        if train_shortfall:
+            notes.append(
+                f"⚠ bw_trains={K} < ceil(N·Δt_bw/T)={min_k} — demand may exceed this schematic."
+            )
+
+    if sim_demand is not None and math.isfinite(float(sim_demand)):
+        notes.append(f"Feasibility sim_demand ≈ {float(sim_demand):.2f}.")
+
     filters: list[dict] = []
-    for i in range(int(n_filters_total)):
-        phi = (i / float(n_filters_total)) * period
+    for i in range(n_int):
+        phi = _phi(i)
         bws: list[tuple[float, float]] = []
         k_lo = int(math.floor((0.0 - phi - bd) / period)) - 1
         k_hi = int(math.ceil((horizon_h - phi) / period)) + 2
@@ -435,6 +509,7 @@ def filter_bw_timeline_24h(
             t1 = min(horizon_h, start + bd)
             if t0 + 1e-9 < t1:
                 bws.append((t0, t1))
+        bws.sort()
         merged: list[tuple[float, float]] = []
         for a, b in bws:
             if merged and a <= merged[-1][1] + 1e-9:
@@ -454,7 +529,7 @@ def filter_bw_timeline_24h(
 
         filters.append({"filter_index": i + 1, "segments": segs})
 
-    peak = 0
+    peak = 0.0
     t = 0.0
     while t < horizon_h - 1e-9:
         c = 0
@@ -463,17 +538,101 @@ def filter_bw_timeline_24h(
                 if s["state"] == "bw" and float(s["t0"]) <= t < float(s["t1"]):
                     c += 1
                     break
-        peak = max(peak, c)
+        peak = max(peak, float(c))
         t += 0.05
 
     return {
         "filters": filters,
-        "peak_concurrent_bw": int(peak),
+        "peak_concurrent_bw": int(round(peak)),
         "horizon_h": horizon_h,
         "t_cycle_h": round(tc, 3),
         "bw_duration_h": round(bd, 4),
         "period_h": round(period, 3),
-        "note": "Idealised uniform staggering; align with feasibility matrix BW trains.",
+        "stagger_model": stagger_model_out,
+        "bw_trains": bw_trains_out,
+        "sim_demand": None if sim_demand is None else round(float(sim_demand), 3),
+        "min_bw_trains_theory": min_k,
+        "train_shortfall": train_shortfall,
+        "note": " ".join(notes),
+    }
+
+
+def timeline_plant_operating_hours(
+    filters: list[dict],
+    *,
+    horizon_h: float,
+    n_design_online_total: int,
+) -> dict:
+    """
+    Plant-wide hours in [0, horizon_h] where **not in BW** filter count is
+    ≥ design N, exactly N−1, or below N−1.
+
+    Also splits the **≥ N** bucket into **exactly N** (rated set fully online) vs
+    **> N** (physical spare also in filtration — N+1 margin).
+
+    ``filters`` is the ``bw_timeline["filters"]`` list (one entry per **physical**
+    filter in the schematic). ``n_design_online_total`` is the total number of filters
+    that should be **online** for rated **N** hydraulics (typically
+    ``streams × (n_filters_per_stream − spares)``).
+    """
+    h = float(horizon_h)
+    if not filters or h <= 0:
+        return {
+            "hours_operating_ge_design_n_h": 0.0,
+            "hours_operating_eq_design_n_h": 0.0,
+            "hours_operating_gt_design_n_h": 0.0,
+            "hours_operating_eq_n_minus_1_h": 0.0,
+            "hours_operating_below_n_minus_1_h": 0.0,
+            "n_design_online_total": int(max(0, n_design_online_total)),
+            "n_physical_timeline": 0,
+        }
+    n_phys = len(filters)
+    n_des = max(0, int(n_design_online_total))
+    times: set[float] = {0.0, h}
+    for f in filters:
+        for s in f.get("segments") or []:
+            times.add(float(s["t0"]))
+            times.add(float(s["t1"]))
+    ts = sorted(times)
+    h_ge = h_eq_n = h_gt_n = h_nm1 = h_lt = 0.0
+    for i in range(len(ts) - 1):
+        t0, t1 = ts[i], ts[i + 1]
+        if t1 <= t0 + 1e-12:
+            continue
+        tm = 0.5 * (t0 + t1)
+        n_bw = 0
+        for f in filters:
+            in_bw = False
+            for s in f.get("segments") or []:
+                if str(s.get("state")) == "bw":
+                    a, b = float(s["t0"]), float(s["t1"])
+                    if a - 1e-9 <= tm < b + 1e-9:
+                        in_bw = True
+                        break
+            if in_bw:
+                n_bw += 1
+        n_op = n_phys - n_bw
+        dt = t1 - t0
+        if n_des <= 0:
+            h_ge += dt
+        elif n_op > n_des:
+            h_ge += dt
+            h_gt_n += dt
+        elif n_op == n_des:
+            h_ge += dt
+            h_eq_n += dt
+        elif n_op == n_des - 1:
+            h_nm1 += dt
+        else:
+            h_lt += dt
+    return {
+        "hours_operating_ge_design_n_h": round(h_ge, 2),
+        "hours_operating_eq_design_n_h": round(h_eq_n, 2),
+        "hours_operating_gt_design_n_h": round(h_gt_n, 2),
+        "hours_operating_eq_n_minus_1_h": round(h_nm1, 2),
+        "hours_operating_below_n_minus_1_h": round(h_lt, 2),
+        "n_design_online_total": n_des,
+        "n_physical_timeline": n_phys,
     }
 
 

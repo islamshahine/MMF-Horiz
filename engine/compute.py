@@ -16,11 +16,12 @@ from engine.backwash   import (
     solve_equivalent_velocity_for_target_expansion_pct,
     actual_m3m2h_to_nm3_m2h,
     filter_bw_timeline_24h,
+    timeline_plant_operating_hours,
 )
 from engine.collector_ext import collector_check_ext
 from engine.coating    import internal_surface_areas, lining_cost
 from engine.cartridge  import cartridge_design, cartridge_optimise
-from engine.energy     import hydraulic_profile, energy_summary
+from engine.energy     import hydraulic_profile, energy_summary, bw_equipment_hours_per_event
 from engine.economics  import (
     capex_breakdown, opex_annual, carbon_footprint,
     global_benchmark_comparison,
@@ -72,6 +73,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         streams         = _work["streams"]
         n_filters       = _work["n_filters"]
         redundancy      = _work["redundancy"]
+        hydraulic_assist = max(0, min(4, int(_work.get("hydraulic_assist", 0))))
         feed_temp       = _work["feed_temp"]
         feed_sal        = _work["feed_sal"]
         temp_low        = _work["temp_low"]
@@ -113,6 +115,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         air_scour_rate  = _work["air_scour_rate"]
         air_scour_mode  = str(_work.get("air_scour_mode", "manual")).strip().lower()
         air_scour_target_pct = float(_work.get("air_scour_target_expansion_pct", 20.0))
+        airwater_step_water_m_h = float(_work.get("airwater_step_water_m_h", 12.5))
+        bw_timeline_stagger = str(_work.get("bw_timeline_stagger", "feasibility_trains")).strip().lower()
         bw_cycles_day   = _work["bw_cycles_day"]
         bw_s_drain      = _work["bw_s_drain"]
         bw_s_air        = _work["bw_s_air"]
@@ -248,7 +252,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             geo_rows.append([L["Type"], L["Depth"], area, v_c, v_e, vol])
             curr_h = h2
         avg_area     = sum(b["Area"] for b in base) / len(base) if base else 1.0
-        q_per_filter = (total_flow / streams) / n_filters
+        _n_hyd       = max(1, n_filters - hydraulic_assist)
+        q_per_filter = (total_flow / streams) / _n_hyd if _n_hyd > 0 else 0.0
 
         # ── Block 4: Pressure drop (Ergun) ────────────────────────────────────────
         bw_dp = pressure_drop(
@@ -312,6 +317,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                 target_expansion_pct=air_scour_target_pct,
                 water_temp_c=bw_temp,
                 rho_water=rho_bw,
+                low_rate_water_m_h=airwater_step_water_m_h,
             )
             air_scour_used = float(air_scour_solve["velocity_m_h"])
             air_scour_solve = {
@@ -332,6 +338,15 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             air_scour_rate_m_h=air_scour_used,
             filtration_flow_m3h=q_per_filter,
         )
+        _blower_t = float(blower_inlet_temp_c)
+        _vessel_p = float(vessel_pressure_bar)
+        bw_hyd = {
+            **bw_hyd,
+            "q_air_nm3h": round(
+                actual_m3m2h_to_nm3_m2h(bw_hyd["q_air_m3h"], _blower_t, _vessel_p), 2),
+            "q_air_design_nm3h": round(
+                actual_m3m2h_to_nm3_m2h(bw_hyd["q_air_design_m3h"], _blower_t, _vessel_p), 2),
+        }
         bw_col = collector_check_ext(
             layers=layers,
             nozzle_plate_h_m=nozzle_plate_h,
@@ -379,7 +394,9 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         m_sol_high, w_tss_high, m_daily_high = _tss_bal(tss_high)
 
         # ── Filtration cycle (DP-trigger based) ───────────────────────────────────
-        _load_data_cyc = filter_loading(total_flow, streams, n_filters, redundancy)
+        _load_data_cyc = filter_loading(
+            total_flow, streams, n_filters, redundancy, hydraulic_assist,
+        )
         filt_cycles: dict = {}
         for _x, _nact, _q in _load_data_cyc:
             _sc = "N" if _x == 0 else f"N-{_x}"
@@ -479,12 +496,31 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                     _tl_tcyc = _v_tc
         except (KeyError, IndexError, TypeError, ValueError):
             pass
+        _bw_trains_tl = 1
+        _sim_d_tl = None
+        try:
+            _cell_tl = feasibility_matrix["N"]["temp_design"]["tss_avg"]
+            _bw_trains_tl = int(max(1, int(_cell_tl.get("bw_trains", 1))))
+            _sim_d_tl = float(_cell_tl.get("sim_demand", 0.0))
+        except (KeyError, TypeError):
+            pass
+        _stag = bw_timeline_stagger if bw_timeline_stagger in ("uniform", "feasibility_trains") else "feasibility_trains"
         bw_timeline = filter_bw_timeline_24h(
             n_filters_total=int(streams * n_filters),
             t_cycle_h=_tl_tcyc,
             bw_duration_h=_bw_dur_h,
             horizon_h=24.0,
+            bw_trains=_bw_trains_tl,
+            stagger_model=_stag,
+            sim_demand=_sim_d_tl,
         )
+        _n_des_paths = streams * max(1, n_filters - hydraulic_assist)
+        _tl_stats = timeline_plant_operating_hours(
+            bw_timeline.get("filters") or [],
+            horizon_h=float(bw_timeline.get("horizon_h", 24.0)),
+            n_design_online_total=_n_des_paths,
+        )
+        bw_timeline = {**bw_timeline, **_tl_stats}
 
         # ── Cartridge design ──────────────────────────────────────────────────────
         _cart_mu_cP = mu_feed * 1000.0
@@ -525,6 +561,11 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         _avail_design      = _n_feas.get("avail_pct",  90.0)
         _n_total_filters   = streams * n_filters
 
+        _pump_evt_h, _blower_evt_h = bw_equipment_hours_per_event(
+            bw_seq.get("steps"),
+            fallback_total_h=_bw_dur_h,
+        )
+
         energy = energy_summary(
             q_filter_m3h        = q_per_filter,
             n_filters_total     = _n_total_filters,
@@ -541,6 +582,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             p_blower_kw         = bw_hyd["p_blower_est_kw"],
             blower_motor_eta    = motor_eta,
             bw_duration_h       = _bw_dur_h,
+            bw_pump_hours_per_event_h=_pump_evt_h,
+            blower_hours_per_event_h=_blower_evt_h,
             bw_per_day_design   = _bw_per_day_design,
             availability_pct    = _avail_design,
             elec_tariff_usd_kwh = elec_tariff,
@@ -564,6 +607,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             tank_sf             = tank_sf,
             rho_bw_kg_m3        = rho_bw,
         )
+        bw_sizing = {**bw_sizing, "q_air_design_nm3h": bw_hyd["q_air_design_nm3h"]}
 
         # ── Consolidated weight ───────────────────────────────────────────────────
         nozzle_wt_total = sum(r.get("Total wt (kg)", 0) for r in nozzle_sched)
@@ -715,6 +759,11 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             n_filters_total            = _n_total_vessels,
             chemical_cost_usd_m3       = chemical_cost_m3,
             total_flow_m3h             = total_flow,
+            energy_kwh_yr_by_component={
+                "filtration": float(energy["e_filt_kwh_yr"]),
+                "bw_pump": float(energy["e_bw_pump_kwh_yr"]),
+                "blower": float(energy["e_blower_kwh_yr"]),
+            },
         )
         econ_carbon = carbon_footprint(
             filtration_power_kw   = energy["p_filt_avg_kw"],
@@ -730,6 +779,11 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             media_carbon_by_type  = _media_co2_kg,
             design_life_years     = int(design_life_years),
             total_flow_m3h        = total_flow,
+            energy_kwh_yr_by_component={
+                "filtration": float(energy["e_filt_kwh_yr"]),
+                "bw_pump": float(energy["e_bw_pump_kwh_yr"]),
+                "blower": float(energy["e_blower_kwh_yr"]),
+            },
         )
         econ_bench = global_benchmark_comparison(
             capex_total_usd   = econ_capex["total_capex_usd"],

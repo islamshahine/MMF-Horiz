@@ -11,7 +11,7 @@
 - Hydraulic sizing (filtration velocity, EBCT, pressure drop)
 - Vessel mechanical design (ASME VIII Div. 1 thickness, weights)
 - Backwash system design (bed expansion, hydraulics, scheduling)
-- Economics (CAPEX, OPEX, carbon footprint, LCOW benchmarking)
+- Economics (CAPEX, OPEX, carbon footprint, LCOW benchmarking) — **intermittent BW** pump & blower duty from the BW step table for annual kWh; OPEX energy and operational CO₂ use **metered-style Σ kWh × tariff / grid** (not 24/7 rated pump power)
 - Engineering assessment with severity scoring
 - **Design comparison** (⚖️ Compare tab): sidebar design vs editable alternative, second `compute_all`, 13-metric diff table, CSV export
 - Technical report generation (Word .docx + optional PDF)
@@ -83,7 +83,7 @@ MMF-Horiz/
 │   └── models.py             # shared HTTP error payload models
 │
 ├── engine/                   # Pure Python calculation modules (no Streamlit)
-│   ├── compute.py            # compute_all(inputs) → computed dict (~850 lines; validation + logging wrapper)
+│   ├── compute.py            # compute_all(inputs) → computed dict; wires BW duty split, timeline stats, metered OPEX/CO₂
 │   ├── validators.py         # validate_inputs + REFERENCE_FALLBACK_INPUTS (SI contract)
 │   ├── comparison.py         # Design A vs B: diff_value, compare_designs, COMPARISON_METRICS (~110 lines)
 │   ├── compare.py            # Public facade: re-exports comparison + compare_numeric, compare_severity, generate_delta_summary
@@ -94,15 +94,18 @@ MMF-Horiz/
 │   │                         #   linear_density_kg_m, velocity_m_s, flow_m3_min, …)
 │   ├── water.py              # Water properties (density, viscosity vs T, S)
 │   ├── geometry.py           # segment_area(), dish_volume() for horizontal vessel
-│   ├── process.py            # filter_loading() — flow per filter per scenario
+│   ├── process.py            # filter_loading() — physical N+1 bank: design N = installed − standby; scenarios N, N−1, …
 │   ├── mechanical.py         # ASME VIII thickness, weights, saddle (Zick method)
-│   ├── backwash.py           # Bed expansion, Ergun ΔP, BW hydraulics, scheduling
+│   ├── backwash.py           # Bed expansion, Ergun ΔP, BW hydraulics, scheduling, filter_bw_timeline_24h,
+│   │                         #   timeline_plant_operating_hours (N / N−1 / below N−1 duty buckets)
 │   ├── collector_ext.py      # Collector height check, media carryover risk
 │   ├── coating.py            # Internal surface areas, lining/coating cost
 │   ├── cartridge.py          # Cartridge filter design & optimisation
 │   ├── nozzles.py            # Nozzle schedule, DN series, flange ratings
-│   ├── energy.py             # Hydraulic profile, pump/blower energy summary
+│   ├── energy.py             # Hydraulic profile; energy_summary; bw_equipment_hours_per_event()
+│   │                         #   (split BW water-pump vs air-scour hours from bw_sequence steps)
 │   ├── economics.py          # CAPEX, OPEX, carbon footprint, LCOW; capital_recovery_factor();
+│   │                         #   opex_annual / carbon_footprint accept energy_kwh_yr_by_component (metered annual kWh)
 │   │                         #   global_benchmark_comparison() returns SI numeric *bench_si* tuples
 │   │                         #   (UI formats ranges via fmt_si_range — no hardcoded unit strings)
 │   ├── drawing.py            # ISO 128 vessel elevation: hatching, centreline, title block
@@ -112,7 +115,7 @@ MMF-Horiz/
 │   ├── optimisation.py       # constraint_check, evaluate_candidate, optimise_design (grid MVP)
 │   ├── fouling.py            # SDI/MFI/TSS/LV → solids loading, run time, severity, BW interval (empirical)
 │   ├── logger.py             # File logging: compute + validation + JSON/DB project events (configure for tests)
-│   ├── sensitivity.py        # OAT tornado analysis: run_sensitivity() — 9 params × 4 outputs
+│   ├── sensitivity.py        # OAT tornado: run_sensitivity(); OUTPUT_DEFS descriptions; tornado_narrative()
 │   └── pdf_report.py         # ReportLab PDF: build_pdf(inputs, computed, sections, unit_system)
 │
 ├── ui/                       # Streamlit rendering modules
@@ -131,13 +134,15 @@ MMF-Horiz/
 │   ├── tab_report.py         # 📄 Report tab + JSON save/load; PDF/Word use fmt; PDF passes unit_system
 │   ├── tab_compare.py        # ⚖️ Compare tab — Design B vs sidebar A, compute_all×2, CSV export
 │
-└── tests/                    # pytest — ~338 collected; 336 passed, 2 skipped (typical local run)
+└── tests/                    # pytest — ~368 collected; 366 passed, 2 skipped (typical local run)
     ├── conftest.py           # Shared fixtures (standard_layers, …)
     ├── test_water.py         # Water property functions
     ├── test_process.py       # filter_loading(), filter_area()
     ├── test_mechanical.py    # ASME thickness, weight, saddle
     ├── test_backwash.py      # Ergun ΔP, bed expansion, Wen-Yu, BW hydraulics
-    ├── test_economics.py     # CRF, CAPEX, OPEX, carbon
+    ├── test_economics.py     # CRF, CAPEX, OPEX, carbon (incl. metered kWh path)
+    ├── test_energy.py        # bw_equipment_hours_per_event from BW steps
+    ├── test_sensitivity.py   # tornado_narrative helper
     ├── test_media.py         # Media catalogue, collector_max_height
     ├── test_units.py         # Unit conversion — extended catalogue & convert_inputs coverage
     ├── test_integration.py   # compute_all() end-to-end smoke
@@ -160,7 +165,7 @@ MMF-Horiz/
 | Category | Key examples |
 |---|---|
 | Project metadata | `project_name`, `doc_number`, `revision`, `client`, `engineer` |
-| Process | `total_flow`, `streams`, `n_filters`, `redundancy` |
+| Process | `total_flow`, `streams`, `n_filters` (total **physical** / stream), `hydraulic_assist` (standby / stream), `redundancy` |
 | Water quality | `feed_temp`, `feed_sal`, `bw_temp`, `bw_sal`, `tss_low/avg/high`, `temp_low/high` |
 | Vessel geometry | `nominal_id`, `total_length`, `end_geometry`, `lining_mm` |
 | Mechanical | `material_name`, `design_pressure`, `corrosion`, `shell_radio`, `head_radio`, `ov_shell`, `ov_head` |
@@ -189,9 +194,10 @@ MMF-Horiz/
 | TSS balance | `m_sol_low/avg/high`, `w_tss_low/avg/high`, `m_daily_low/avg/high` |
 | Filtration cycles | `filt_cycles`, `cycle_matrix`, `load_data`, `tss_col_keys`/`tss_vals`, `temp_col_keys`, `feasibility_matrix` |
 | Cartridge | `cart_result`, `cart_optim` |
-| Hydraulics & energy | `hyd_prof`, `energy` |
+| Hydraulics & energy | `hyd_prof`, `energy` (incl. `h_bw_pump_plant_day`, `h_blower_plant_day`, annual kWh split) |
+| BW timeline | `bw_timeline` — filters[], peak_concurrent_bw, hours at N / N−1 / below N−1, optional N+1 margin split |
 | Weight | `w_noz`, `w_total`, `vessel_areas`, `lining_result`, `wt_oper` |
-| Economics | `econ_capex`, `econ_opex`, `econ_carbon`, `econ_bench` (includes `*_bench_si` tuples for UI ranges) |
+| Economics | `econ_capex`, `econ_opex`, `econ_carbon`, `econ_bench` (includes `*_bench_si` tuples; `econ_opex` may include `energy_kwh_*_yr` when metered) |
 | Assessment | `overall_risk`, `risk_color/border/icon`, `drivers`, `impacts`, `recommendations`, `n_criticals/warnings/advisories`, `all_lv_issues`, `all_ebct_issues`, `rob_rows` |
 | Severity fns | `lv_severity_fn`, `ebct_severity_fn` (callables passed to tabs) |
 | Input validation | `input_validation` (`valid`, `errors`, `warnings` from `engine/validators.py` — **SI magnitudes**, same `inputs` contract as the rest of the engine) · `compute_used_reference_fallback` (bool; when invalid, `compute_all` uses `REFERENCE_FALLBACK_INPUTS` so tabs still render) |
@@ -211,7 +217,7 @@ MMF-Horiz/
 | Filtration cycle | DP-trigger based: solve t_cycle from α, TSS, LV, dp_trigger |
 | BW feasibility | Availability = t_cycle/(t_cycle + t_BW); simultaneous BW demand → n_trains |
 | LCOW | User **CRF** (`capital_recovery_factor(discount_rate, design_life_years)`) × CAPEX + annual OPEX, divided by annual throughput (see Economics tab — not a fixed 8 % shortcut) |
-| Carbon | Scope 2 (grid × energy) + Scope 3 (steel + media + concrete) |
+| Carbon | Scope 2 (**grid × annual kWh** from `energy` breakdown when wired) + Scope 3 (steel + media + concrete) |
 
 ---
 
@@ -236,11 +242,11 @@ Three-tier system applied to every scenario × layer combination:
 | Tab | Key content |
 |---|---|
 | 💧 Filtration | Water properties · flow distribution by scenario · LV and EBCT per layer per scenario · filtration cycle matrix (TSS × temperature) · cartridge filter design |
-| 🔄 Backwash | Collector / carryover check · bed expansion · BW hydraulics · TSS mass balance · BW scheduling feasibility matrix (scenario × temperature × TSS) · BW system sizing (pumps, blower, tank) |
+| 🔄 Backwash | Collector / carryover check · bed expansion · BW hydraulics · TSS mass balance · BW scheduling feasibility matrix (scenario × temperature × TSS) · BW system sizing (pumps, blower, tank) · **24 h duty Gantt** (Plotly) with plant-wide **N / N−1** hour buckets and dynamic readout |
 | ⚙️ Mechanical | Vessel drawing (ISO 128 style) · ASME thickness · nozzle plate · nozzle schedule · saddle design (Zick) · weight summary · lining/coating |
 | 🧱 Media | Geometric volumes · media properties · pressure drop all scenarios · media inventory · clogging analysis · **Media Engineering Intelligence** (arrangement validation + per-layer role/BW/bio cards) |
-| 💰 Economics | CAPEX breakdown + pie chart · OPEX breakdown + pie chart · carbon footprint · global benchmark with **proper CRF** (i, n user-inputs) · benchmark bands formatted in **active unit system** |
-| 🎯 Assessment | Overall risk banner · key drivers · operational impacts · violation tables · Design Robustness Index · **n_filters sweep (N-scenario LV)** (optimisation roadmap MVP) · **OAT Sensitivity tornado chart** (9 inputs × 4 outputs) |
+| 💰 Economics | CAPEX breakdown + pie chart · OPEX breakdown + pie chart · carbon footprint · **BW pump / blower h/day** (plant-wide, from step timing × cycles) · annual kWh split caption · global benchmark with **proper CRF** (i, n user-inputs) · benchmark bands in **active unit system** |
+| 🎯 Assessment | Overall risk banner · key drivers · operational impacts · violation tables · Design Robustness Index · **n_filters sweep** — columns **Physical / stream** & **Design N** (standby fixed); **OAT tornado** (9×4) with metric **descriptions**, **tornado_narrative** under chart |
 | 📄 Report | **JSON project save/load** · section selector · **PDF download** (ReportLab) · Word .docx download · inline markdown preview |
 | ⚖️ Compare | Design **A** (current sidebar) vs **B** (editable subset) · second `compute_all` · **13 key metrics** via `compare_designs` · 🟡 significant diff column · winner summary · **CSV export** |
 
@@ -268,7 +274,7 @@ Single place to see **what is done in repo + tests**, what is **engine-only** (n
 
 | Item | Typical local result |
 |------|----------------------|
-| pytest | **~338** collected → **336 passed**, **2 skipped**, **0 failed** |
+| pytest | **~368** collected → **366 passed**, **2 skipped**, **0 failed** |
 | `engine/` coverage (`pytest --cov=engine --cov-report=term-missing`) | **~78%** lines — strong on `compute.py`, `economics.py`, `units.py`; modules not hit in that run show **0%** (e.g. `drawing.py`, `pdf_report.py`, `sensitivity.py` when only `engine/` is measured); thinner coverage on `coating.py`, `media.py`, `project_io.py` (widget map branches), `validators.py` |
 | Headless API | `uvicorn api.main:app` — `GET /health`, `POST /compute` (SI `inputs` JSON), Open **`/docs`** |
 | Baseline milestone | Empty commit **`perf(infrastructure): regression verified platform baseline`** marks a verified test pass on `main` |
@@ -315,31 +321,33 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | 1 | **Global / automatic optimiser** | No MILP or gradient search; only **manual sweep** (UI) + **grid ranker** (`optimise_design`). Auto-write best design to sidebar is future. |
 | 2 | **Multi-case comparison** | Compare tab = **A vs B** + CSV; no 3+ cases, no named library. |
 | 3 | **Vendor nozzle catalogue** | Still generic `engine/nozzles.py` estimates. |
-| 4 | **Live BW scheduler** | No Gantt / 24 h allocation. |
+| 4 | **Live BW scheduler** | **24 h schematic** Gantt + stagger exists; no multi-day optimiser / ops Gantt tied to plant DCS. |
 | 5 | **External media pricing** | No price database or API feed. |
 | 6 | **Collector lateral hydraulics** | Height / carryover only; no lateral ΔP network. |
 | 7 | **Air scour auto-tune** | User sets `air_scour_rate`; no solver for target expansion. |
 | 8 | **Test depth** | Add coverage for drawing/PDF generation paths, sensitivity engine-only tests, deeper `media`/`coating`/`validators` branches. |
 
 **Narrative (same themes)**  
-(1) Tighter optimisation + UI integration. (2) More than two saved cases. (3) Real vendor nozzle tables. (4) BW timeline visualisation. (5) Configurable media costs. (6) Fouling UI wiring (engine ready). (7) Collector detail model. (8) Air scour solver.
+(1) Tighter optimisation + UI integration. (2) More than two saved cases. (3) Real vendor nozzle tables. (4) Extended BW / ops scheduling beyond 24 h schematic. (5) Configurable media costs. (6) Fouling UI wiring (engine ready). (7) Collector detail model. (8) Air scour solver.
 
 ---
 
 ## Implemented Enhancements (v2) — quick index
 
-Rows **1–11** match **Section A** (original v2). For roadmap rows **validation → optimisation**, see **Section B** above.
+Rows **1–11** match **Section A** (original v2). Rows **12–13** are recent hydraulic / energy refinements. For roadmap rows **validation → optimisation**, see **Section B** above.
 
 | # | Feature | Files |
 |---|---|---|
 | 1 | **ISO 128 mechanical drawing** — hatching, centreline, dual dimension lines, 6 nozzle stubs, title block | `engine/drawing.py` |
 | 2 | **JSON project save/load** — full session state mapping, 88-key widget map, rerun-on-load | `engine/project_io.py`, `ui/tab_report.py`, `ui/sidebar.py` |
-| 3 | **OAT sensitivity / tornado chart** — 9 inputs × 4 outputs, cached in session_state, Plotly diverging bar | `engine/sensitivity.py`, `ui/tab_assessment.py` |
+| 3 | **OAT sensitivity / tornado chart** — 9×4, OUTPUT_DEFS descriptions, `tornado_narrative()`, Plotly | `engine/sensitivity.py`, `ui/tab_assessment.py` |
 | 4 | **PDF report** — ReportLab Platypus, 8 selectable sections, download alongside Word | `engine/pdf_report.py`, `ui/tab_report.py` |
 | 5 | **Media engineering intelligence** — 4 new media types, name aliases (MnO₂/Coarse sand/…), arrangement validation, per-layer role/BW/bio cards | `engine/media.py`, `ui/tab_media.py` |
 | 6 | **Proper CRF-based LCOW** — `capital_recovery_factor(i, n)` replaces hardcoded 0.08; discount_rate wired end-to-end | `engine/economics.py`, `engine/compute.py`, `ui/tab_economics.py` |
 | 7 | **Metric / Imperial unit toggle** — radio at top of sidebar; engine always receives/returns SI; `fmt()`/`ulbl()`/`dv()` at display boundary; `convert_inputs()` + `_reconvert_session_units()` on unit change | `engine/units.py`, `ui/sidebar.py`, `ui/helpers.py`, all tab files |
 | 8 | **Regression test suite** — pure pytest (no Streamlit); water, process, mechanical, backwash, economics, media, units, integration | `tests/` |
 | 9 | **Output unit alignment (tables & reports)** — backwash/media/economics/mechanical/report/PDF; hydraulic `fmt_bar_mwc`; economics `fmt_si_range` + `co2_kg_per_kwh`; nozzle schedule & saddle catalogue display DFs; DN stays ISO mm in editor | `ui/*.py`, `engine/pdf_report.py`, `engine/economics.py`, `engine/units.py` |
-| 10 | **n_filters design sweep (optimisation MVP)** — Assessment tab expander: band sweep with full `compute_all`; N-scenario LV vs velocity threshold | `ui/tab_assessment.py` |
+| 10 | **n_filters design sweep (optimisation MVP)** — Assessment tab expander: band sweep with full `compute_all`; **Physical / stream** vs **Design N** columns; N-scenario LV vs velocity threshold | `ui/tab_assessment.py` |
 | 11 | **Design comparison tab** — Design A vs B, `engine/comparison.py` + `compute_all` for B, session `compare_inputs_b`, CSV export | `engine/comparison.py`, `ui/tab_compare.py`, `app.py` |
+| 12 | **Physical N+1 bank** — `hydraulic_assist` spare/stream; design **N** = installed − spare; BW timeline & loading; sidebar **Calculated N** readout | `engine/process.py`, `engine/compute.py`, `engine/backwash.py`, `engine/validators.py`, `ui/sidebar.py`, `ui/tab_backwash.py`, `ui/tab_compare.py` |
+| 13 | **BW duty → energy / OPEX / CO₂** — `bw_equipment_hours_per_event()` from BW steps; `energy_kwh_yr_by_component` in `opex_annual` / `carbon_footprint` | `engine/energy.py`, `engine/economics.py`, `engine/compute.py`, `ui/tab_economics.py` |

@@ -41,7 +41,7 @@ _LAYERS = [
 ]
 
 _INPUTS = {
-    "total_flow": 21000.0, "streams": 1, "n_filters": 16, "redundancy": 1,
+    "total_flow": 21000.0, "streams": 1, "n_filters": 16, "hydraulic_assist": 0, "redundancy": 1,
     "feed_temp": 27.0, "feed_sal": 35.0,
     "temp_low": 15.0, "temp_high": 35.0,
     "tss_low": 5.0, "tss_avg": 10.0, "tss_high": 20.0,
@@ -61,6 +61,8 @@ _INPUTS = {
     "alpha_specific": 1e12, "dp_trigger_bar": 1.0,
     "bw_velocity": 30.0, "air_scour_rate": 55.0,
     "air_scour_mode": "manual", "air_scour_target_expansion_pct": 20.0,
+    "airwater_step_water_m_h": 12.5,
+    "bw_timeline_stagger": "feasibility_trains",
     "bw_cycles_day": 1,
     "bw_s_drain": 10, "bw_s_air": 1, "bw_s_airw": 5,
     "bw_s_hw": 10, "bw_s_settle": 2, "bw_s_fill": 10, "bw_total_min": 38,
@@ -246,12 +248,22 @@ class TestBackwashIntegration:
         """BW flow must be positive."""
         assert result["bw_hyd"]["q_bw_m3h"] > 0
 
+    def test_bw_hyd_air_nm3h_present(self, result):
+        """Air blower flows reported as Nm³/h (normal) for SI display."""
+        assert "q_air_nm3h" in result["bw_hyd"]
+        assert "q_air_design_nm3h" in result["bw_hyd"]
+        assert result["bw_hyd"]["q_air_nm3h"] > 0
+        assert result["bw_sizing"]["q_air_design_nm3h"] == result["bw_hyd"]["q_air_design_nm3h"]
+
     def test_bw_timeline_present(self, result):
-        """24 h duty chart data must match filter count."""
+        """24 h duty chart uses feasibility trains and matches filter count."""
         tl = result["bw_timeline"]
         assert tl["horizon_h"] == pytest.approx(24.0, rel=0.01)
         assert len(tl["filters"]) == 16
+        assert tl.get("stagger_model") == "feasibility_trains"
+        kt = int(tl.get("bw_trains") or 1)
         assert tl["peak_concurrent_bw"] >= 1
+        assert tl["peak_concurrent_bw"] <= kt + 1
 
 
 def test_air_scour_auto_expansion_solve():
@@ -264,8 +276,29 @@ def test_air_scour_auto_expansion_solve():
     assert sol is not None
     assert sol["ok"] is True
     assert "nm3_m2_h" in sol
-    assert 9.0 <= sol["expansion_at_velocity_pct"] <= 15.0
+    assert "expansion_water_only_pct" in sol
+    assert "combined_superficial_m_h" in sol
+    assert 5.0 <= sol["expansion_at_velocity_pct"] <= 16.0
     assert r["bw_hyd"]["air_scour_rate_m_h"] == pytest.approx(sol["velocity_m_h"], rel=0.02)
+
+
+def test_hydraulic_standby_n_plus_one_bank_and_timeline():
+    """N+1 physical bank: q uses design N; duty chart has one row per physical filter."""
+    inp = dict(_INPUTS)
+    inp["n_filters"] = 17
+    inp["hydraulic_assist"] = 1
+    r = compute_all(inp)
+    assert r["q_per_filter"] == pytest.approx(1312.5, rel=1e-4)
+    assert len(r["bw_timeline"]["filters"]) == 17
+    assert "hours_operating_ge_design_n_h" in r["bw_timeline"]
+    assert "hours_operating_eq_design_n_h" in r["bw_timeline"]
+    hsum = (
+        r["bw_timeline"]["hours_operating_eq_design_n_h"]
+        + r["bw_timeline"]["hours_operating_gt_design_n_h"]
+        + r["bw_timeline"]["hours_operating_eq_n_minus_1_h"]
+        + r["bw_timeline"]["hours_operating_below_n_minus_1_h"]
+    )
+    assert hsum == pytest.approx(24.0, abs=0.1)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

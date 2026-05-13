@@ -6,7 +6,7 @@ import plotly.graph_objects as go
 import streamlit as st
 
 from engine.compute import compute_all
-from engine.sensitivity import OUTPUT_DEFS, run_sensitivity
+from engine.sensitivity import OUTPUT_DEFS, run_sensitivity, tornado_narrative
 from ui.helpers import dv, fmt, ulbl
 
 
@@ -38,6 +38,7 @@ def render_tab_assessment(inputs: dict, computed: dict):
     streams            = inputs["streams"]
     n_filters          = inputs["n_filters"]
     redundancy         = inputs["redundancy"]
+    hydraulic_assist   = int(inputs.get("hydraulic_assist", 0))
     corrosion          = inputs["corrosion"]
 
     st.subheader("Process assessment")
@@ -129,10 +130,13 @@ def render_tab_assessment(inputs: dict, computed: dict):
     st.table(pd.DataFrame([
         [f"Total flow ({ulbl('flow_m3h')})",
          fmt(total_flow, 'flow_m3h', 1)],
-        ["Streams × filters",
+        ["Streams × installed filters",
          f"{streams} × {n_filters} = {streams*n_filters} vessels"],
-        ["Redundancy",          f"N-{redundancy}"],
-        ["Active filters (N)",  f"{streams*n_filters - redundancy*streams}"],
+        ["Standby filters (physical / stream)", str(hydraulic_assist)],
+        ["Outage depth modelled", f"N-{redundancy}"],
+        ["Hydraulic paths (design N, plant-wide)",
+         f"{streams * max(1, n_filters - hydraulic_assist)} "
+         f"({streams} stream(s) × {max(1, n_filters - hydraulic_assist)} path(s))"],
         [f"Nominal ID ({ulbl('length_m')})",
          fmt(nominal_id, 'length_m', 3)],
         [f"Filter area ({ulbl('area_m2')})",
@@ -157,12 +161,19 @@ def render_tab_assessment(inputs: dict, computed: dict):
     # ── Design sweep: n_filters vs N-scenario LV (optimisation roadmap MVP) ─
     with st.expander("Design sweep — filters per stream vs N-scenario LV", expanded=False):
         st.caption(
-            "Vary **n_filters** (per stream) over a band; each row runs full **compute_all** "
-            "on a copy of inputs. **N** scenario LV is compared to **velocity_threshold**. "
-            "Does not change sidebar values."
+            "Vary **total physical filters / stream** (`n_filters`). "
+            "Sidebar **Standby filters (physical / stream)** is **held constant** for every row. "
+            "Each row runs full **compute_all**; results do not change sidebar values."
+        )
+        st.info(
+            "**N-scenario LV** always uses **design N = physical − standby** active paths per stream — "
+            "the same basis as the **Filtration** table row **Scenario N** (there, **Active filters** = design N). "
+            "So with **1 spare**, sweep **physical 17** → design **16** (LV **11.33**); sweep **physical 16** → design **15** "
+            "(LV **12.08**), which matches **Scenario N−1** on a 17+1 bank, **not** Scenario N."
         )
         _nf_cur = int(n_filters)
         _red = int(redundancy)
+        _ha_sw = int(hydraulic_assist)
         _nf_min = max(_red + 1, 1)
         _c1, _c2, _c3 = st.columns(3)
         with _c1:
@@ -198,20 +209,23 @@ def render_tab_assessment(inputs: dict, computed: dict):
                 for _nf in range(int(_nf_lo), int(_nf_hi) + 1):
                     _inp = copy.deepcopy(inputs)
                     _inp["n_filters"] = _nf
+                    _n_des_row = _nf - _ha_sw
                     try:
                         _comp = compute_all(_inp)
                         _fc = _comp.get("filt_cycles") or {}
                         _lv_si = float((_fc.get("N") or {}).get("lv_m_h", 0.0))
                         _ok = _lv_si <= float(velocity_threshold)
                         _rows.append({
-                            "n (per stream)": _nf,
+                            "Physical / stream": _nf,
+                            "Design N / stream": _n_des_row,
                             _lv_hdr: fmt(_lv_si, "velocity_m_h", 2),
                             _thr_hdr: fmt(float(velocity_threshold), "velocity_m_h", 2),
                             "Within envelope": "Yes" if _ok else "No",
                         })
                     except Exception as _ex:
                         _rows.append({
-                            "n (per stream)": _nf,
+                            "Physical / stream": _nf,
+                            "Design N / stream": _n_des_row,
                             _lv_hdr: "—",
                             _thr_hdr: fmt(float(velocity_threshold), "velocity_m_h", 2),
                             "Within envelope": f"Error: {_ex!s}"[:120],
@@ -231,7 +245,11 @@ def render_tab_assessment(inputs: dict, computed: dict):
         "percentage while all others are held constant. Bars show deviation "
         "from the base-case value."
     )
+    with st.expander("What each output metric means (tornado Y-axis context)", expanded=False):
+        for _od in OUTPUT_DEFS:
+            st.markdown(f"**{_od['label']}**  \n{_od.get('description', '—')}")
     _out_labels = {od["key"]: od["label"] for od in OUTPUT_DEFS}
+    _out_desc = {od["key"]: od.get("description", "") for od in OUTPUT_DEFS}
     _sens_col1, _sens_col2 = st.columns([2, 1])
     with _sens_col1:
         _sel_out = st.selectbox(
@@ -241,6 +259,8 @@ def render_tab_assessment(inputs: dict, computed: dict):
     with _sens_col2:
         _run_btn = st.button("Run sensitivity", key="_sens_run",
                              use_container_width=True)
+    if _desc_sel := _out_desc.get(_sel_out, ""):
+        st.caption(_desc_sel)
     if _run_btn:
         with st.spinner("Running sensitivity analysis (18 simulations)…"):
             st.session_state["_sens_results"] = run_sensitivity(inputs)
@@ -278,5 +298,8 @@ def render_tab_assessment(inputs: dict, computed: dict):
         )
         _fig.add_vline(x=0, line_width=1, line_color="#888")
         st.plotly_chart(_fig, use_container_width=True)
+        st.markdown(
+            tornado_narrative(_rows, output_label=_out_labels[_sel_out]),
+        )
     elif not _sens_res:
         st.info("Press **Run sensitivity** to generate the tornado chart.")

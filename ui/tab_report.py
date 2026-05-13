@@ -55,6 +55,7 @@ def render_tab_report(inputs: dict, computed: dict):
     streams         = inputs["streams"]
     n_filters       = inputs["n_filters"]
     redundancy      = inputs["redundancy"]
+    hydraulic_assist = int(inputs.get("hydraulic_assist", 0))
     feed_sal        = inputs["feed_sal"]
     bw_sal          = inputs["bw_sal"]
     feed_temp       = inputs["feed_temp"]
@@ -201,8 +202,9 @@ def render_tab_report(inputs: dict, computed: dict):
             _tbl([
                 ("Total plant flow",     fmt(total_flow, "flow_m3h", 0)),
                 ("Streams",              str(streams)),
-                ("Filters / stream",     str(n_filters)),
-                ("Redundancy",           f"N-{redundancy} per stream"),
+                ("Total physical number of filters / stream", str(n_filters)),
+                ("Hydraulic assist",     f"{hydraulic_assist} spare(s) / stream (design N = installed − spare)"),
+                ("Outage depth modelled", f"N-{redundancy} per stream"),
                 ("Flow / filter (N)",    fmt(q_per_filter, "flow_m3h", 1)),
                 ("Filtration rate (N)",  fmt(q_per_filter / avg_area, "velocity_m_h", 2)),
                 ("Cross-sectional area", fmt(avg_area, "area_m2", 3)),
@@ -387,7 +389,7 @@ def render_tab_report(inputs: dict, computed: dict):
                 ("BW pump head",         fmt(_bws["bw_head_mwc"], "pressure_mwc", 2)),
                 ("BW pump shaft power",  fmt(_bws["p_pump_shaft_kw"], "power_kw", 1)),
                 ("BW pump motor power",  fmt(_bws["p_pump_motor_kw"], "power_kw", 1)),
-                ("Air flow (design)",    fmt(_bws["q_air_design_m3h"], "flow_m3h", 1)),
+                ("Air flow (design)",    fmt(_bws["q_air_design_nm3h"], "air_flow_nm3h", 1)),
                 ("Blower back-pressure", fmt(_bws["P2_pa"] / 1e5, "pressure_bar", 3) + " abs"),
                 ("Blower shaft power",   fmt(_bws["p_blower_shaft_kw"], "power_kw", 1)),
                 ("Blower motor power",   fmt(_bws["p_blower_motor_kw"], "power_kw", 1)),
@@ -536,8 +538,11 @@ def render_tab_report(inputs: dict, computed: dict):
 | Parameter | Value |
 |---|---|
 | Total plant flow | {fmt(total_flow, "flow_m3h", 0)} |
-| Streams × filters / stream | {streams} × {n_filters} |
-| Redundancy | N-{redundancy} per stream |
+| Streams | {streams} |
+| Total physical number of filters / stream | {n_filters} |
+| Total physical filters (plant-wide) | {streams * n_filters} |
+| Hydraulic assist | {hydraulic_assist} spare(s)/stream (design N = installed − spare) |
+| Outage depth modelled | N-{redundancy} per stream |
 | Flow / filter (N) | {fmt(q_per_filter, "flow_m3h", 1)} |
 | Filtration rate (N) | {fmt(q_per_filter/avg_area, "velocity_m_h", 2)} |
 | Cross-sectional area | {fmt(avg_area, "area_m2", 3)} |
@@ -667,7 +672,7 @@ def render_tab_report(inputs: dict, computed: dict):
 | BW pump flow | {fmt(_bws2['q_bw_design_m3h'], 'flow_m3h', 1)} |
 | BW pump head | {fmt(_bws2['bw_head_mwc'], 'pressure_mwc', 2)} |
 | BW pump motor | {fmt(_bws2['p_pump_motor_kw'], 'power_kw', 1)} |
-| Air blower flow | {fmt(_bws2['q_air_design_m3h'], 'flow_m3h', 1)} |
+| Air blower flow | {fmt(_bws2['q_air_design_nm3h'], 'air_flow_nm3h', 1)} |
 | Blower back-pressure | {fmt(_bws2['P2_pa']/1e5, 'pressure_bar', 3)} abs |
 | Blower motor | {fmt(_bws2['p_blower_motor_kw'], 'power_kw', 1)} |
 | BW water tank | {fmt(_bws2['v_tank_m3'], 'volume_m3', 1)} |

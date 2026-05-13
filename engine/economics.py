@@ -81,13 +81,29 @@ def opex_annual(
     n_filters_total: int,
     chemical_cost_usd_m3: float,
     total_flow_m3h: float,
+    *,
+    energy_kwh_yr_by_component: dict[str, float] | None = None,
 ) -> dict:
     """
     Returns annual OPEX breakdown (USD/year).
+
+    If ``energy_kwh_yr_by_component`` is provided (filtration / bw_pump / blower annual kWh),
+    energy cost uses that **metered-style** total × tariff. Otherwise falls back to
+    ``(filtration_power_kw + bw_power_kw + blower_power_kw) × operating_hours`` (legacy;
+    misstates intermittent BW loads).
     """
-    total_power_kw = filtration_power_kw + bw_power_kw + blower_power_kw
-    energy_kwh_yr  = total_power_kw * operating_hours
-    energy_cost_yr = energy_kwh_yr * electricity_tariff
+    if energy_kwh_yr_by_component is not None:
+        ek = energy_kwh_yr_by_component
+        e_f = float(ek.get("filtration", 0.0))
+        e_b = float(ek.get("bw_pump", 0.0))
+        e_l = float(ek.get("blower", 0.0))
+        energy_kwh_yr = e_f + e_b + e_l
+        energy_cost_yr = energy_kwh_yr * electricity_tariff
+    else:
+        total_power_kw = filtration_power_kw + bw_power_kw + blower_power_kw
+        energy_kwh_yr = total_power_kw * operating_hours
+        energy_cost_yr = energy_kwh_yr * electricity_tariff
+        e_f = e_b = e_l = None
 
     media_replace_cost_yr = 0.0
     media_detail: dict = {}
@@ -116,6 +132,16 @@ def opex_annual(
         "total_opex_usd_yr":    round(total_opex),
         "opex_per_m3_usd":      round(total_opex / max(annual_flow_m3, 1.0), 4),
         "annual_flow_m3":       round(annual_flow_m3),
+        "energy_kwh_yr":        round(energy_kwh_yr),
+        **(
+            {
+                "energy_kwh_filtration_yr": round(e_f),
+                "energy_kwh_bw_pump_yr": round(e_b),
+                "energy_kwh_blower_yr": round(e_l),
+            }
+            if e_f is not None
+            else {}
+        ),
     }
 
 
@@ -133,13 +159,27 @@ def carbon_footprint(
     media_carbon_by_type: dict,
     design_life_years: int,
     total_flow_m3h: float,
+    *,
+    energy_kwh_yr_by_component: dict[str, float] | None = None,
 ) -> dict:
     """
     Returns lifecycle carbon footprint. Construction CO₂ is one-time;
     operational CO₂ is per year and over the design life.
+
+    If ``energy_kwh_yr_by_component`` is set, operational CO₂ uses Σ kWh × grid intensity
+    (aligned with ``opex_annual``). Otherwise legacy ``Σ power × hours``.
     """
-    total_power_kw = filtration_power_kw + bw_power_kw + blower_power_kw
-    co2_operational_kg_yr = total_power_kw * operating_hours * grid_intensity_kg_kwh
+    if energy_kwh_yr_by_component is not None:
+        ek = energy_kwh_yr_by_component
+        energy_kwh_yr = (
+            float(ek.get("filtration", 0.0))
+            + float(ek.get("bw_pump", 0.0))
+            + float(ek.get("blower", 0.0))
+        )
+        co2_operational_kg_yr = energy_kwh_yr * grid_intensity_kg_kwh
+    else:
+        total_power_kw = filtration_power_kw + bw_power_kw + blower_power_kw
+        co2_operational_kg_yr = total_power_kw * operating_hours * grid_intensity_kg_kwh
 
     co2_steel_kg    = weight_steel_kg * steel_carbon_kg_kg
     co2_concrete_kg = weight_concrete_kg * concrete_carbon_kg_kg
