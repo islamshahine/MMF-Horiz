@@ -17,7 +17,10 @@
       "Bash(curl -s http://localhost:8599/)",
       "Bash(mkdir -p /workspaces/MMF-Horiz/ui)",
       "Bash(grep -v \"^$\")",
-      "Bash(git commit *)"
+      "Bash(git commit *)",
+      "Bash(pytest tests/ --collect-only)",
+      "Bash(pytest tests/test_water.py -v)",
+      "Bash(pytest tests/test_backwash.py -v)"
     ],
     "additionalDirectories": [
       "/tmp",

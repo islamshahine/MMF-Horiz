@@ -182,14 +182,25 @@ def render_tab_filtration(inputs: dict, computed: dict):
                 _lv = filt_cycles[sc_lbl]["lv_m_h"]
                 st.markdown(f"**Scenario {sc_lbl} · LV = {_lv:.1f} m/h**")
                 mat_rows = []
+                _by_sched = set()   # track which temp columns are M_max-limited
                 for tss_lbl, tss_v in zip(_tss_labels, _tss_vals):
                     row = {"Feed TSS": tss_lbl}
                     for t_lbl in _temp_labels:
                         cyc_t = sc_temps[t_lbl]
                         tr = next((r for r in cyc_t["tss_results"] if r["TSS (mg/L)"] == tss_v), None)
-                        row[t_lbl] = f"{tr['Cycle duration (h)']:.1f} h" if tr else "—"
+                        _sched = "M_max" in cyc_t.get("note", "")
+                        if _sched:
+                            _by_sched.add(t_lbl)
+                        _suffix = " ★" if _sched else ""
+                        row[t_lbl] = f"{tr['Cycle duration (h)']:.1f} h{_suffix}" if tr else "—"
                     mat_rows.append(row)
                 st.dataframe(pd.DataFrame(mat_rows).set_index("Feed TSS"), use_container_width=True)
+                if _by_sched:
+                    st.caption(
+                        f"★ BW by solid loading schedule (M_max) — pressure trigger not reached at "
+                        f"{', '.join(sorted(_by_sched))}. Lower α or higher dp setpoint would make "
+                        "cycle length temperature-sensitive in those columns."
+                    )
             with st.expander("ΔP vs M curve — N scenario, design temperature", expanded=False):
                 st.dataframe(pd.DataFrame(first_cyc["dp_curve"]), use_container_width=True, hide_index=True)
         else:
