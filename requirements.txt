@@ -5,3 +5,5 @@ matplotlib
 numpy
 plotly
 reportlab
+pytest
+pytest-cov
