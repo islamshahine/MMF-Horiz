@@ -17,6 +17,7 @@ tests/
   test_project_db.py     SQLite project_db save/load, snapshots, scenarios
   test_logging.py        engine.logger file output + compute/project_io hooks
   test_fouling.py        fouling correlations (SDI/TSS/LV monotonicity + warnings)
+  test_api.py            FastAPI /compute + /health + OpenAPI smoke
 ```
 
 ## Running tests

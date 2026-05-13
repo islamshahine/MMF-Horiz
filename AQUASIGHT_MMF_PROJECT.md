@@ -18,7 +18,7 @@
 
 **Target users:** Process engineers and filter designers at water treatment / desalination companies.
 
-**Stack:** Python 3.11 · Streamlit · pandas · plotly · python-docx · (optional) reportlab
+**Stack:** Python 3.11 · Streamlit · pandas · plotly · python-docx · (optional) reportlab · (optional) FastAPI + uvicorn (`api/` — POST `/compute`)
 
 ---
 
@@ -76,6 +76,11 @@ st.columns([1, 4])
 ```
 MMF-Horiz/
 ├── app.py                    # ~190 lines — thin orchestrator (8 `st.tabs` + status column)
+│
+├── api/                      # FastAPI compute layer (optional headless / integration)
+│   ├── main.py               # app + /health
+│   ├── routes.py             # POST /compute → compute_all (JSON-safe response)
+│   └── models.py             # shared HTTP error payload models
 │
 ├── engine/                   # Pure Python calculation modules (no Streamlit)
 │   ├── compute.py            # compute_all(inputs) → computed dict (~810 lines)
