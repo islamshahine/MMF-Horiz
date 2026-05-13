@@ -102,6 +102,7 @@ MMF-Horiz/
 │   ├── drawing.py            # ISO 128 vessel elevation: hatching, centreline, title block
 │   ├── media.py              # Media DB (14 types + aliases), get_layer_intelligence()
 │   ├── project_io.py         # JSON save/load: inputs_to_json(), get_widget_state_map()
+│   ├── project_db.py         # SQLite: init_db, save/load project, snapshots, scenarios (stdlib)
 │   ├── sensitivity.py        # OAT tornado analysis: run_sensitivity() — 9 params × 4 outputs
 │   └── pdf_report.py         # ReportLab PDF: build_pdf(inputs, computed, sections, unit_system)
 │

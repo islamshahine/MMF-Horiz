@@ -1,0 +1,7 @@
+# Local SQLite (engine/project_db.py default)
+aquasight.db
+aquasight.db-journal
+
+__pycache__/
+*.py[cod]
+.pytest_cache/

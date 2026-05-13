@@ -14,6 +14,7 @@ tests/
   test_integration.py   End-to-end compute_all() smoke test
   test_comparison.py    compare_designs / diff_value / metric matrix
   test_compare.py       engine.compare facade (aliases + severity + summary)
+  test_project_db.py     SQLite project_db save/load, snapshots, scenarios
 ```
 
 ## Running tests
