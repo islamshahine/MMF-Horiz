@@ -135,10 +135,14 @@ for _msg in _iv.get("errors", ()):
     st.error(_msg)
 for _msg in _iv.get("warnings", ()):
     st.warning(_msg)
+if _iv.get("errors"):
+    st.caption(
+        "Validation uses **SI** internally (same as the engine), regardless of the unit toggle."
+    )
 if _iv.get("errors") and computed.get("compute_used_reference_fallback"):
     st.info(
         "Engineering inputs failed validation — showing **reference baseline** results "
-        "until inputs are corrected."
+        "(SI) until inputs are corrected."
     )
 
 # ── Status badges (context column, below sidebar tabs) ────────────────────────

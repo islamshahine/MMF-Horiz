@@ -1,10 +1,17 @@
-"""Centralised engineering input validation for AQUASIGHT™ MMF (pure Python)."""
+"""Centralised engineering input validation for AQUASIGHT™ MMF (pure Python).
+
+All numeric checks assume **SI base values** — the same dict ``inputs`` that
+``compute_all`` receives after ``render_sidebar`` → ``convert_inputs`` (see
+``engine/units.py``). Lengths in messages are labelled **(SI, m)**; the sidebar
+still shows imperial/metric via ``fmt`` / ``ulbl`` / ``dv`` — do not convert
+validation thresholds to display units here.
+"""
 from __future__ import annotations
 
 import copy
 from typing import Any, List, Sequence
 
-# Reference inputs aligned with tests/test_integration.py::_INPUTS — used only when
+# Reference inputs (SI) aligned with tests/test_integration.py::_INPUTS — used only when
 # user inputs fail validation so compute_all can still return a full computed dict.
 _MAT = {"ASTM A516-70": {"S_kgf_cm2": 1200, "T_max_c": 350, "rho": 7850}}
 _REF_LAYERS = [
@@ -156,7 +163,10 @@ def validate_layers(layers: Any, errors: List[str], warnings: List[str]) -> None
 
 def validate_inputs(inputs: dict) -> dict:
     """
-    Cross-check key engineering inputs.
+    Cross-check key engineering inputs (SI magnitudes, same contract as ``compute_all``).
+
+    ``render_sidebar`` must have applied ``convert_inputs`` so lengths, flows,
+    and velocities here are SI even when the UI unit toggle is imperial.
 
     Returns
     -------
@@ -195,7 +205,7 @@ def validate_inputs(inputs: dict) -> dict:
         tlen = float(inputs["total_length"])
         if tlen <= nid:
             errors.append(
-                f"total_length ({tlen:g} m) must be greater than nominal_id ({nid:g} m)."
+                f"total_length ({tlen:g} m, SI) must be greater than nominal_id ({nid:g} m, SI)."
             )
     except (TypeError, ValueError):
         errors.append("nominal_id / total_length: must be numeric.")
@@ -207,7 +217,7 @@ def validate_inputs(inputs: dict) -> dict:
         col_h = float(inputs["collector_h"])
         if col_h <= np_h:
             errors.append(
-                f"collector_h ({col_h:g} m) must be greater than nozzle_plate_h ({np_h:g} m)."
+                f"collector_h ({col_h:g} m, SI) must be greater than nozzle_plate_h ({np_h:g} m, SI)."
             )
     except (TypeError, ValueError):
         errors.append("nozzle_plate_h / collector_h: must be numeric.")

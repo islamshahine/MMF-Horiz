@@ -176,6 +176,7 @@ MMF-Horiz/
 | Economics | `econ_capex`, `econ_opex`, `econ_carbon`, `econ_bench` (includes `*_bench_si` tuples for UI ranges) |
 | Assessment | `overall_risk`, `risk_color/border/icon`, `drivers`, `impacts`, `recommendations`, `n_criticals/warnings/advisories`, `all_lv_issues`, `all_ebct_issues`, `rob_rows` |
 | Severity fns | `lv_severity_fn`, `ebct_severity_fn` (callables passed to tabs) |
+| Input validation | `input_validation` (`valid`, `errors`, `warnings` from `engine/validators.py` — **SI magnitudes**, same `inputs` contract as the rest of the engine) · `compute_used_reference_fallback` (bool; when invalid, `compute_all` uses `REFERENCE_FALLBACK_INPUTS` so tabs still render) |
 
 ---
 
@@ -237,6 +238,7 @@ Three-tier system applied to every scenario × layer combination:
 - **No real-time database** — all media properties are hardcoded presets in `engine/media.py` with user-editable overrides via `st.session_state`.
 - **No multi-page routing** — single-page Streamlit app; state is preserved in `st.session_state`.
 - **Compare tab scope** — Design **B** exposes a fixed subset of inputs (process, key vessel geometry, nozzle plate height, selected BW fields); all other keys are copied from Design **A** at init/reset. Comparison uses `engine/comparison.py` only (no change to `compute_all` internals).
+- **Input validation is SI-only** — `validate_inputs` runs on the same post-`convert_inputs` dict as `compute_all`. Error strings that quote lengths use **m (SI)**; the unit toggle only affects sidebar labels and tab formatting via `engine/units.py` helpers, not validation thresholds.
 
 ---
 
