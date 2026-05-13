@@ -148,6 +148,12 @@ def save_project(
             )
             created = False
         conn.commit()
+        try:
+            from engine import logger as _log
+
+            _log.log_db_project_save(key, created)
+        except Exception:
+            pass
         return {"id": pid, "project_key": key, "created": created, "updated_at": now}
     finally:
         conn.close()
@@ -171,6 +177,12 @@ def load_project(
             row = conn.execute("SELECT * FROM projects WHERE project_key = ?", (project_key,)).fetchone()
         if row is None:
             raise KeyError("project not found")
+        try:
+            from engine import logger as _log
+
+            _log.log_db_project_load(str(row["project_key"]))
+        except Exception:
+            pass
         inputs = _pio.json_to_inputs(row["inputs_json"])
         computed = None
         if row["computed_json"]:

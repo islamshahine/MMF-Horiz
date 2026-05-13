@@ -15,6 +15,7 @@ tests/
   test_comparison.py    compare_designs / diff_value / metric matrix
   test_compare.py       engine.compare facade (aliases + severity + summary)
   test_project_db.py     SQLite project_db save/load, snapshots, scenarios
+  test_logging.py        engine.logger file output + compute/project_io hooks
 ```
 
 ## Running tests

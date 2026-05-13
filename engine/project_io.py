@@ -78,7 +78,14 @@ def inputs_to_json(inputs: dict) -> str:
     data = {k: v for k, v in inputs.items() if k not in _EXCLUDED}
     data["_schema"] = SCHEMA_VERSION
     data["_saved"] = datetime.utcnow().isoformat(timespec="seconds") + "Z"
-    return json.dumps(data, indent=2, default=str)
+    out = json.dumps(data, indent=2, default=str)
+    try:
+        from engine import logger as _log
+
+        _log.log_project_save(str(data.get("project_name", "")), str(data.get("doc_number", "")))
+    except Exception:
+        pass
+    return out
 
 
 def get_widget_state_map(inputs: dict) -> dict:
@@ -115,8 +122,16 @@ def get_widget_state_map(inputs: dict) -> dict:
 def json_to_inputs(json_str: str) -> dict:
     """Deserialise project JSON. Returns inputs dict (metadata keys stripped)."""
     data = json.loads(json_str)
+    pname = str(data.get("project_name", ""))
+    pdoc = str(data.get("doc_number", ""))
     data.pop("_schema", None)
     data.pop("_saved", None)
+    try:
+        from engine import logger as _log
+
+        _log.log_project_load(pname, pdoc)
+    except Exception:
+        pass
     return data
 
 

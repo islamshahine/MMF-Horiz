@@ -2,6 +2,8 @@
 aquasight.db
 aquasight.db-journal
 
+logs/
+
 __pycache__/
 *.py[cod]
 .pytest_cache/
