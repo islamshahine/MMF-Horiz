@@ -3,7 +3,7 @@
 # (label, key_path, sub_key, unit_quantity, decimals, higher_is_better, threshold_pct)
 COMPARISON_METRICS = [
     ("Flow / filter (N)", "q_per_filter", None, "flow_m3h", 1, False, 5.0),
-    ("Filtration rate LV (N)", "q_per_filter", None, "velocity_m_h", 2, False, 5.0),
+    ("Filtration rate LV (N)", "filt_cycles", ("N", "lv_m_h"), "velocity_m_h", 2, False, 5.0),
     ("Real hydraulic ID", "real_id", None, "length_m", 4, True, 1.0),
     ("Cylindrical length", "cyl_len", None, "length_m", 3, True, 2.0),
     ("ΔP clean (N)", "bw_dp", "dp_clean_bar", "pressure_bar", 5, False, 10.0),
@@ -13,20 +13,30 @@ COMPARISON_METRICS = [
     ("Bed expansion net %", "bw_exp", "total_expansion_pct", "dimensionless", 1, False, 10.0),
     ("Collector freeboard", "bw_col", "freeboard_m", "length_m", 3, True, 10.0),
     ("Total empty weight", "w_total", None, "mass_kg", 0, False, 5.0),
-    ("CAPEX total", "econ_capex", "total_usd", "cost_usd", 0, False, 5.0),
-    ("OPEX annual", "econ_opex", "total_usd_yr", "cost_usd", 0, False, 5.0),
+    ("CAPEX total", "econ_capex", "total_capex_usd", "cost_usd", 0, False, 5.0),
+    ("OPEX annual", "econ_opex", "total_opex_usd_yr", "cost_usd", 0, False, 5.0),
 ]
 
 
-def _get_value(computed: dict, key_path: str, sub_key: str):
+def _get_value(computed: dict, key_path: str, sub_key):
     val = computed.get(key_path)
     if val is None:
         return None
-    if sub_key is not None:
-        if isinstance(val, dict):
-            return val.get(sub_key)
-        return None
-    return val
+    if sub_key is None:
+        return val
+    if isinstance(sub_key, tuple):
+        cur = val
+        for k in sub_key:
+            if cur is None:
+                return None
+            if isinstance(cur, dict):
+                cur = cur.get(k)
+            else:
+                return None
+        return cur
+    if isinstance(val, dict):
+        return val.get(sub_key)
+    return None
 
 
 def diff_value(

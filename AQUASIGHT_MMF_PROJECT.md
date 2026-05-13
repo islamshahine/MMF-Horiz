@@ -51,10 +51,10 @@ app.py
 st.columns([1, 4])
   ctx (left 1/5)          main (right 4/5)
   ┌──────────────┐        ┌──────────────────────────────────────┐
-  │ Sidebar tabs │        │ 7 content tabs                       │
+  │ Sidebar tabs │        │ 8 content tabs                       │
   │ ⚙️ Process   │        │ 💧 Filtration | 🔄 Backwash | ⚙️ Mech│
   │ 🏗️ Vessel    │        │ 🧱 Media | 💰 Economics | 🎯 Assess  │
-  │ 🧱 Media     │        │ 📄 Report                            │
+  │ 🧱 Media     │        │ 📄 Report | ⚖️ Compare               │
   │ 🔄 BW        │        └──────────────────────────────────────┘
   │ 💰 Econ      │
   ├──────────────┤
@@ -76,6 +76,7 @@ MMF-Horiz/
 ├── app.py                    # ~160 lines — thin orchestrator
 │
 ├── engine/                   # Pure Python calculation modules (no Streamlit)
+│   ├── comparison.py         # Design A vs B: diff_value, compare_designs, COMPARISON_METRICS
 │   ├── compute.py            # compute_all(inputs) → computed dict (~765 lines)
 │   ├── units.py              # Unit catalogue: display_value/si_value/unit_label/
 │   │                         #   format_value, convert_inputs, transpose_display_value;
@@ -114,9 +115,10 @@ MMF-Horiz/
 │   ├── tab_media.py          # 🧱 Media tab + intelligence expander
 │   ├── tab_economics.py      # 💰 Economics tab (benchmark column uses fmt_si_range + *bench_si*)
 │   ├── tab_assessment.py     # 🎯 Assessment tab + n_filters LV sweep + OAT tornado chart
-│   └── tab_report.py         # 📄 Report tab + JSON save/load; PDF/Word use fmt; PDF passes unit_system
+│   ├── tab_report.py         # 📄 Report tab + JSON save/load; PDF/Word use fmt; PDF passes unit_system
+│   ├── tab_compare.py        # ⚖️ Compare tab — Design B vs sidebar A, compute_all×2, CSV export
 │
-└── tests/                    # pytest regression suite — ~269 passed, 2 skipped
+└── tests/                    # pytest — ~283 passed, 2 skipped (includes test_comparison)
     ├── conftest.py           # Shared fixtures (standard_layers)
     ├── test_water.py         # Water property functions
     ├── test_process.py       # filter_loading(), filter_area()
@@ -125,7 +127,8 @@ MMF-Horiz/
     ├── test_economics.py     # CRF, CAPEX, OPEX, carbon
     ├── test_media.py         # Media catalogue, collector_max_height
     ├── test_units.py         # Unit conversion — 83 tests, all quantities
-    └── test_integration.py   # compute_all() end-to-end smoke (25 tests)
+    ├── test_integration.py   # compute_all() end-to-end smoke (25 tests)
+    └── test_comparison.py    # compare_designs, diff_value, metric definitions
 ```
 
 ---
@@ -218,6 +221,7 @@ Three-tier system applied to every scenario × layer combination:
 | 💰 Economics | CAPEX breakdown + pie chart · OPEX breakdown + pie chart · carbon footprint · global benchmark with **proper CRF** (i, n user-inputs) · benchmark bands formatted in **active unit system** |
 | 🎯 Assessment | Overall risk banner · key drivers · operational impacts · violation tables · Design Robustness Index · **n_filters sweep (N-scenario LV)** (optimisation roadmap MVP) · **OAT Sensitivity tornado chart** (9 inputs × 4 outputs) |
 | 📄 Report | **JSON project save/load** · section selector · **PDF download** (ReportLab) · Word .docx download · inline markdown preview |
+| ⚖️ Compare | Design **A** (current sidebar) vs **B** (editable subset) · second `compute_all` · **13 key metrics** via `compare_designs` · 🟡 significant diff column · winner summary · **CSV export** |
 
 ---
 
@@ -249,12 +253,13 @@ Added in the refactor session following the initial modular architecture:
 | 8 | **Regression test suite** — pure pytest (no Streamlit); water, process, mechanical, backwash, economics, media, units, integration | `tests/` |
 | 9 | **Output unit alignment (tables & reports)** — backwash/media/economics/mechanical/report/PDF; hydraulic `fmt_bar_mwc`; economics `fmt_si_range` + `co2_kg_per_kwh`; nozzle schedule & saddle catalogue display DFs; DN stays ISO mm in editor | `ui/*.py`, `engine/pdf_report.py`, `engine/economics.py`, `engine/units.py` |
 | 10 | **n_filters design sweep (optimisation MVP)** — Assessment tab expander: band sweep with full `compute_all`; N-scenario LV vs velocity threshold | `ui/tab_assessment.py` |
+| 11 | **Design comparison tab** — Design A vs B, `engine/comparison.py` + `compute_all` for B, session `compare_inputs_b`, CSV export | `engine/comparison.py`, `ui/tab_compare.py`, `app.py` |
 
 ## Remaining Enhancement Areas
 
 1. **Optimisation mode** — given constraints (LV < threshold, EBCT > threshold), find minimum n_filters or minimum nominal_id  
    - *MVP (started):* Assessment tab — **sweep `n_filters` (per stream)** over a user band; each point runs full `compute_all`; table shows **N-scenario LV** vs velocity threshold (does not auto-write sidebar).
-2. **Multi-train comparison** — side-by-side comparison of two design configurations
+2. **Multi-train / multi-case comparison** — extend beyond two saved cases (e.g. named presets, JSON load side-by-side); current **⚖️ Compare** covers A vs B in one session.
 3. **Vendor nozzle catalogue** — replace estimated nozzle schedule with lookup from real vendor data (e.g., Wavin, Aqseptence)
 4. **Live BW scheduler** — Gantt-style chart showing filter availability and BW train allocation over 24 h
 5. **Media cost database** — pull current media prices from a configurable data source
