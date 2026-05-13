@@ -8,7 +8,7 @@ try:
 except ImportError:
     _PLOTLY_OK = False
 
-from ui.helpers import fmt, ulbl, dv
+from ui.helpers import fmt, ulbl, dv, fmt_annual_flow_volume, fmt_si_range
 
 
 def render_tab_economics(inputs: dict, computed: dict):
@@ -36,18 +36,18 @@ def render_tab_economics(inputs: dict, computed: dict):
     em1, em2, em3, em4 = st.columns(4)
     em1.metric("Total CAPEX",
                f"USD {econ_capex['total_capex_usd']:,.0f}",
-               delta=f"{econ_bench['capex_per_m3d']:.1f} USD/m³/d  {econ_bench['capex_status']}",
+               delta=f"{fmt(econ_bench['capex_per_m3d'], 'cost_usd_per_m3d', 1)}  {econ_bench['capex_status']}",
                delta_color="off")
     em2.metric("Annual OPEX",
                f"USD {econ_opex['total_opex_usd_yr']:,.0f}/yr",
-               delta=f"{econ_bench['opex_per_m3']:.4f} USD/m³  {econ_bench['opex_status']}",
+               delta=f"{fmt(econ_bench['opex_per_m3'], 'cost_usd_per_m3', 4)}  {econ_bench['opex_status']}",
                delta_color="off")
     em3.metric("LCOW",
-               f"{econ_bench['lcow']:.4f} USD/m³",
+               fmt(econ_bench["lcow"], "cost_usd_per_m3", 4),
                delta=econ_bench["lcow_status"],
                delta_color="off")
     em4.metric("CO₂ operational",
-               f"{econ_carbon['co2_per_m3_operational']:.4f} kgCO₂/m³",
+               fmt(econ_carbon["co2_per_m3_operational"], "co2_intensity_kg_m3", 4),
                delta=econ_bench["carbon_status"],
                delta_color="off")
 
@@ -72,7 +72,7 @@ def render_tab_economics(inputs: dict, computed: dict):
                     "**100 %**"]],
                 columns=["Item", "Cost (USD)", "Share"]))
             st.caption(
-                f"{_n_total_vessels} vessels · steel {steel_cost_usd_kg:.2f} USD/kg · "
+                f"{_n_total_vessels} vessels · steel {fmt(steel_cost_usd_kg, 'cost_usd_per_kg', 2)} · "
                 f"engineering {engineering_pct:.0f} % · contingency {contingency_pct:.0f} %"
             )
         with c_right:
@@ -111,8 +111,8 @@ def render_tab_economics(inputs: dict, computed: dict):
                     "**100 %**"]],
                 columns=["Item", "Cost (USD/yr)", "Share"]))
             st.caption(
-                f"Specific OPEX: **{econ_opex['opex_per_m3_usd']:.4f} USD/m³**  ·  "
-                f"Annual flow: {econ_opex['annual_flow_m3']/1e6:.2f} Mm³/yr  ·  "
+                f"Specific OPEX: **{fmt(econ_opex['opex_per_m3_usd'], 'cost_usd_per_m3', 4)}**  ·  "
+                f"Annual flow: {fmt_annual_flow_volume(econ_opex['annual_flow_m3'])}  ·  "
                 f"Media interval: {media_replace_years:.0f} yr"
             )
         with o_right:
@@ -133,38 +133,38 @@ def render_tab_economics(inputs: dict, computed: dict):
     with st.expander("3 · Carbon footprint", expanded=True):
         cf1, cf2, cf3, cf4 = st.columns(4)
         cf1.metric("Operational CO₂/yr",
-                   f"{econ_carbon['co2_operational_kg_yr']/1000:,.1f} t/yr")
+                   fmt(econ_carbon["co2_operational_kg_yr"], "mass_kg", 0) + "/yr")
         cf2.metric("Construction CO₂",
-                   f"{econ_carbon['co2_construction_kg']/1000:,.1f} t")
+                   fmt(econ_carbon["co2_construction_kg"] / 1000.0, "mass_t", 1))
         cf3.metric("Lifecycle CO₂",
-                   f"{econ_carbon['co2_lifecycle_kg']/1000:,.1f} t",
+                   fmt(econ_carbon["co2_lifecycle_kg"] / 1000.0, "mass_t", 1),
                    delta=f"over {econ_carbon['design_life_years']} yr",
                    delta_color="off")
         cf4.metric("Specific operational",
-                   f"{econ_carbon['co2_per_m3_operational']:.4f} kgCO₂/m³",
+                   fmt(econ_carbon["co2_per_m3_operational"], "co2_intensity_kg_m3", 4),
                    delta=econ_bench["carbon_status"], delta_color="off")
         st.table(pd.DataFrame([
             ["Operational CO₂ / year",
-             f"{econ_carbon['co2_operational_kg_yr']:,.0f} kg/yr",
-             f"Grid: {grid_intensity:.3f} kgCO₂/kWh"],
+             fmt(econ_carbon["co2_operational_kg_yr"], "mass_kg", 0) + "/yr",
+             f"Grid: {fmt(grid_intensity, 'co2_kg_per_kwh', 3)}"],
             ["Construction — steel",
-             f"{econ_carbon['co2_steel_kg']:,.0f} kg",
+             fmt(econ_carbon["co2_steel_kg"], "mass_kg", 0),
              f"{steel_carbon_kg:.2f} kgCO₂/kg steel"],
             ["Construction — media",
-             f"{econ_carbon['co2_media_kg']:,.0f} kg",
+             fmt(econ_carbon["co2_media_kg"], "mass_kg", 0),
              "Weighted by mass"],
             ["Construction — concrete",
-             f"{econ_carbon['co2_concrete_kg']:,.0f} kg",
+             fmt(econ_carbon["co2_concrete_kg"], "mass_kg", 0),
              f"{concrete_carbon_kg:.2f} kgCO₂/kg"],
             ["Lifecycle total",
-             f"{econ_carbon['co2_lifecycle_kg']:,.0f} kg",
-             f"= {econ_carbon['co2_lifecycle_kg']/1000:.1f} t "
+             fmt(econ_carbon["co2_lifecycle_kg"], "mass_kg", 0),
+             f"= {fmt(econ_carbon['co2_lifecycle_kg'] / 1000.0, 'mass_t', 1)} "
              f"over {econ_carbon['design_life_years']} yr"],
             ["Specific — operational",
-             f"{econ_carbon['co2_per_m3_operational']:.4f} kgCO₂/m³",
+             fmt(econ_carbon["co2_per_m3_operational"], "co2_intensity_kg_m3", 4),
              econ_bench["carbon_status"]],
             ["Specific — lifecycle",
-             f"{econ_carbon['co2_per_m3_lifecycle']:.4f} kgCO₂/m³",
+             fmt(econ_carbon["co2_per_m3_lifecycle"], "co2_intensity_kg_m3", 4),
              "Incl. construction, amortised"],
         ], columns=["Item", "Value", "Basis"]))
 
@@ -176,25 +176,29 @@ def render_tab_economics(inputs: dict, computed: dict):
         )
         st.table(pd.DataFrame([
             ["CAPEX",
-             f"{econ_bench['capex_per_m3d']:.2f} USD/m³/d",
-             econ_bench["capex_benchmark"],
+             fmt(econ_bench["capex_per_m3d"], "cost_usd_per_m3d", 2),
+             fmt_si_range(econ_bench["capex_bench_si"][0], econ_bench["capex_bench_si"][1],
+                          "cost_usd_per_m3d", 0, 0),
              econ_bench["capex_status"]],
             ["OPEX",
-             f"{econ_bench['opex_per_m3']:.4f} USD/m³",
-             econ_bench["opex_benchmark"],
+             fmt(econ_bench["opex_per_m3"], "cost_usd_per_m3", 4),
+             fmt_si_range(econ_bench["opex_bench_si"][0], econ_bench["opex_bench_si"][1],
+                          "cost_usd_per_m3", 3, 3),
              econ_bench["opex_status"]],
             ["Operational carbon",
-             f"{econ_bench['co2_per_m3']:.4f} kgCO₂/m³",
-             econ_bench["carbon_benchmark"],
+             fmt(econ_bench["co2_per_m3"], "co2_intensity_kg_m3", 4),
+             fmt_si_range(econ_bench["co2_bench_si"][0], econ_bench["co2_bench_si"][1],
+                          "co2_intensity_kg_m3", 3, 3),
              econ_bench["carbon_status"]],
             ["LCOW",
-             f"{econ_bench['lcow']:.4f} USD/m³",
-             econ_bench["lcow_benchmark"],
+             fmt(econ_bench["lcow"], "cost_usd_per_m3", 4),
+             fmt_si_range(econ_bench["lcow_bench_si"][0], econ_bench["lcow_bench_si"][1],
+                          "cost_usd_per_m3", 2, 2),
              econ_bench["lcow_status"]],
         ], columns=["Metric", "Project", "Benchmark range", "Status"]))
         st.caption(
             f"Daily capacity: {fmt(econ_bench['daily_flow_m3d'], 'flow_m3d', 1)}  ·  "
-            f"Annual flow: {econ_bench['annual_flow_m3']/1e6:.2f} Mm³/yr  ·  "
+            f"Annual flow: {fmt_annual_flow_volume(econ_bench['annual_flow_m3'])}  ·  "
             f"LCOW = (CAPEX × CRF + OPEX) / annual flow  ·  "
             f"CRF = {econ_bench['crf']:.4f}  "
             f"({discount_rate:.1f} % discount · {design_life_years} yr life)"

@@ -1,9 +1,13 @@
 """ui/tab_assessment.py — Assessment tab for AQUASIGHT™ MMF."""
+import copy
+
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
-from engine.sensitivity import run_sensitivity, OUTPUT_DEFS
-from ui.helpers import fmt, ulbl, dv
+
+from engine.compute import compute_all
+from engine.sensitivity import OUTPUT_DEFS, run_sensitivity
+from ui.helpers import dv, fmt, ulbl
 
 
 def render_tab_assessment(inputs: dict, computed: dict):
@@ -120,7 +124,7 @@ def render_tab_assessment(inputs: dict, computed: dict):
     kp1.metric(f"Velocity threshold ({ulbl('velocity_m_h')})", fmt(velocity_threshold, 'velocity_m_h', 1))
     kp2.metric("EBCT threshold",                               f"{ebct_threshold:.1f} min")
     kp3.metric(f"Design pressure ({ulbl('pressure_bar')})",    fmt(design_pressure, 'pressure_bar', 2))
-    kp4.metric("Design temperature",                           f"{design_temp:.0f} °C")
+    kp4.metric("Design temperature", fmt(design_temp, "temperature_c", 0))
 
     st.table(pd.DataFrame([
         [f"Total flow ({ulbl('flow_m3h')})",
@@ -139,7 +143,7 @@ def render_tab_assessment(inputs: dict, computed: dict):
         ["Material",            material_name],
         [f"Design pressure ({ulbl('pressure_bar')})",
          fmt(design_pressure, 'pressure_bar', 2)],
-        ["Design temperature",  f"{design_temp:.0f} °C"],
+        ["Design temperature",  fmt(design_temp, "temperature_c", 0)],
         [f"Corrosion allowance ({ulbl('length_mm')})",
          fmt(corrosion, 'length_mm', 1)],
         [f"Empty weight ({ulbl('mass_kg')})",
@@ -147,6 +151,76 @@ def render_tab_assessment(inputs: dict, computed: dict):
         [f"Operating weight ({ulbl('mass_kg')})",
          fmt(wt_oper['w_operating_kg'], 'mass_kg', 0)],
     ], columns=["Parameter", "Value"]))
+
+    st.divider()
+
+    # ── Design sweep: n_filters vs N-scenario LV (optimisation roadmap MVP) ─
+    with st.expander("Design sweep — filters per stream vs N-scenario LV", expanded=False):
+        st.caption(
+            "Vary **n_filters** (per stream) over a band; each row runs full **compute_all** "
+            "on a copy of inputs. **N** scenario LV is compared to **velocity_threshold**. "
+            "Does not change sidebar values."
+        )
+        _nf_cur = int(n_filters)
+        _red = int(redundancy)
+        _nf_min = max(_red + 1, 1)
+        _c1, _c2, _c3 = st.columns(3)
+        with _c1:
+            _nf_lo = st.number_input(
+                "From n_filters",
+                min_value=_nf_min,
+                max_value=80,
+                value=_nf_cur,
+                key="_nf_sweep_lo",
+            )
+        with _c2:
+            _nf_hi = st.number_input(
+                "To n_filters",
+                min_value=_nf_min,
+                max_value=80,
+                value=min(_nf_cur + 8, 80),
+                key="_nf_sweep_hi",
+            )
+        with _c3:
+            _run_sweep = st.button("Run sweep", key="_nf_sweep_run", use_container_width=True)
+        if int(_nf_hi) < int(_nf_lo):
+            st.error("**To** must be greater than or equal to **From**.")
+        elif _run_sweep:
+            _span = int(_nf_hi) - int(_nf_lo) + 1
+            if _span > 48:
+                st.warning(
+                    f"This sweep runs **{_span}** full models — expect a short wait."
+                )
+            _lv_hdr = f"LV — N scenario ({ulbl('velocity_m_h')})"
+            _thr_hdr = f"Threshold ({ulbl('velocity_m_h')})"
+            _rows = []
+            with st.spinner(f"Running {_span} scenarios…"):
+                for _nf in range(int(_nf_lo), int(_nf_hi) + 1):
+                    _inp = copy.deepcopy(inputs)
+                    _inp["n_filters"] = _nf
+                    try:
+                        _comp = compute_all(_inp)
+                        _fc = _comp.get("filt_cycles") or {}
+                        _lv_si = float((_fc.get("N") or {}).get("lv_m_h", 0.0))
+                        _ok = _lv_si <= float(velocity_threshold)
+                        _rows.append({
+                            "n (per stream)": _nf,
+                            _lv_hdr: fmt(_lv_si, "velocity_m_h", 2),
+                            _thr_hdr: fmt(float(velocity_threshold), "velocity_m_h", 2),
+                            "Within envelope": "Yes" if _ok else "No",
+                        })
+                    except Exception as _ex:
+                        _rows.append({
+                            "n (per stream)": _nf,
+                            _lv_hdr: "—",
+                            _thr_hdr: fmt(float(velocity_threshold), "velocity_m_h", 2),
+                            "Within envelope": f"Error: {_ex!s}"[:120],
+                        })
+            st.dataframe(
+                pd.DataFrame(_rows),
+                use_container_width=True,
+                hide_index=True,
+            )
 
     st.divider()
 

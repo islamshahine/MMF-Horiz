@@ -332,20 +332,17 @@ def compute_all(inputs: dict) -> dict:
 
     # ── Filtration cycle matrix: TSS × temperature ────────────────────────────
     _alpha_fixed = filt_cycles["N"]["alpha_used_m_kg"] if filt_cycles else 0.0
-    tss_labels   = [f"Low ({tss_low:.0f} mg/L)",
-                    f"Avg ({tss_avg:.0f} mg/L)",
-                    f"High ({tss_high:.0f} mg/L)"]
+    # Stable keys for matrices (UI applies unit labels via fmt/ulbl).
+    tss_col_keys = ["tss_low", "tss_avg", "tss_high"]
     tss_vals     = [tss_low, tss_avg, tss_high]
     _temp_vals   = [temp_low, feed_temp, temp_high]
-    temp_labels  = [f"Min ({temp_low:.0f}°C)",
-                    f"Design ({feed_temp:.0f}°C)",
-                    f"Max ({temp_high:.0f}°C)"]
+    temp_col_keys = ["temp_min", "temp_design", "temp_max"]
     cycle_matrix: dict = {}
     for _x, _nact, _q in _load_data_cyc:
         _sc = "N" if _x == 0 else f"N-{_x}"
         cycle_matrix[_sc] = {}
-        for _tv, _tl in zip(_temp_vals, temp_labels):
-            cycle_matrix[_sc][_tl] = filtration_cycle(
+        for _tv, _tk in zip(_temp_vals, temp_col_keys):
+            cycle_matrix[_sc][_tk] = filtration_cycle(
                 layers=layers,
                 q_filter_m3h=_q,
                 avg_area_m2=avg_area,
@@ -390,14 +387,14 @@ def compute_all(inputs: dict) -> dict:
     for _x, _nact, _q in _load_data_cyc:
         _sc = "N" if _x == 0 else f"N-{_x}"
         feasibility_matrix[_sc] = {}
-        for _t_lbl in temp_labels:
-            feasibility_matrix[_sc][_t_lbl] = {}
-            for _tss_lbl, _tss_v in zip(tss_labels, tss_vals):
-                _cyc_t = cycle_matrix[_sc][_t_lbl]
+        for _t_key in temp_col_keys:
+            feasibility_matrix[_sc][_t_key] = {}
+            for _tss_key, _tss_v in zip(tss_col_keys, tss_vals):
+                _cyc_t = cycle_matrix[_sc][_t_key]
                 _tr    = next((r for r in _cyc_t["tss_results"]
                                if r["TSS (mg/L)"] == _tss_v), None)
                 _t_cyc = _tr["Cycle duration (h)"] if _tr else 0.0
-                feasibility_matrix[_sc][_t_lbl][_tss_lbl] = _feas_kpis(
+                feasibility_matrix[_sc][_t_key][_tss_key] = _feas_kpis(
                     _t_cyc, _bw_dur_h, _nact, streams
                 )
 
@@ -782,8 +779,9 @@ def compute_all(inputs: dict) -> dict:
         "m_sol_high": m_sol_high, "w_tss_high": w_tss_high, "m_daily_high": m_daily_high,
         # filtration cycles & matrices
         "filt_cycles": filt_cycles, "load_data": load_data,
-        "cycle_matrix": cycle_matrix, "tss_labels": tss_labels, "tss_vals": tss_vals,
-        "temp_labels": temp_labels,
+        "cycle_matrix": cycle_matrix,
+        "tss_col_keys": tss_col_keys, "tss_vals": tss_vals,
+        "temp_col_keys": temp_col_keys,
         "feasibility_matrix": feasibility_matrix,
         # cartridge
         "cart_result": cart_result, "cart_optim": cart_optim,

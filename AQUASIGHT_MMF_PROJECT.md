@@ -17,13 +17,13 @@
 
 **Target users:** Process engineers and filter designers at water treatment / desalination companies.
 
-**Stack:** Python 3.11 · Streamlit · pandas · plotly · python-docx
+**Stack:** Python 3.11 · Streamlit · pandas · plotly · python-docx · (optional) reportlab
 
 ---
 
 ## Architecture (Post-Refactor)
 
-The app was refactored from a 3,059-line monolithic `app.py` into a clean modular structure. `app.py` is now **182 lines** — a pure thin orchestrator.
+The app was refactored from a 3,059-line monolithic `app.py` into a clean modular structure. `app.py` is now a short thin orchestrator (~160 lines).
 
 ### Data flow
 
@@ -73,12 +73,15 @@ st.columns([1, 4])
 
 ```
 MMF-Horiz/
-├── app.py                    # ~186 lines — thin orchestrator
+├── app.py                    # ~160 lines — thin orchestrator
 │
 ├── engine/                   # Pure Python calculation modules (no Streamlit)
-│   ├── compute.py            # compute_all(inputs) → computed dict (816 lines)
-│   ├── units.py              # Unit conversion: display_value/si_value/unit_label/
-│   │                         #   format_value/convert_inputs — metric ↔ imperial
+│   ├── compute.py            # compute_all(inputs) → computed dict (~765 lines)
+│   ├── units.py              # Unit catalogue: display_value/si_value/unit_label/
+│   │                         #   format_value, convert_inputs, transpose_display_value;
+│   │                         #   extended qty keys (e.g. pressure_kpa, energy_kwh_m3,
+│   │                         #   cost_usd_per_m3/d, co2_intensity_kg_m3, co2_kg_per_kwh,
+│   │                         #   linear_density_kg_m, velocity_m_s, flow_m3_min, …)
 │   ├── water.py              # Water properties (density, viscosity vs T, S)
 │   ├── geometry.py           # segment_area(), dish_volume() for horizontal vessel
 │   ├── process.py            # filter_loading() — flow per filter per scenario
@@ -89,28 +92,31 @@ MMF-Horiz/
 │   ├── cartridge.py          # Cartridge filter design & optimisation
 │   ├── nozzles.py            # Nozzle schedule, DN series, flange ratings
 │   ├── energy.py             # Hydraulic profile, pump/blower energy summary
-│   ├── economics.py          # CAPEX, OPEX, carbon footprint, LCOW; capital_recovery_factor()
+│   ├── economics.py          # CAPEX, OPEX, carbon footprint, LCOW; capital_recovery_factor();
+│   │                         #   global_benchmark_comparison() returns SI numeric *bench_si* tuples
+│   │                         #   (UI formats ranges via fmt_si_range — no hardcoded unit strings)
 │   ├── drawing.py            # ISO 128 vessel elevation: hatching, centreline, title block
 │   ├── media.py              # Media DB (14 types + aliases), get_layer_intelligence()
 │   ├── project_io.py         # JSON save/load: inputs_to_json(), get_widget_state_map()
 │   ├── sensitivity.py        # OAT tornado analysis: run_sensitivity() — 9 params × 4 outputs
-│   └── pdf_report.py         # ReportLab PDF generation: build_pdf() (requires reportlab)
+│   └── pdf_report.py         # ReportLab PDF: build_pdf(inputs, computed, sections, unit_system)
 │
 ├── ui/                       # Streamlit rendering modules
-│   ├── sidebar.py            # render_sidebar(...) → inputs dict (531 lines, all widgets keyed)
-│   │                         #   Unit toggle (metric/imperial radio) at top; on_change callback
-│   │                         #   clears unit-dependent widget keys; return path calls convert_inputs()
-│   ├── helpers.py            # fmt(si_val, qty, decimals) · ulbl(qty) · dv(si_val, qty)
-│   │                         #   · show_alert() — all read unit_system from st.session_state
+│   ├── sidebar.py            # render_sidebar(...) → inputs dict (all widgets keyed)
+│   │                         #   Unit toggle (metric/imperial); after radio, _reconvert_session_units()
+│   │                         #   transposes SESSION_WIDGET_QUANTITIES + media keys; convert_inputs() on return
+│   ├── helpers.py            # fmt · ulbl · dv · show_alert · pressure_drop_layers_display_frames
+│   │                         #   cycle_matrix_*_title · filtration_dp_curve_display_df · fmt_bar_mwc
+│   │                         #   fmt_annual_flow_volume · fmt_si_range · geo/media/saddle/nozzle display helpers
 │   ├── tab_filtration.py     # 💧 Filtration tab
 │   ├── tab_backwash.py       # 🔄 Backwash tab
-│   ├── tab_mechanical.py     # ⚙️ Mechanical tab
+│   ├── tab_mechanical.py     # ⚙️ Mechanical tab (nozzle data_editor in display units; DN stays ISO mm)
 │   ├── tab_media.py          # 🧱 Media tab + intelligence expander
-│   ├── tab_economics.py      # 💰 Economics tab
-│   ├── tab_assessment.py     # 🎯 Assessment tab + OAT tornado chart
-│   └── tab_report.py         # 📄 Report tab + JSON save/load + PDF download
+│   ├── tab_economics.py      # 💰 Economics tab (benchmark column uses fmt_si_range + *bench_si*)
+│   ├── tab_assessment.py     # 🎯 Assessment tab + n_filters LV sweep + OAT tornado chart
+│   └── tab_report.py         # 📄 Report tab + JSON save/load; PDF/Word use fmt; PDF passes unit_system
 │
-└── tests/                    # pytest regression suite — 261 passed, 2 skipped
+└── tests/                    # pytest regression suite — ~269 passed, 2 skipped
     ├── conftest.py           # Shared fixtures (standard_layers)
     ├── test_water.py         # Water property functions
     ├── test_process.py       # filter_loading(), filter_area()
@@ -158,11 +164,11 @@ MMF-Horiz/
 | Supports | `wt_sup`, `wt_int`, `wt_saddle` |
 | Backwash | `bw_hyd`, `bw_col`, `bw_exp`, `bw_seq`, `bw_sizing`, `n_bw_systems` |
 | TSS balance | `m_sol_low/avg/high`, `w_tss_low/avg/high`, `m_daily_low/avg/high` |
-| Filtration cycles | `filt_cycles`, `cycle_matrix`, `load_data`, `tss_labels/vals`, `temp_labels`, `feasibility_matrix` |
+| Filtration cycles | `filt_cycles`, `cycle_matrix`, `load_data`, `tss_col_keys`/`tss_vals`, `temp_col_keys`, `feasibility_matrix` |
 | Cartridge | `cart_result`, `cart_optim` |
 | Hydraulics & energy | `hyd_prof`, `energy` |
 | Weight | `w_noz`, `w_total`, `vessel_areas`, `lining_result`, `wt_oper` |
-| Economics | `econ_capex`, `econ_opex`, `econ_carbon`, `econ_bench` |
+| Economics | `econ_capex`, `econ_opex`, `econ_carbon`, `econ_bench` (includes `*_bench_si` tuples for UI ranges) |
 | Assessment | `overall_risk`, `risk_color/border/icon`, `drivers`, `impacts`, `recommendations`, `n_criticals/warnings/advisories`, `all_lv_issues`, `all_ebct_issues`, `rob_rows` |
 | Severity fns | `lv_severity_fn`, `ebct_severity_fn` (callables passed to tabs) |
 
@@ -209,8 +215,8 @@ Three-tier system applied to every scenario × layer combination:
 | 🔄 Backwash | Collector / carryover check · bed expansion · BW hydraulics · TSS mass balance · BW scheduling feasibility matrix (scenario × temperature × TSS) · BW system sizing (pumps, blower, tank) |
 | ⚙️ Mechanical | Vessel drawing (ISO 128 style) · ASME thickness · nozzle plate · nozzle schedule · saddle design (Zick) · weight summary · lining/coating |
 | 🧱 Media | Geometric volumes · media properties · pressure drop all scenarios · media inventory · clogging analysis · **Media Engineering Intelligence** (arrangement validation + per-layer role/BW/bio cards) |
-| 💰 Economics | CAPEX breakdown + pie chart · OPEX breakdown + pie chart · carbon footprint · global benchmark with **proper CRF** (i, n user-inputs) |
-| 🎯 Assessment | Overall risk banner · key drivers · operational impacts · violation tables · Design Robustness Index · **OAT Sensitivity tornado chart** (9 inputs × 4 outputs) |
+| 💰 Economics | CAPEX breakdown + pie chart · OPEX breakdown + pie chart · carbon footprint · global benchmark with **proper CRF** (i, n user-inputs) · benchmark bands formatted in **active unit system** |
+| 🎯 Assessment | Overall risk banner · key drivers · operational impacts · violation tables · Design Robustness Index · **n_filters sweep (N-scenario LV)** (optimisation roadmap MVP) · **OAT Sensitivity tornado chart** (9 inputs × 4 outputs) |
 | 📄 Report | **JSON project save/load** · section selector · **PDF download** (ReportLab) · Word .docx download · inline markdown preview |
 
 ---
@@ -239,12 +245,15 @@ Added in the refactor session following the initial modular architecture:
 | 4 | **PDF report** — ReportLab Platypus, 8 selectable sections, download alongside Word | `engine/pdf_report.py`, `ui/tab_report.py` |
 | 5 | **Media engineering intelligence** — 4 new media types, name aliases (MnO₂/Coarse sand/…), arrangement validation, per-layer role/BW/bio cards | `engine/media.py`, `ui/tab_media.py` |
 | 6 | **Proper CRF-based LCOW** — `capital_recovery_factor(i, n)` replaces hardcoded 0.08; discount_rate wired end-to-end | `engine/economics.py`, `engine/compute.py`, `ui/tab_economics.py` |
-| 7 | **Metric / Imperial unit toggle** — radio at top of sidebar; engine always receives/returns SI; `fmt()`/`ulbl()`/`dv()` at every display boundary; `convert_inputs()` converts widget values to SI before engine; `_on_unit_system_change()` clears widget keys on switch | `engine/units.py`, `ui/sidebar.py`, `ui/helpers.py`, all tab files |
-| 8 | **Regression test suite** — 261 tests (2 skipped for Gravel support media); pure pytest, no mocking, no Streamlit; covers water, process, mechanical, backwash, economics, media, unit conversion, integration | `tests/` |
+| 7 | **Metric / Imperial unit toggle** — radio at top of sidebar; engine always receives/returns SI; `fmt()`/`ulbl()`/`dv()` at display boundary; `convert_inputs()` + `_reconvert_session_units()` on unit change | `engine/units.py`, `ui/sidebar.py`, `ui/helpers.py`, all tab files |
+| 8 | **Regression test suite** — pure pytest (no Streamlit); water, process, mechanical, backwash, economics, media, units, integration | `tests/` |
+| 9 | **Output unit alignment (tables & reports)** — backwash/media/economics/mechanical/report/PDF; hydraulic `fmt_bar_mwc`; economics `fmt_si_range` + `co2_kg_per_kwh`; nozzle schedule & saddle catalogue display DFs; DN stays ISO mm in editor | `ui/*.py`, `engine/pdf_report.py`, `engine/economics.py`, `engine/units.py` |
+| 10 | **n_filters design sweep (optimisation MVP)** — Assessment tab expander: band sweep with full `compute_all`; N-scenario LV vs velocity threshold | `ui/tab_assessment.py` |
 
 ## Remaining Enhancement Areas
 
-1. **Optimisation mode** — given constraints (LV < threshold, EBCT > threshold), find minimum n_filters or minimum nominal_id
+1. **Optimisation mode** — given constraints (LV < threshold, EBCT > threshold), find minimum n_filters or minimum nominal_id  
+   - *MVP (started):* Assessment tab — **sweep `n_filters` (per stream)** over a user band; each point runs full `compute_all`; table shows **N-scenario LV** vs velocity threshold (does not auto-write sidebar).
 2. **Multi-train comparison** — side-by-side comparison of two design configurations
 3. **Vendor nozzle catalogue** — replace estimated nozzle schedule with lookup from real vendor data (e.g., Wavin, Aqseptence)
 4. **Live BW scheduler** — Gantt-style chart showing filter availability and BW train allocation over 24 h

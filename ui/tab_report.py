@@ -1,5 +1,6 @@
 """ui/tab_report.py — Report tab for AQUASIGHT™ MMF."""
 import streamlit as st
+from ui.helpers import fmt, ulbl, dv, fmt_bar_mwc
 from engine.project_io import (
     inputs_to_json, json_to_inputs, get_widget_state_map, default_filename,
 )
@@ -198,13 +199,13 @@ def render_tab_report(inputs: dict, computed: dict):
         if s_process:
             _sec("Process Basis")
             _tbl([
-                ("Total plant flow",     f"{total_flow:,.0f} m³/h"),
+                ("Total plant flow",     fmt(total_flow, "flow_m3h", 0)),
                 ("Streams",              str(streams)),
                 ("Filters / stream",     str(n_filters)),
                 ("Redundancy",           f"N-{redundancy} per stream"),
-                ("Flow / filter (N)",    f"{q_per_filter:.1f} m³/h"),
-                ("Filtration rate (N)",  f"{q_per_filter/avg_area:.2f} m/h"),
-                ("Cross-sectional area", f"{avg_area:.3f} m²"),
+                ("Flow / filter (N)",    fmt(q_per_filter, "flow_m3h", 1)),
+                ("Filtration rate (N)",  fmt(q_per_filter / avg_area, "velocity_m_h", 2)),
+                ("Cross-sectional area", fmt(avg_area, "area_m2", 3)),
             ])
 
         if s_water:
@@ -212,33 +213,38 @@ def render_tab_report(inputs: dict, computed: dict):
             _tbl([
                 ("",            "Feed",                    "Backwash"),
                 ("Salinity",    f"{feed_sal:.2f} ppt",    f"{bw_sal:.2f} ppt"),
-                ("Temperature", f"{feed_temp:.1f} °C",    f"{bw_temp:.1f} °C"),
-                ("Density",     f"{rho_feed:.3f} kg/m³",  f"{rho_bw:.3f} kg/m³"),
-                ("Viscosity",   f"{mu_feed*1000:.4f} cP", f"{mu_bw*1000:.4f} cP"),
+                ("Temperature", fmt(feed_temp, "temperature_c", 1), fmt(bw_temp, "temperature_c", 1)),
+                ("Density",     fmt(rho_feed, "density_kg_m3", 3), fmt(rho_bw, "density_kg_m3", 3)),
+                ("Viscosity",   fmt(mu_feed * 1000.0, "viscosity_cp", 4),
+                 fmt(mu_bw * 1000.0, "viscosity_cp", 4)),
             ], cols=("Property", "Feed", "Backwash"))
 
         if s_media:
             _sec("Media Configuration")
-            _m_hdr = ("Media", "Support", "Depth (m)", "d10 (mm)", "CU",
-                       "ε₀", "ρp,eff (kg/m³)", "ψ", "Vol (m³)")
+            _m_hdr = (
+                "Media", "Support",
+                f"Depth ({ulbl('length_m')})", "d10 (mm)", "CU", "ε₀",
+                f"ρp,eff ({ulbl('density_kg_m3')})", "ψ",
+                f"Vol ({ulbl('volume_m3')})",
+            )
             _m_rows = [_m_hdr] + [
                 (b["Type"],
                  "✓" if b.get("is_support") else "",
-                 f"{b['Depth']:.3f}", f"{b['d10']:.2f}", f"{b['cu']:.2f}",
-                 f"{b.get('epsilon0', 0):.3f}", f"{b['rho_p_eff']:.0f}",
-                 f"{b.get('psi', '—')}", f"{b['Vol']:.4f}",
+                 f"{dv(b['Depth'], 'length_m'):.3f}", f"{b['d10']:.2f}", f"{b['cu']:.2f}",
+                 f"{b.get('epsilon0', 0):.3f}", f"{dv(b['rho_p_eff'], 'density_kg_m3'):.0f}",
+                 f"{b.get('psi', '—')}", f"{dv(b['Vol'], 'volume_m3'):.4f}",
                 ) for b in base]
             _tbl(_m_rows, cols=_m_hdr)
 
         if s_dp:
             _sec("Filtration Pressure Drop")
             _tbl([
-                ("Clean-bed ΔP (Ergun)",  f"{bw_dp['dp_clean_bar']:.4f} bar"),
+                ("Clean-bed ΔP (Ergun)",  fmt(bw_dp["dp_clean_bar"], "pressure_bar", 4)),
                 ("50 % loaded ΔP",
-                 f"{(bw_dp['dp_clean_bar']+bw_dp['dp_dirty_bar'])/2:.4f} bar"),
-                ("Dirty ΔP (M_max)",      f"{bw_dp['dp_dirty_bar']:.4f} bar"),
-                ("BW trigger setpoint",   f"{dp_trigger_bar:.2f} bar"),
-                ("Superficial LV (N)",    f"{bw_dp['u_m_h']:.2f} m/h"),
+                 fmt((bw_dp["dp_clean_bar"] + bw_dp["dp_dirty_bar"]) / 2.0, "pressure_bar", 4)),
+                ("Dirty ΔP (M_max)",      fmt(bw_dp["dp_dirty_bar"], "pressure_bar", 4)),
+                ("BW trigger setpoint",   fmt(dp_trigger_bar, "pressure_bar", 2)),
+                ("Superficial LV (N)",    fmt(bw_dp["u_m_h"], "velocity_m_h", 2)),
                 ("Specific resistance α",
                  f"{filt_cycles['N']['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg  "
                  f"({filt_cycles['N']['alpha_source']})"),
@@ -247,7 +253,7 @@ def render_tab_report(inputs: dict, computed: dict):
         if s_cycle:
             _sec("Filtration Cycle & BW Feasibility")
             _tbl([
-                ("Max solid loading", f"{solid_loading:.2f} kg/m²"),
+                ("Max solid loading", fmt(solid_loading, "loading_kg_m2", 2)),
                 ("BW total duration", f"{bw_total_min} min"),
                 ("BW sequence",
                  f"Drain {bw_s_drain}' · Air {bw_s_air}' · Air+W {bw_s_airw}' · "
@@ -257,15 +263,15 @@ def render_tab_report(inputs: dict, computed: dict):
         if s_vessel:
             _sec("Vessel Dimensions & ASME Thickness")
             _tbl([
-                ("Nominal ID",               f"{nominal_id:.3f} m"),
-                ("Real hydraulic ID",        f"{real_id:.4f} m"),
-                ("Outside diameter",         f"{mech['od_m']:.4f} m"),
-                ("Total length T/T",         f"{total_length:.3f} m"),
-                ("Cylindrical shell length", f"{cyl_len:.3f} m"),
+                ("Nominal ID",               fmt(nominal_id, "length_m", 3)),
+                ("Real hydraulic ID",        fmt(real_id, "length_m", 4)),
+                ("Outside diameter",         fmt(mech["od_m"], "length_m", 4)),
+                ("Total length T/T",         fmt(total_length, "length_m", 3)),
+                ("Cylindrical shell length", fmt(cyl_len, "length_m", 3)),
                 ("End geometry",             end_geometry),
                 ("Material",                 material_name),
-                ("Design pressure",          f"{design_pressure:.2f} bar g"),
-                ("Corrosion allowance",      f"{corrosion:.1f} mm"),
+                ("Design pressure",          fmt(design_pressure, "pressure_bar", 2) + " g"),
+                ("Corrosion allowance",      fmt(corrosion, "length_mm", 1)),
                 ("Shell t_required",         f"{mech['t_shell_min_mm']:.2f} mm"),
                 ("Shell t_design",           f"{mech['t_shell_design_mm']} mm"),
                 ("Head t_required",          f"{mech['t_head_min_mm']:.2f} mm"),
@@ -278,52 +284,53 @@ def render_tab_report(inputs: dict, computed: dict):
             _sec("Nozzle Plate Design")
             _tbl([
                 ("Plate height",
-                 f"{nozzle_plate_h:.3f} m"),
+                 fmt(nozzle_plate_h, "length_m", 3)),
                 ("Plate t_min / t_design",
                  f"{wt_np['t_min_mm']:.2f} / {wt_np['t_design_mm']} mm"),
-                ("Nozzle density",         f"{np_density:.0f} /m²"),
-                ("Nozzle bore",            f"{np_bore_dia:.1f} mm"),
+                ("Nozzle density",         f"{dv(np_density, 'quantity_per_m2'):.0f} {ulbl('quantity_per_m2')}"),
+                ("Nozzle bore",            fmt(np_bore_dia, "length_mm", 1)),
                 ("Total nozzles",          f"{wt_np['n_bores']}"),
-                ("Plate area",             f"{wt_np['area_total_m2']:.4f} m²"),
+                ("Plate area",             fmt(wt_np["area_total_m2"], "area_m2", 4)),
                 ("Open area ratio",        f"{wt_np['open_ratio_pct']:.2f} %"),
-                ("Design ΔP (nozzle)",     f"{wt_np['q_dp_kpa']:.2f} kPa"),
+                ("Design ΔP (nozzle)",     fmt(wt_np["q_dp_kpa"], "pressure_kpa", 2)),
                 ("Beam section",
                  f"{wt_np['beam_section']}  ({wt_np['n_beams']} beams)"),
-                ("Plate + beam weight",    f"{wt_np['weight_total_kg']:,.1f} kg"),
+                ("Plate + beam weight",    fmt(wt_np["weight_total_kg"], "mass_kg", 1)),
             ])
 
         if s_wt_empty:
             _sec("Empty Weight Breakdown")
             _tbl([
-                ("Cylindrical shell",     f"{wt_body['weight_shell_kg']:,.1f} kg"),
-                ("2 × Dish ends",         f"{wt_body['weight_two_heads_kg']:,.1f} kg"),
-                ("Nozzles",               f"{w_noz:,.1f} kg"),
-                ("Nozzle plate assembly", f"{wt_np['weight_total_kg']:,.1f} kg"),
+                ("Cylindrical shell",     fmt(wt_body["weight_shell_kg"], "mass_kg", 1)),
+                ("2 × Dish ends",         fmt(wt_body["weight_two_heads_kg"], "mass_kg", 1)),
+                ("Nozzles",               fmt(w_noz, "mass_kg", 1)),
+                ("Nozzle plate assembly", fmt(wt_np["weight_total_kg"], "mass_kg", 1)),
                 (f"Supports ({wt_sup['support_type']})",
-                 f"{wt_sup['weight_all_supports_kg']:,.1f} kg"),
-                ("Strainer nozzles",      f"{wt_int['weight_strainers_kg']:,.1f} kg"),
-                ("Air scour header",      f"{wt_int['weight_air_header_kg']:,.1f} kg"),
-                ("Manholes",              f"{wt_int['weight_manholes_kg']:,.1f} kg"),
+                 fmt(wt_sup["weight_all_supports_kg"], "mass_kg", 1)),
+                ("Strainer nozzles",      fmt(wt_int["weight_strainers_kg"], "mass_kg", 1)),
+                ("Air scour header",      fmt(wt_int["weight_air_header_kg"], "mass_kg", 1)),
+                ("Manholes",              fmt(wt_int["weight_manholes_kg"], "mass_kg", 1)),
                 ("TOTAL EMPTY WEIGHT",
-                 f"{w_total_rep:,.1f} kg  =  {w_total_rep/1000:.3f} t"),
+                 f"{fmt(w_total_rep, 'mass_kg', 1)}  =  {fmt(w_total_rep / 1000.0, 'mass_t', 3)}"),
             ])
 
         if s_wt_oper:
             _sec("Operating Weight & Support Loads")
             _tbl([
                 ("Empty vessel",
-                 f"{wt_oper['w_empty_kg']:,.1f} kg"),
+                 fmt(wt_oper["w_empty_kg"], "mass_kg", 1)),
                 (f"Internal {lining_result['protection_type'].lower() or 'lining'}",
-                 f"{wt_oper['w_lining_kg']:,.1f} kg"),
-                ("Media — dry solid",    f"{wt_oper['w_media_kg']:,.1f} kg"),
-                ("Process water (full)", f"{wt_oper['w_water_kg']:,.1f} kg"),
+                 fmt(wt_oper["w_lining_kg"], "mass_kg", 1)),
+                ("Media — dry solid",    fmt(wt_oper["w_media_kg"], "mass_kg", 1)),
+                ("Process water (full)", fmt(wt_oper["w_water_kg"], "mass_kg", 1)),
                 ("OPERATING WEIGHT",
-                 f"{wt_oper['w_operating_kg']:,.1f} kg  =  {wt_oper['w_operating_t']:.3f} t"),
+                 f"{fmt(wt_oper['w_operating_kg'], 'mass_kg', 1)}  =  "
+                 f"{fmt(wt_oper['w_operating_t'], 'mass_t', 3)}"),
                 ("Number of supports",   str(wt_oper["n_supports"])),
                 ("Load per support",
-                 f"{wt_oper['load_per_support_kg']:,.1f} kg  "
-                 f"= {wt_oper['load_per_support_t']:.3f} t  "
-                 f"= {wt_oper['load_per_support_kN']:.1f} kN"),
+                 f"{fmt(wt_oper['load_per_support_kg'], 'mass_kg', 1)}  "
+                 f"= {fmt(wt_oper['load_per_support_t'], 'mass_t', 3)}  "
+                 f"= {fmt(wt_oper['load_per_support_kN'], 'force_kn', 1)}"),
             ])
 
         if s_saddle:
@@ -333,14 +340,17 @@ def render_tab_report(inputs: dict, computed: dict):
                 ("Saddle spacing factor α",
                  f"{_sd['alpha']:.2f}"),
                 ("Saddle 1 position",
-                 f"{_sd['saddle_1_from_left_m']:.3f} m from left T/L"),
+                 f"{fmt(_sd['saddle_1_from_left_m'], 'length_m', 3)} from left T/L"),
                 ("Saddle 2 position",
-                 f"{_sd['saddle_2_from_left_m']:.3f} m from left T/L"),
-                ("Reaction per saddle",       f"{_sd['reaction_t']:.3f} t"),
+                 f"{fmt(_sd['saddle_2_from_left_m'], 'length_m', 3)} from left T/L"),
+                ("Reaction per saddle",       fmt(_sd["reaction_t"], "mass_t", 3)),
                 ("Section selected",          str(_sd.get("section", "—"))),
-                ("Section capacity",          f"{_sd.get('capacity_t', '—')} t"),
+                ("Section capacity",          (
+                    fmt(float(_sd["capacity_t"]), "mass_t", 3)
+                    if isinstance(_sd.get("capacity_t"), (int, float))
+                    else str(_sd.get("capacity_t", "—")))),
                 ("Structural weight / saddle",
-                 f"{_sd.get('w_one_saddle_kg', 0):,.0f} kg"),
+                 fmt(_sd.get("w_one_saddle_kg", 0), "mass_kg", 0)),
                 ("Status",
                  "OVERSTRESSED" if _sd.get("overstressed") else "OK"),
             ])
@@ -348,11 +358,11 @@ def render_tab_report(inputs: dict, computed: dict):
         if s_bw_hyd:
             _sec("Backwash Hydraulics & Collector Check")
             _tbl([
-                ("BW velocity (proposed)",  f"{bw_velocity:.1f} m/h"),
-                ("Max safe BW velocity",    f"{bw_col['max_safe_bw_m_h']:.1f} m/h"),
-                ("Air scour rate",          f"{air_scour_rate:.1f} m/h"),
+                ("BW velocity (proposed)",  fmt(bw_velocity, "velocity_m_h", 1)),
+                ("Max safe BW velocity",    fmt(bw_col["max_safe_bw_m_h"], "velocity_m_h", 1)),
+                ("Air scour rate",          fmt(air_scour_rate, "velocity_m_h", 1)),
                 ("Actual freeboard",
-                 f"{bw_col['freeboard_m']:.3f} m  ({bw_col['freeboard_pct']:.1f}%)"),
+                 f"{fmt(bw_col['freeboard_m'], 'length_m', 3)}  ({bw_col['freeboard_pct']:.1f}%)"),
                 ("Collector status",        bw_col["status"]),
             ])
 
@@ -360,15 +370,15 @@ def render_tab_report(inputs: dict, computed: dict):
             _sec("BW Equipment Sizing")
             _bws = bw_sizing
             _tbl([
-                ("BW design flow",       f"{_bws['q_bw_design_m3h']:,.1f} m³/h"),
-                ("BW pump head",         f"{_bws['bw_head_mwc']:.2f} mWC"),
-                ("BW pump shaft power",  f"{_bws['p_pump_shaft_kw']:.1f} kW"),
-                ("BW pump motor power",  f"{_bws['p_pump_motor_kw']:.1f} kW"),
-                ("Air flow (design)",    f"{_bws['q_air_design_m3h']:,.1f} Am³/h"),
-                ("Blower back-pressure", f"{_bws['P2_pa']/1e5:.3f} bar abs"),
-                ("Blower shaft power",   f"{_bws['p_blower_shaft_kw']:.1f} kW"),
-                ("Blower motor power",   f"{_bws['p_blower_motor_kw']:.1f} kW"),
-                ("BW water tank volume", f"{_bws['v_tank_m3']:.1f} m³"),
+                ("BW design flow",       fmt(_bws["q_bw_design_m3h"], "flow_m3h", 1)),
+                ("BW pump head",         fmt(_bws["bw_head_mwc"], "pressure_mwc", 2)),
+                ("BW pump shaft power",  fmt(_bws["p_pump_shaft_kw"], "power_kw", 1)),
+                ("BW pump motor power",  fmt(_bws["p_pump_motor_kw"], "power_kw", 1)),
+                ("Air flow (design)",    fmt(_bws["q_air_design_m3h"], "flow_m3h", 1)),
+                ("Blower back-pressure", fmt(_bws["P2_pa"] / 1e5, "pressure_bar", 3) + " abs"),
+                ("Blower shaft power",   fmt(_bws["p_blower_shaft_kw"], "power_kw", 1)),
+                ("Blower motor power",   fmt(_bws["p_blower_motor_kw"], "power_kw", 1)),
+                ("BW water tank volume", fmt(_bws["v_tank_m3"], "volume_m3", 1)),
             ])
 
         if s_lining and _has_lining:
@@ -377,9 +387,9 @@ def render_tab_report(inputs: dict, computed: dict):
                 ("Protection type",
                  lining_result["protection_type"]),
                 ("Total area protected",
-                 f"{lining_result['a_total_m2']:.2f} m²"),
+                 fmt(lining_result["a_total_m2"], "area_m2", 2)),
                 ("Lining / coating weight",
-                 f"{lining_result['weight_kg']:,.1f} kg"),
+                 fmt(lining_result["weight_kg"], "mass_kg", 1)),
                 ("Material cost",
                  f"USD {lining_result['material_cost_usd']:,.0f}"),
                 ("Application labour",
@@ -395,17 +405,19 @@ def render_tab_report(inputs: dict, computed: dict):
             for k in hyd_prof["clean"]["items_bar"]:
                 _hp_rows.append((
                     k,
-                    f"{hyd_prof['clean']['items_bar'][k]:.4f} bar"
-                    f" / {hyd_prof['clean']['items_mwc'][k]:.2f} mWC",
-                    f"{hyd_prof['dirty']['items_bar'][k]:.4f} bar"
-                    f" / {hyd_prof['dirty']['items_mwc'][k]:.2f} mWC",
+                    fmt_bar_mwc(
+                        hyd_prof["clean"]["items_bar"][k],
+                        hyd_prof["clean"]["items_mwc"][k],
+                    ),
+                    fmt_bar_mwc(
+                        hyd_prof["dirty"]["items_bar"][k],
+                        hyd_prof["dirty"]["items_mwc"][k],
+                    ),
                 ))
             _hp_rows.append((
                 "TOTAL PUMP DUTY",
-                f"{hyd_prof['clean']['total_bar']:.4f} bar"
-                f" / {hyd_prof['clean']['total_mwc']:.2f} mWC",
-                f"{hyd_prof['dirty']['total_bar']:.4f} bar"
-                f" / {hyd_prof['dirty']['total_mwc']:.2f} mWC",
+                fmt_bar_mwc(hyd_prof["clean"]["total_bar"], hyd_prof["clean"]["total_mwc"]),
+                fmt_bar_mwc(hyd_prof["dirty"]["total_bar"], hyd_prof["dirty"]["total_mwc"]),
             ))
             _tbl(_hp_rows, cols=("Item", "Clean bed", "Dirty bed"))
 
@@ -413,26 +425,27 @@ def render_tab_report(inputs: dict, computed: dict):
             _sec("Energy Consumption & OPEX")
             _tbl([
                 ("Filtration pump power (dirty, per filter)",
-                 f"{energy['p_filt_dirty_kw']:.1f} kW"),
-                ("BW pump power",            f"{energy['p_bw_kw']:.1f} kW"),
-                ("Air blower power (elec.)", f"{energy['p_blower_elec_kw']:.1f} kW"),
+                 fmt(energy["p_filt_dirty_kw"], "power_kw", 1)),
+                ("BW pump power",            fmt(energy["p_bw_kw"], "power_kw", 1)),
+                ("Air blower power (elec.)", fmt(energy["p_blower_elec_kw"], "power_kw", 1)),
                 ("Annual total energy",
                  f"{energy['e_total_kwh_yr']/1e3:,.0f} MWh/yr"),
-                ("Specific energy",          f"{energy['kwh_per_m3']:.4f} kWh/m³"),
+                ("Specific energy",          fmt(energy["kwh_per_m3"], "energy_kwh_m3", 4)),
                 ("Annual energy OPEX",       f"USD {energy['cost_usd_yr']:,.0f}/yr"),
             ])
 
         if s_cart:
             _sec("Cartridge Filter")
             _tbl([
-                ("Design flow",       f"{cart_result['design_flow_m3h']:,.1f} m³/h"),
+                ("Design flow",       fmt(cart_result["design_flow_m3h"], "flow_m3h", 1)),
                 ("Element material",  cart_result["element_material"]),
                 ("Element size",      cart_result["element_size"]),
                 ("Rating",            f"{cart_result['rating_um']} µm absolute"),
                 ("Elements required", str(cart_result["n_elements"])),
                 ("Housings required", str(cart_result["n_housings"])),
                 ("ΔP BOL / EOL",
-                 f"{cart_result['dp_clean_bar']:.4f} / {cart_result['dp_eol_bar']:.4f} bar"),
+                 f"{fmt(cart_result['dp_clean_bar'], 'pressure_bar', 4)} / "
+                 f"{fmt(cart_result['dp_eol_bar'], 'pressure_bar', 4)}"),
                 ("Annual element cost",
                  f"USD {cart_result['annual_cost_usd']:,.0f}"),
             ])
@@ -490,7 +503,10 @@ def render_tab_report(inputs: dict, computed: dict):
             }
             st.download_button(
                 label="⬇️  Download PDF report (.pdf)",
-                data=build_pdf(inputs, computed, _pdf_sections),
+                data=build_pdf(
+                    inputs, computed, _pdf_sections,
+                    st.session_state.get("unit_system", "metric"),
+                ),
                 file_name=f"{doc_number}_Rev{revision}.pdf",
                 mime="application/pdf",
             )
@@ -506,12 +522,12 @@ def render_tab_report(inputs: dict, computed: dict):
         st.markdown(f"""
 | Parameter | Value |
 |---|---|
-| Total plant flow | {total_flow:,.0f} m³/h |
+| Total plant flow | {fmt(total_flow, "flow_m3h", 0)} |
 | Streams × filters / stream | {streams} × {n_filters} |
 | Redundancy | N-{redundancy} per stream |
-| Flow / filter (N) | {q_per_filter:.1f} m³/h |
-| Filtration rate (N) | {q_per_filter/avg_area:.2f} m/h |
-| Cross-sectional area | {avg_area:.3f} m² |
+| Flow / filter (N) | {fmt(q_per_filter, "flow_m3h", 1)} |
+| Filtration rate (N) | {fmt(q_per_filter/avg_area, "velocity_m_h", 2)} |
+| Cross-sectional area | {fmt(avg_area, "area_m2", 3)} |
 """)
 
     if s_water:
@@ -520,19 +536,22 @@ def render_tab_report(inputs: dict, computed: dict):
 | Property | Feed | Backwash |
 |---|---|---|
 | Salinity | {feed_sal:.2f} ppt | {bw_sal:.2f} ppt |
-| Temperature | {feed_temp:.1f} °C | {bw_temp:.1f} °C |
-| Density | {rho_feed:.3f} kg/m³ | {rho_bw:.3f} kg/m³ |
-| Viscosity | {mu_feed*1000:.4f} cP | {mu_bw*1000:.4f} cP |
+| Temperature | {fmt(feed_temp, "temperature_c", 1)} | {fmt(bw_temp, "temperature_c", 1)} |
+| Density | {fmt(rho_feed, "density_kg_m3", 3)} | {fmt(rho_bw, "density_kg_m3", 3)} |
+| Viscosity | {fmt(mu_feed*1000.0, "viscosity_cp", 4)} | {fmt(mu_bw*1000.0, "viscosity_cp", 4)} |
 """)
 
     if s_media:
         st.markdown("### B3 · Media Configuration")
-        _med_hdr = "| Media | Sup. | Depth (m) | d10 (mm) | CU | ε₀ | ρp,eff | ψ |"
+        _med_hdr = (
+            f"| Media | Sup. | Depth ({ulbl('length_m')}) | d10 (mm) | CU | ε₀ | "
+            f"ρp,eff ({ulbl('density_kg_m3')}) | ψ |"
+        )
         _med_sep = "|---|---|---|---|---|---|---|---|"
         _med_rows = "\n".join(
             f"| {b['Type']} | {'✓' if b.get('is_support') else ''} "
-            f"| {b['Depth']:.3f} | {b['d10']:.2f} | {b['cu']:.2f} "
-            f"| {b.get('epsilon0', 0):.3f} | {b['rho_p_eff']:.0f} "
+            f"| {dv(b['Depth'], 'length_m'):.3f} | {b['d10']:.2f} | {b['cu']:.2f} "
+            f"| {b.get('epsilon0', 0):.3f} | {dv(b['rho_p_eff'], 'density_kg_m3'):.0f} "
             f"| {b.get('psi', '—')} |"
             for b in base
         )
@@ -543,11 +562,11 @@ def render_tab_report(inputs: dict, computed: dict):
         st.markdown(f"""
 | | Value |
 |---|---|
-| Clean-bed ΔP (Ergun) | {bw_dp['dp_clean_bar']:.4f} bar |
-| 50 % loaded ΔP | {(bw_dp['dp_clean_bar']+bw_dp['dp_dirty_bar'])/2:.4f} bar |
-| Dirty ΔP (M_max) | {bw_dp['dp_dirty_bar']:.4f} bar |
-| BW trigger setpoint | {dp_trigger_bar:.2f} bar |
-| Superficial LV (N) | {bw_dp['u_m_h']:.2f} m/h |
+| Clean-bed ΔP (Ergun) | {fmt(bw_dp['dp_clean_bar'], 'pressure_bar', 4)} |
+| 50 % loaded ΔP | {fmt((bw_dp['dp_clean_bar']+bw_dp['dp_dirty_bar'])/2, 'pressure_bar', 4)} |
+| Dirty ΔP (M_max) | {fmt(bw_dp['dp_dirty_bar'], 'pressure_bar', 4)} |
+| BW trigger setpoint | {fmt(dp_trigger_bar, 'pressure_bar', 2)} |
+| Superficial LV (N) | {fmt(bw_dp['u_m_h'], 'velocity_m_h', 2)} |
 """)
 
     if s_vessel:
@@ -555,12 +574,12 @@ def render_tab_report(inputs: dict, computed: dict):
         st.markdown(f"""
 | Parameter | Value |
 |---|---|
-| Nominal ID / Real hyd. ID | {nominal_id:.3f} m / {real_id:.4f} m |
-| Outside diameter | {mech['od_m']:.4f} m |
-| Total length T/T | {total_length:.3f} m |
+| Nominal ID / Real hyd. ID | {fmt(nominal_id, 'length_m', 3)} / {fmt(real_id, 'length_m', 4)} |
+| Outside diameter | {fmt(mech['od_m'], 'length_m', 4)} |
+| Total length T/T | {fmt(total_length, 'length_m', 3)} |
 | End geometry | {end_geometry} |
 | Material | {material_name} |
-| Design pressure | {design_pressure:.2f} bar g |
+| Design pressure | {fmt(design_pressure, 'pressure_bar', 2)} gauge |
 | Shell t_req / t_design | {mech['t_shell_min_mm']:.2f} / {mech['t_shell_design_mm']} mm |
 | Head t_req / t_design | {mech['t_head_min_mm']:.2f} / {mech['t_head_design_mm']} mm |
 """)
@@ -570,12 +589,12 @@ def render_tab_report(inputs: dict, computed: dict):
         st.markdown(f"""
 | Component | Weight |
 |---|---|
-| Shell + 2 heads | {wt_body['weight_body_kg']:,.0f} kg |
-| Nozzles | {w_noz:,.0f} kg |
-| Nozzle plate assembly | {wt_np['weight_total_kg']:,.0f} kg |
-| Supports | {wt_sup['weight_all_supports_kg']:,.0f} kg |
-| Internals | {wt_int['weight_internals_kg']:,.0f} kg |
-| **TOTAL EMPTY** | **{w_total_rep:,.0f} kg = {w_total_rep/1000:.3f} t** |
+| Shell + 2 heads | {fmt(wt_body['weight_body_kg'], 'mass_kg', 0)} |
+| Nozzles | {fmt(w_noz, 'mass_kg', 0)} |
+| Nozzle plate assembly | {fmt(wt_np['weight_total_kg'], 'mass_kg', 0)} |
+| Supports | {fmt(wt_sup['weight_all_supports_kg'], 'mass_kg', 0)} |
+| Internals | {fmt(wt_int['weight_internals_kg'], 'mass_kg', 0)} |
+| **TOTAL EMPTY** | **{fmt(w_total_rep, 'mass_kg', 0)} = {fmt(w_total_rep/1000.0, 'mass_t', 3)}** |
 """)
 
     if s_wt_oper:
@@ -583,12 +602,12 @@ def render_tab_report(inputs: dict, computed: dict):
         st.markdown(f"""
 | Component | Weight |
 |---|---|
-| Empty vessel | {wt_oper['w_empty_kg']:,.0f} kg |
-| Lining / coating | {wt_oper['w_lining_kg']:,.0f} kg |
-| Media (dry) | {wt_oper['w_media_kg']:,.0f} kg |
-| Process water | {wt_oper['w_water_kg']:,.0f} kg |
-| **OPERATING WEIGHT** | **{wt_oper['w_operating_kg']:,.0f} kg = {wt_oper['w_operating_t']:.3f} t** |
-| Load / support ({wt_oper['n_supports']} supports) | {wt_oper['load_per_support_t']:.3f} t = {wt_oper['load_per_support_kN']:.1f} kN |
+| Empty vessel | {fmt(wt_oper['w_empty_kg'], 'mass_kg', 0)} |
+| Lining / coating | {fmt(wt_oper['w_lining_kg'], 'mass_kg', 0)} |
+| Media (dry) | {fmt(wt_oper['w_media_kg'], 'mass_kg', 0)} |
+| Process water | {fmt(wt_oper['w_water_kg'], 'mass_kg', 0)} |
+| **OPERATING WEIGHT** | **{fmt(wt_oper['w_operating_kg'], 'mass_kg', 0)} = {fmt(wt_oper['w_operating_t'], 'mass_t', 3)}** |
+| Load / support ({wt_oper['n_supports']} supports) | {fmt(wt_oper['load_per_support_t'], 'mass_t', 3)} = {fmt(wt_oper['load_per_support_kN'], 'force_kn', 1)} |
 """)
 
     if s_saddle:
@@ -598,9 +617,9 @@ def render_tab_report(inputs: dict, computed: dict):
 | Parameter | Value |
 |---|---|
 | Spacing factor α | {_sd2['alpha']:.2f} |
-| Saddle 1 / Saddle 2 position | {_sd2['saddle_1_from_left_m']:.3f} m / {_sd2['saddle_2_from_left_m']:.3f} m from left T/L |
-| Reaction per saddle | {_sd2['reaction_t']:.3f} t |
-| Section selected | {_sd2.get('section', '—')} — capacity {_sd2.get('capacity_t', '—')} t |
+| Saddle 1 / Saddle 2 position | {fmt(_sd2['saddle_1_from_left_m'], 'length_m', 3)} / {fmt(_sd2['saddle_2_from_left_m'], 'length_m', 3)} from left T/L |
+| Reaction per saddle | {fmt(_sd2['reaction_t'], 'mass_t', 3)} |
+| Section selected | {_sd2.get('section', '—')} — capacity {fmt(float(_sd2['capacity_t']), 'mass_t', 3) if isinstance(_sd2.get('capacity_t'), (int, float)) else _sd2.get('capacity_t', '—')} |
 | Status | {"OVERSTRESSED" if _sd2.get('overstressed') else "OK"} |
 """)
 
@@ -609,8 +628,8 @@ def render_tab_report(inputs: dict, computed: dict):
         st.markdown(f"""
 | Parameter | Value |
 |---|---|
-| BW velocity (proposed / max safe) | {bw_velocity:.1f} / {bw_col['max_safe_bw_m_h']:.1f} m/h |
-| Freeboard (min. req. / actual) | {freeboard_mm:.0f} mm / {bw_col['freeboard_m']*1000:.0f} mm |
+| BW velocity (proposed / max safe) | {fmt(bw_velocity, 'velocity_m_h', 1)} / {fmt(bw_col['max_safe_bw_m_h'], 'velocity_m_h', 1)} |
+| Freeboard (min. req. / actual) | {fmt(freeboard_mm, 'length_mm', 0)} / {fmt(bw_col['freeboard_m'], 'length_m', 3)} |
 | Collector status | {bw_col['status']} |
 """)
 
@@ -620,13 +639,13 @@ def render_tab_report(inputs: dict, computed: dict):
         st.markdown(f"""
 | Equipment | Key Parameter |
 |---|---|
-| BW pump flow | {_bws2['q_bw_design_m3h']:,.1f} m³/h |
-| BW pump head | {_bws2['bw_head_mwc']:.2f} mWC |
-| BW pump motor | {_bws2['p_pump_motor_kw']:.1f} kW |
-| Air blower flow | {_bws2['q_air_design_m3h']:,.1f} Am³/h |
-| Blower back-pressure | {_bws2['P2_pa']/1e5:.3f} bar abs |
-| Blower motor | {_bws2['p_blower_motor_kw']:.1f} kW |
-| BW water tank | {_bws2['v_tank_m3']:.1f} m³ |
+| BW pump flow | {fmt(_bws2['q_bw_design_m3h'], 'flow_m3h', 1)} |
+| BW pump head | {fmt(_bws2['bw_head_mwc'], 'pressure_mwc', 2)} |
+| BW pump motor | {fmt(_bws2['p_pump_motor_kw'], 'power_kw', 1)} |
+| Air blower flow | {fmt(_bws2['q_air_design_m3h'], 'flow_m3h', 1)} |
+| Blower back-pressure | {fmt(_bws2['P2_pa']/1e5, 'pressure_bar', 3)} abs |
+| Blower motor | {fmt(_bws2['p_blower_motor_kw'], 'power_kw', 1)} |
+| BW water tank | {fmt(_bws2['v_tank_m3'], 'volume_m3', 1)} |
 """)
 
     if s_lining and _has_lining:
@@ -634,8 +653,8 @@ def render_tab_report(inputs: dict, computed: dict):
         st.markdown(f"""
 | Parameter | Value |
 |---|---|
-| Total area | {lining_result['a_total_m2']:.2f} m² |
-| Weight | {lining_result['weight_kg']:,.0f} kg |
+| Total area | {fmt(lining_result['a_total_m2'], 'area_m2', 2)} |
+| Weight | {fmt(lining_result['weight_kg'], 'mass_kg', 0)} |
 | Material cost | USD {lining_result['material_cost_usd']:,.0f} |
 | Labour cost | USD {lining_result['labor_cost_usd']:,.0f} |
 | **Total coating cost** | **USD {lining_result['total_cost_usd']:,.0f}** |
@@ -646,17 +665,13 @@ def render_tab_report(inputs: dict, computed: dict):
         _hd_hdr = "| Item | Clean bed | Dirty bed |"
         _hd_sep = "|---|---|---|"
         _hd_rows = "\n".join(
-            f"| {k} | {hyd_prof['clean']['items_bar'][k]:.4f} bar / "
-            f"{hyd_prof['clean']['items_mwc'][k]:.2f} mWC | "
-            f"{hyd_prof['dirty']['items_bar'][k]:.4f} bar / "
-            f"{hyd_prof['dirty']['items_mwc'][k]:.2f} mWC |"
+            f"| {k} | {fmt_bar_mwc(hyd_prof['clean']['items_bar'][k], hyd_prof['clean']['items_mwc'][k])} | "
+            f"{fmt_bar_mwc(hyd_prof['dirty']['items_bar'][k], hyd_prof['dirty']['items_mwc'][k])} |"
             for k in hyd_prof["clean"]["items_bar"]
         )
         _hd_tot = (
-            f"| **Total** | **{hyd_prof['clean']['total_bar']:.4f} bar / "
-            f"{hyd_prof['clean']['total_mwc']:.2f} mWC** | "
-            f"**{hyd_prof['dirty']['total_bar']:.4f} bar / "
-            f"{hyd_prof['dirty']['total_mwc']:.2f} mWC** |"
+            f"| **Total** | **{fmt_bar_mwc(hyd_prof['clean']['total_bar'], hyd_prof['clean']['total_mwc'])}** | "
+            f"**{fmt_bar_mwc(hyd_prof['dirty']['total_bar'], hyd_prof['dirty']['total_mwc'])}** |"
         )
         st.markdown(f"{_hd_hdr}\n{_hd_sep}\n{_hd_rows}\n{_hd_tot}")
 
@@ -665,11 +680,11 @@ def render_tab_report(inputs: dict, computed: dict):
         st.markdown(f"""
 | KPI | Value |
 |---|---|
-| Filtration pump power (dirty, per filter) | {energy['p_filt_dirty_kw']:.1f} kW |
-| BW pump power | {energy['p_bw_kw']:.1f} kW |
-| Air blower power (elec.) | {energy['p_blower_elec_kw']:.1f} kW |
+| Filtration pump power (dirty, per filter) | {fmt(energy['p_filt_dirty_kw'], 'power_kw', 1)} |
+| BW pump power | {fmt(energy['p_bw_kw'], 'power_kw', 1)} |
+| Air blower power (elec.) | {fmt(energy['p_blower_elec_kw'], 'power_kw', 1)} |
 | Annual total energy | {energy['e_total_kwh_yr']/1e3:,.0f} MWh/yr |
-| Specific energy | {energy['kwh_per_m3']:.4f} kWh/m³ |
+| Specific energy | {fmt(energy['kwh_per_m3'], 'energy_kwh_m3', 4)} |
 | Annual energy OPEX | USD {energy['cost_usd_yr']:,.0f}/yr |
 """)
 
@@ -678,11 +693,11 @@ def render_tab_report(inputs: dict, computed: dict):
         st.markdown(f"""
 | Parameter | Value |
 |---|---|
-| Design flow | {cart_result['design_flow_m3h']:,.1f} m³/h |
+| Design flow | {fmt(cart_result['design_flow_m3h'], 'flow_m3h', 1)} |
 | Element | {cart_result['element_size']} · {cart_result['rating_um']} µm · {cart_result['element_material']} |
 | Elements / Housings | {cart_result['n_elements']} / {cart_result['n_housings']} |
-| Flow / element | {cart_result['actual_flow_m3h_element']:.3f} m³/h ({cart_result['q_lpm_element']:.1f} lpm) |
-| ΔP BOL / EOL | {cart_result['dp_clean_bar']:.4f} / {cart_result['dp_eol_bar']:.4f} bar |
+| Flow / element | {fmt(cart_result['actual_flow_m3h_element'], 'flow_m3h', 3)} ({fmt(cart_result['q_lpm_element'], 'flow_l_min', 1)}) |
+| ΔP BOL / EOL | {fmt(cart_result['dp_clean_bar'], 'pressure_bar', 4)} / {fmt(cart_result['dp_eol_bar'], 'pressure_bar', 4)} |
 | Annual element cost | USD {cart_result['annual_cost_usd']:,.0f} |
 """)
 

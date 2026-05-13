@@ -181,7 +181,7 @@ def global_benchmark_comparison(
     Compare project metrics against global benchmarks for horizontal MMF
     (SWRO / brackish pre-treatment, Middle East / Mediterranean basis).
 
-    Benchmarks:
+    Benchmarks (stored as SI numeric pairs in return dict; UI formats by unit system):
       CAPEX:  15–35 USD/m³/d capacity
       OPEX:   0.02–0.06 USD/m³ treated
       Carbon: 0.010–0.025 kgCO₂/m³ (operational only)
@@ -215,10 +215,11 @@ def global_benchmark_comparison(
         "opex_status":         _light(opex_per_m3,   0.02, 0.06),
         "carbon_status":       _light(co2_per_m3,    0.010, 0.025),
         "lcow_status":         _light(lcow,          0.03, 0.08),
-        "capex_benchmark":     "15–35 USD/m³/d",
-        "opex_benchmark":      "0.02–0.06 USD/m³",
-        "carbon_benchmark":    "0.010–0.025 kgCO₂/m³",
-        "lcow_benchmark":      "0.03–0.08 USD/m³",
+        # SI numeric bounds for UI formatting (metric / imperial labels via fmt_si_range)
+        "capex_bench_si":      (15.0, 35.0),
+        "opex_bench_si":       (0.02, 0.06),
+        "co2_bench_si":        (0.010, 0.025),
+        "lcow_bench_si":       (0.03, 0.08),
         "daily_flow_m3d":      round(daily_flow_m3d, 1),
         "annual_flow_m3":      round(annual_flow_m3),
     }

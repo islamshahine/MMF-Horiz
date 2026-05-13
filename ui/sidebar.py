@@ -5,6 +5,7 @@ from engine.media import get_media_names, get_media, get_lv_range, get_ebct_rang
 from engine.units import (
     UNIT_SYSTEMS, display_value, si_value,
     unit_label, convert_inputs,
+    SESSION_WIDGET_QUANTITIES, transpose_display_value,
 )
 
 # ── Constants mirrored from app.py (kept here so sidebar is self-contained) ──
@@ -41,20 +42,41 @@ _DEFAULT_MEDIA_PRESETS = {
 
 _GAC_MEDIA_NAMES = {"Medium GAC"}
 
-# Widget keys that hold unit-dependent values — cleared on unit-system change
-_UNIT_DEPENDENT_WIDGET_KEYS = [
-    "total_flow", "f_tmp", "b_tmp", "velocity_threshold",
-    "nominal_id", "total_length", "design_pressure",
-    "nozzle_plate_h", "collector_h", "bw_velocity", "air_scour_rate",
-    "cart_flow",
-]
-
-
-def _on_unit_system_change():
-    """Clear unit-dependent widget state so defaults recompute in new system."""
-    for _k in _UNIT_DEPENDENT_WIDGET_KEYS:
-        if _k in st.session_state:
-            del st.session_state[_k]
+def _reconvert_session_units(old: str, new: str) -> None:
+    """Re-express unitised widget values when unit_system changes (same SI physics)."""
+    if old == new:
+        return
+    for wkey, qty in SESSION_WIDGET_QUANTITIES.items():
+        if wkey not in st.session_state:
+            continue
+        v = st.session_state[wkey]
+        if isinstance(v, bool) or not isinstance(v, (int, float)):
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        nv = transpose_display_value(fv, qty, old, new)
+        st.session_state[wkey] = int(round(nv)) if wkey == "fb_mm" else nv
+    for wkey in list(st.session_state.keys()):
+        if not isinstance(wkey, str):
+            continue
+        if wkey.startswith("ld_") and wkey[3:].isdigit():
+            qty = "length_m"
+        elif wkey.startswith("d10_") and wkey[4:].isdigit():
+            qty = "length_mm"
+        elif wkey.startswith("rhd_") and wkey[4:].isdigit():
+            qty = "density_kg_m3"
+        elif wkey.startswith("rh_") and wkey[3:].isdigit():
+            qty = "density_kg_m3"
+        else:
+            continue
+        if wkey not in st.session_state:
+            continue
+        v = st.session_state[wkey]
+        if not isinstance(v, (int, float)):
+            continue
+        st.session_state[wkey] = transpose_display_value(float(v), qty, old, new)
 
 
 def _eps0_from_psi(psi: float) -> float:
@@ -85,17 +107,22 @@ def render_sidebar(
     out = {}
 
     # ── Unit system toggle ─────────────────────────────────────────────────
+    _us_radio = st.session_state.get("unit_system")
+    _unit_radio_idx = UNIT_SYSTEMS.index(_us_radio) if _us_radio in UNIT_SYSTEMS else 0
     unit_system = st.radio(
         "Unit system",
         UNIT_SYSTEMS,
-        index=0,
+        index=_unit_radio_idx,
         horizontal=True,
         key="unit_system",
-        on_change=_on_unit_system_change,
         help="Metric: m³/h, bar, m, kg, °C  |  "
              "Imperial: gpm, psi, ft, lb, °F\n"
              "All internal calculations remain in SI.",
     )
+    _prev_units = st.session_state.get("_prev_unit_system", unit_system)
+    if unit_system != _prev_units:
+        _reconvert_session_units(_prev_units, unit_system)
+    st.session_state["_prev_unit_system"] = unit_system
     st.divider()
 
     proc_tab, vessel_tab, media_tab, bw_tab, econ_tab = st.tabs([
@@ -119,9 +146,11 @@ def render_sidebar(
         out["streams"]    = int(st.number_input("Streams", value=1, min_value=1, key="streams"))
         out["n_filters"]  = int(st.number_input("Filters / stream", value=16, min_value=1, key="n_filters"))
         out["redundancy"] = int(st.selectbox("Redundancy (per stream)", [0,1,2,3,4], index=1, key="redundancy"))
-        q_n = out["total_flow"] / out["streams"] / out["n_filters"]
+        _tf_si = si_value(out["total_flow"], "flow_m3h", unit_system)
+        q_n_si = _tf_si / out["streams"] / out["n_filters"]
+        q_n_disp = display_value(q_n_si, "flow_m3h", unit_system)
         st.caption(
-            f"Flow / filter (N): **{q_n:.1f} {unit_label('flow_m3h', unit_system)}**  \n"
+            f"Flow / filter (N): **{q_n_disp:.1f} {unit_label('flow_m3h', unit_system)}**  \n"
             f"Redundancy = {out['redundancy']} standby filter(s) per stream  \n"
             f"Total active filters (N scenario): **{out['streams'] * out['n_filters']} plant-wide**"
         )
@@ -133,8 +162,12 @@ def render_sidebar(
         _lbl_ft = f"Feed temp — avg ({unit_label('temperature_c', unit_system)})"
         _def_ft = display_value(fp["temp_c"], "temperature_c", unit_system)
         out["feed_temp"] = st.number_input(_lbl_ft, value=_def_ft, step=1.0, key="f_tmp")
-        out["temp_low"]  = st.number_input("Feed temp — min (°C)",   value=15.0, step=1.0, key="t_low")
-        out["temp_high"] = st.number_input("Feed temp — max (°C)",   value=35.0, step=1.0, key="t_high")
+        _lbl_tlo = f"Feed temp — min ({unit_label('temperature_c', unit_system)})"
+        _def_tlo = display_value(15.0, "temperature_c", unit_system)
+        out["temp_low"]  = st.number_input(_lbl_tlo, value=_def_tlo, step=1.0, key="t_low")
+        _lbl_thi = f"Feed temp — max ({unit_label('temperature_c', unit_system)})"
+        _def_thi = display_value(35.0, "temperature_c", unit_system)
+        out["temp_high"] = st.number_input(_lbl_thi, value=_def_thi, step=1.0, key="t_high")
         out["tss_low"]   = st.number_input("Feed TSS — low (mg/L)",  value=5.0,  step=1.0, key="tss_low")
         out["tss_avg"]   = st.number_input("Feed TSS — avg (mg/L)",  value=10.0, step=1.0, key="tss_avg")
         out["tss_high"]  = st.number_input("Feed TSS — high (mg/L)", value=20.0, step=1.0, key="tss_high")
@@ -202,8 +235,13 @@ def render_sidebar(
         _def_dp = display_value(7.0, "pressure_bar", unit_system)
         _stp_dp = display_value(0.5, "pressure_bar", unit_system)
         out["design_pressure"] = st.number_input(_lbl_dp, value=_def_dp, step=_stp_dp, key="design_pressure")
-        out["design_temp"]     = st.number_input("Design temperature (°C)", value=50.0, step=5.0, key="design_temp")
-        out["corrosion"]       = st.number_input("Corrosion allowance (mm)", value=1.5, step=0.5, key="corrosion")
+        _lbl_dt = f"Design temperature ({unit_label('temperature_c', unit_system)})"
+        _def_dt = display_value(50.0, "temperature_c", unit_system)
+        out["design_temp"]     = st.number_input(_lbl_dt, value=_def_dt, step=5.0, key="design_temp")
+        _lbl_ca = f"Corrosion allowance ({unit_label('length_mm', unit_system)})"
+        _def_ca = display_value(1.5, "length_mm", unit_system)
+        _stp_ca = display_value(0.5, "length_mm", unit_system)
+        out["corrosion"]       = st.number_input(_lbl_ca, value=_def_ca, step=_stp_ca, key="corrosion")
         st.markdown("*Radiography (ASME UW-11)*")
         rc1, rc2 = st.columns(2)
         with rc1:
@@ -212,18 +250,29 @@ def render_sidebar(
         with rc2:
             out["head_radio"]  = st.selectbox("Head",  RADIOGRAPHY_OPTIONS, index=2, key="hd_r")
             st.caption(f"E = {JOINT_EFFICIENCY[out['head_radio']]:.2f}")
-        st.markdown("*Thickness overrides* (0 = use calculated)")
-        out["ov_shell"]     = st.number_input("Shell t override (mm)", value=0.0, step=1.0, key="ov_sh")
-        out["ov_head"]      = st.number_input("Head t override (mm)",  value=0.0, step=1.0, key="ov_hd")
-        out["steel_density"]= st.number_input("Steel density (kg/m³)", value=STEEL_DENSITY_KG_M3, key="steel_density")
+        st.markdown("*Thickness overrides* (**0** = use ASME-calculated thickness)")
+        out["ov_shell"]     = st.number_input(
+            "Shell t override (mm)", value=0.0, step=1.0, key="ov_sh",
+            help="0 — use calculated shell thickness from ASME VIII-1. Non-zero — force this thickness (mm).",
+        )
+        out["ov_head"]      = st.number_input(
+            "Head t override (mm)", value=0.0, step=1.0, key="ov_hd",
+            help="0 — use calculated head thickness from ASME VIII-1. Non-zero — force this thickness (mm).",
+        )
+        _lbl_sd = f"Steel density ({unit_label('density_kg_m3', unit_system)})"
+        _def_sd = display_value(float(STEEL_DENSITY_KG_M3), "density_kg_m3", unit_system)
+        out["steel_density"]= st.number_input(_lbl_sd, value=_def_sd, key="steel_density")
 
         st.markdown("**Internal protection**")
         out["protection_type"] = st.selectbox("Protection type", PROTECTION_TYPES, index=1, key="prot_type")
 
         if out["protection_type"] == "Rubber lining":
             out["rubber_type_sel"] = st.selectbox("Rubber type", list(RUBBER_TYPES.keys()), index=1, key="rub_type")
-            out["lining_mm"]       = st.number_input("Rubber thickness / layer (mm)", value=4.0, step=0.5,
-                                                      min_value=0.5, key="rub_t")
+            _lbl_rub = f"Rubber thickness / layer ({unit_label('length_mm', unit_system)})"
+            _def_rub = display_value(4.0, "length_mm", unit_system)
+            _stp_rub = display_value(0.5, "length_mm", unit_system)
+            out["lining_mm"]       = st.number_input(_lbl_rub, value=_def_rub, step=_stp_rub,
+                                                      min_value=float(display_value(0.5, "length_mm", unit_system)), key="rub_t")
             out["rubber_layers"]   = st.number_input("Layers", value=2, min_value=1, max_value=6, key="rub_lay")
             _rub_def_cost          = RUBBER_TYPES[out["rubber_type_sel"]]["default_cost_m2"]
             out["rubber_cost_m2"]  = st.number_input("Rubber material cost (USD/m²)", value=float(_rub_def_cost),
@@ -275,15 +324,20 @@ def render_sidebar(
         _def_nph = display_value(1.0, "length_m", unit_system)
         _stp_nph = display_value(0.05, "length_m", unit_system)
         out["nozzle_plate_h"] = st.number_input(_lbl_nph, value=_def_nph, step=_stp_nph, key="nozzle_plate_h")
-        out["np_bore_dia"]    = st.number_input("Bore diameter (mm)", value=50.0,
-                                                 step=5.0, min_value=10.0, key="np_bd")
+        out["np_bore_dia"]    = st.number_input(
+            f"Bore diameter ({unit_label('length_mm', unit_system)})", value=50.0,
+            step=float(display_value(5.0, "length_mm", unit_system)), min_value=float(display_value(10.0, "length_mm", unit_system)), key="np_bd")
         out["np_density"]     = st.number_input("Nozzle density (/m²)", value=NOZZLE_DENSITY_DEFAULT,
                                                  min_value=NOZZLE_DENSITY_MIN, max_value=NOZZLE_DENSITY_MAX,
                                                  step=1.0, key="np_den")
-        out["np_beam_sp"]     = st.number_input("Beam spacing (mm)", value=500.0,
-                                                 step=50.0, key="np_bs")
-        out["np_override_t"]  = st.number_input("Override plate t (mm) — 0=calc",
-                                                  value=0.0, step=1.0, key="np_ov")
+        out["np_beam_sp"]     = st.number_input(
+            f"Beam spacing ({unit_label('length_mm', unit_system)})", value=500.0,
+            step=float(display_value(50.0, "length_mm", unit_system)), key="np_bs")
+        out["np_override_t"]  = st.number_input(
+            f"Override plate t ({unit_label('length_mm', unit_system)}) — 0=calc",
+            value=0.0, step=float(display_value(1.0, "length_mm", unit_system)), key="np_ov",
+            help="0 — calculate nozzle-plate thickness from loads. Non-zero — use this thickness.",
+        )
 
         st.markdown("**Media layers**")
         out["n_layers"] = int(st.selectbox("Layers", [1, 2, 3, 4, 5, 6], index=2, key="n_layers"))
@@ -300,12 +354,15 @@ def render_sidebar(
                                   index=preset_keys.index(def_type),
                                   key=f"lt_{i}")
             preset = st.session_state.media_presets[m_type]
-            depth  = st.number_input("Depth (m)", value=preset["default_depth"],
-                                     step=0.05, key=f"ld_{i}")
+            _lbl_dep = f"Depth ({unit_label('length_m', unit_system)})"
+            _def_dep = display_value(preset["default_depth"], "length_m", unit_system)
+            _stp_dep = display_value(0.05, "length_m", unit_system)
+            depth  = st.number_input(_lbl_dep, value=_def_dep, step=_stp_dep, key=f"ld_{i}")
+            _depth_si = si_value(depth, "length_m", unit_system)
             is_sup = st.checkbox("Support media (no clogging)",
                                  value=(m_type == "Gravel"), key=f"sup_{i}")
             if not is_sup:
-                cap_raw  = st.number_input("Capture weight", value=round(depth * 100, 0),
+                cap_raw  = st.number_input("Capture weight", value=round(_depth_si * 100, 0),
                                            step=5.0, min_value=0.0, key=f"cap_{i}")
                 cap_frac = cap_raw / 100.0
             else:
@@ -371,11 +428,26 @@ def render_sidebar(
         out["layers"] = layers
 
         st.markdown("**Filtration performance**")
-        out["solid_loading"]          = st.number_input("Solid loading before BW (kg/m²)", value=1.5, step=0.1, key="solid_loading")
-        out["captured_solids_density"]= st.number_input("Captured solids density (kg/m³)", value=1020.0, step=10.0, key="captured_solids_density")
-        alpha_9 = st.number_input("Specific cake resistance α (× 10⁹ m/kg)",
-                                   value=0.0, step=5.0, min_value=0.0, key="alpha_res")
+        _lbl_sl = f"Solid loading before BW ({unit_label('loading_kg_m2', unit_system)})"
+        _def_sl = display_value(1.5, "loading_kg_m2", unit_system)
+        _stp_sl = display_value(0.1, "loading_kg_m2", unit_system)
+        out["solid_loading"]          = st.number_input(_lbl_sl, value=_def_sl, step=_stp_sl, key="solid_loading")
+        _lbl_csd = f"Captured solids density ({unit_label('density_kg_m3', unit_system)})"
+        _def_csd = display_value(1020.0, "density_kg_m3", unit_system)
+        _stp_csd = display_value(10.0, "density_kg_m3", unit_system)
+        out["captured_solids_density"]= st.number_input(_lbl_csd, value=_def_csd, step=_stp_csd, key="captured_solids_density")
+        alpha_9 = st.number_input(
+            "Specific cake resistance α (× 10⁹ m/kg)",
+            value=0.0, step=5.0, min_value=0.0, key="alpha_res",
+            help="0 — auto-calibrate α so dirty-bed ΔP matches the BW initiation setpoint at M_max solid loading. "
+                 "Non-zero — fixed α for the Ruth cake model (ΔP tables, filtration cycles).",
+        )
         out["alpha_specific"] = alpha_9 * 1e9
+        st.caption(
+            "**0** — auto-calibrate α from the BW ΔP setpoint and **M_max** solid loading. "
+            "**> 0** — your α (×10⁹ m/kg). "
+            "*Same pattern:* shell/head thickness **0** = ASME-calculated (Vessel tab); nozzle-plate override **0** = calculated."
+        )
 
     # ── Tab 4: BW ─────────────────────────────────────────────────────────
     with bw_tab:
@@ -384,8 +456,11 @@ def render_sidebar(
         _def_ch = display_value(4.2, "length_m", unit_system)
         _stp_ch = display_value(0.1, "length_m", unit_system)
         out["collector_h"]    = st.number_input(_lbl_ch, value=_def_ch, step=_stp_ch, key="collector_h")
-        out["freeboard_mm"]   = st.number_input("Min. freeboard (mm)", value=200, step=50,
-                                                  min_value=50, key="fb_mm")
+        out["freeboard_mm"]   = st.number_input(
+            f"Min. freeboard ({unit_label('length_mm', unit_system)})",
+            value=int(round(display_value(200.0, "length_mm", unit_system))),
+            step=int(round(display_value(50.0, "length_mm", unit_system))),
+            min_value=int(round(display_value(50.0, "length_mm", unit_system))), key="fb_mm")
         _lbl_bwv = f"Proposed BW velocity ({unit_label('velocity_m_h', unit_system)})"
         _def_bwv = display_value(30.0, "velocity_m_h", unit_system)
         _stp_bwv = display_value(5.0, "velocity_m_h", unit_system)
@@ -396,8 +471,10 @@ def render_sidebar(
 
         st.markdown("**BW sequence**")
         out["bw_cycles_day"]  = int(st.number_input("BW cycles / filter / day", value=1, min_value=1, key="bw_cycles_day"))
-        out["dp_trigger_bar"] = st.number_input("BW initiation ΔP setpoint (bar)", value=1.0,
-                                                  step=0.1, min_value=0.01, key="dp_trig")
+        out["dp_trigger_bar"] = st.number_input(
+            f"BW initiation ΔP setpoint ({unit_label('pressure_bar', unit_system)})", value=1.0,
+            step=float(display_value(0.1, "pressure_bar", unit_system)),
+            min_value=float(display_value(0.01, "pressure_bar", unit_system)), key="dp_trig")
         out["bw_s_drain"]  = st.number_input("① Gravity drain (min)",       value=10, step=1, min_value=0, key="bws1")
         out["bw_s_air"]    = st.number_input("② Air scour only (min)",       value=1,  step=1, min_value=0, key="bws2")
         out["bw_s_airw"]   = st.number_input("③ Air + low-rate water (min)", value=5,  step=1, min_value=0, key="bws3")
@@ -409,16 +486,24 @@ def render_sidebar(
         st.metric("Total BW duration", f"{out['bw_total_min']} min")
 
         st.markdown("**Equipment sizing**")
-        out["vessel_pressure_bar"]  = st.number_input("Vessel operating pressure (bar g)",
-                                                        value=2.0, step=0.5, min_value=0.0, key="ves_press")
+        out["vessel_pressure_bar"]  = st.number_input(
+            f"Vessel operating pressure ({unit_label('pressure_bar', unit_system)} g)",
+            value=2.0, step=float(display_value(0.5, "pressure_bar", unit_system)),
+            min_value=0.0, key="ves_press")
         out["blower_eta"]           = st.number_input("Blower isentropic efficiency", value=0.70,
                                                         step=0.01, min_value=0.30, max_value=0.95, key="blower_eta")
-        out["blower_inlet_temp_c"]  = st.number_input("Blower inlet air temperature (°C)", value=30.0,
-                                                        step=5.0, min_value=-10.0, max_value=60.0, key="blower_t")
+        _lbl_blowt = f"Blower inlet air temperature ({unit_label('temperature_c', unit_system)})"
+        _def_blowt = display_value(30.0, "temperature_c", unit_system)
+        out["blower_inlet_temp_c"]  = st.number_input(_lbl_blowt, value=_def_blowt,
+                                                        step=5.0, min_value=float(display_value(-10.0, "temperature_c", unit_system)),
+                                                        max_value=float(display_value(60.0, "temperature_c", unit_system)), key="blower_t")
         out["tank_sf"]              = st.number_input("BW tank safety factor", value=1.5,
                                                         step=0.1, min_value=1.0, max_value=3.0, key="tank_sf")
-        out["bw_head_mwc"]          = st.number_input("BW pump total head (mWC)", value=15.0,
-                                                        step=1.0, min_value=1.0, key="bw_hd")
+        _lbl_bwh = f"BW pump total head ({unit_label('pressure_mwc', unit_system)})"
+        _def_bwh = display_value(15.0, "pressure_mwc", unit_system)
+        _stp_bwh = display_value(1.0, "pressure_mwc", unit_system)
+        out["bw_head_mwc"]          = st.number_input(_lbl_bwh, value=_def_bwh,
+                                                        step=_stp_bwh, min_value=float(display_value(1.0, "pressure_mwc", unit_system)), key="bw_hd")
 
         st.markdown("**Nozzles & supports**")
         out["default_rating"]  = st.selectbox("Flange rating", FLANGE_RATINGS, index=1, key="default_rating")
@@ -429,14 +514,20 @@ def render_sidebar(
         out["n_manholes"]      = int(st.number_input("No. of manholes", value=1, min_value=0, step=1, key="n_manholes"))
         out["support_type"]    = st.selectbox("Support type", SUPPORT_TYPES, key="sup_t")
         if "Saddle" in out["support_type"]:
-            out["saddle_h"]             = st.number_input("Saddle height (m)", value=0.8, step=0.05, key="sad_h")
+            _lbl_sh = f"Saddle height ({unit_label('length_m', unit_system)})"
+            _def_sh = display_value(0.8, "length_m", unit_system)
+            _stp_sh = display_value(0.05, "length_m", unit_system)
+            out["saddle_h"]             = st.number_input(_lbl_sh, value=_def_sh, step=_stp_sh, key="sad_h")
             out["base_plate_t"]         = st.number_input("Base plate t (mm)", value=20.0, step=2.0, key="sad_bp")
             out["gusset_t"]             = st.number_input("Gusset t (mm)", value=12.0, step=2.0, key="sad_gt")
             out["saddle_contact_angle"] = st.number_input("Saddle contact angle (°)", value=120.0,
                                                            step=15.0, min_value=90.0, max_value=180.0, key="sad_ang")
             out["leg_h"] = 1.2; out["leg_section"] = 150.0
         else:
-            out["leg_h"]                = st.number_input("Leg height (m)", value=1.2, step=0.1, key="leg_h")
+            _lbl_lh = f"Leg height ({unit_label('length_m', unit_system)})"
+            _def_lh = display_value(1.2, "length_m", unit_system)
+            _stp_lh = display_value(0.1, "length_m", unit_system)
+            out["leg_h"]                = st.number_input(_lbl_lh, value=_def_lh, step=_stp_lh, key="leg_h")
             out["leg_section"]          = st.number_input("Leg section (mm)", value=150.0, step=25.0, key="leg_s")
             out["base_plate_t"]         = st.number_input("Base plate t (mm)", value=20.0, step=2.0, key="leg_bp")
             out["gusset_t"]             = st.number_input("Gusset t (mm)", value=12.0, step=2.0, key="leg_gt")
@@ -445,19 +536,29 @@ def render_sidebar(
     # ── Tab 5: Econ ───────────────────────────────────────────────────────
     with econ_tab:
         st.markdown("**Pump hydraulics**")
-        out["np_slot_dp"]     = st.number_input("Strainer nozzle plate ΔP at design LV (bar)",
-                                                  value=0.02, step=0.005, min_value=0.0,
-                                                  format="%.3f", key="np_slot")
-        out["p_residual"]     = st.number_input("Required downstream pressure (barg)",
-                                                  value=2.50, step=0.25, min_value=0.0, key="p_res")
-        out["dp_inlet_pipe"]  = st.number_input("Inlet piping losses (bar)", value=0.30,
-                                                  step=0.05, min_value=0.0, key="dp_in")
-        out["dp_dist"]        = st.number_input("Inlet distributor ΔP (bar)", value=0.02,
-                                                  step=0.01, min_value=0.0, key="dp_dist")
-        out["dp_outlet_pipe"] = st.number_input("Outlet piping losses (bar)", value=0.20,
-                                                  step=0.05, min_value=0.0, key="dp_out")
-        out["static_head"]    = st.number_input("Static elevation head (m)", value=0.0,
-                                                  step=0.5, key="stat_h")
+        out["np_slot_dp"]     = st.number_input(
+            f"Strainer nozzle plate ΔP at design LV ({unit_label('pressure_bar', unit_system)})",
+            value=0.02, step=float(display_value(0.005, "pressure_bar", unit_system)),
+            min_value=0.0, format="%.3f", key="np_slot")
+        out["p_residual"]     = st.number_input(
+            f"Required downstream pressure ({unit_label('pressure_bar', unit_system)} g)",
+            value=2.50, step=float(display_value(0.25, "pressure_bar", unit_system)),
+            min_value=0.0, key="p_res")
+        out["dp_inlet_pipe"]  = st.number_input(
+            f"Inlet piping losses ({unit_label('pressure_bar', unit_system)})", value=0.30,
+            step=float(display_value(0.05, "pressure_bar", unit_system)),
+            min_value=0.0, key="dp_in")
+        out["dp_dist"]        = st.number_input(
+            f"Inlet distributor ΔP ({unit_label('pressure_bar', unit_system)})", value=0.02,
+            step=float(display_value(0.01, "pressure_bar", unit_system)),
+            min_value=0.0, key="dp_dist")
+        out["dp_outlet_pipe"] = st.number_input(
+            f"Outlet piping losses ({unit_label('pressure_bar', unit_system)})", value=0.20,
+            step=float(display_value(0.05, "pressure_bar", unit_system)),
+            min_value=0.0, key="dp_out")
+        _lbl_sth = f"Static elevation head ({unit_label('pressure_mwc', unit_system)})"
+        out["static_head"]    = st.number_input(_lbl_sth, value=0.0,
+            step=float(display_value(0.5, "pressure_mwc", unit_system)), key="stat_h")
 
         st.markdown("**Efficiencies**")
         out["pump_eta"]    = st.number_input("Filtration pump η", value=0.75, step=0.01,
@@ -526,6 +627,5 @@ def render_sidebar(
 
     # ── Convert display-unit inputs back to SI before returning ───────────
     out = convert_inputs(out, unit_system)
-    out["cart_flow"] = si_value(out["cart_flow"], "flow_m3h", unit_system)
     out["unit_system"] = unit_system
     return out

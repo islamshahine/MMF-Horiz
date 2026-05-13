@@ -23,6 +23,7 @@ from engine.units import (
     format_value,
     convert_inputs,
     INPUT_QUANTITY_MAP,
+    transpose_display_value,
 )
 
 
@@ -57,6 +58,16 @@ class TestCatalogue:
     def test_cost_factors_are_one(self):
         _, _, fwd, back = QUANTITIES["cost_usd"]
         assert fwd == 1.0 and back == 1.0
+
+    def test_cost_per_m3_roundtrip(self):
+        x = 1.25
+        d = display_value(x, "cost_usd_per_m3", "imperial")
+        assert si_value(d, "cost_usd_per_m3", "imperial") == pytest.approx(x)
+
+    def test_pressure_kpa_roundtrip(self):
+        x = 50.0
+        d = display_value(x, "pressure_kpa", "imperial")
+        assert si_value(d, "pressure_kpa", "imperial") == pytest.approx(x)
 
     def test_temperature_factors_are_none(self):
         _, _, fwd, back = QUANTITIES["temperature_c"]
@@ -315,6 +326,27 @@ class TestFormatValue:
         assert "0.75" in result
 
 
+class TestTransposeDisplayValue:
+
+    def test_round_trip_flow_metric_imperial_metric(self):
+        v = 21000.0
+        v_i = transpose_display_value(v, "flow_m3h", "metric", "imperial")
+        v2 = transpose_display_value(v_i, "flow_m3h", "imperial", "metric")
+        assert v2 == pytest.approx(v, rel=1e-3)
+
+    def test_same_system_returns_unchanged(self):
+        assert transpose_display_value(99.0, "flow_m3h", "metric", "metric") == 99.0
+
+
+class TestLoadingKgM2:
+
+    def test_display_imperial(self):
+        assert display_value(1.5, "loading_kg_m2", "imperial") == pytest.approx(0.307224, rel=1e-4)
+
+    def test_si_value_imperial_to_metric(self):
+        assert si_value(0.307224, "loading_kg_m2", "imperial") == pytest.approx(1.5, rel=1e-3)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # convert_inputs
 # ─────────────────────────────────────────────────────────────────────────────
@@ -363,6 +395,19 @@ class TestConvertInputs:
     def test_imperial_converts_velocity(self):
         result = convert_inputs(self._BASE, "imperial")
         assert result["bw_velocity"] == pytest.approx(30.0, rel=0.01)
+
+    def test_imperial_converts_layer_depth_ft_to_m(self):
+        base = {
+            "total_flow": 21000.0,
+            "layers": [{"Depth": 18.044, "Type": "Sand"}],
+        }
+        result = convert_inputs(base, "imperial")
+        assert result["layers"][0]["Depth"] == pytest.approx(5.5, rel=0.01)
+
+    def test_metric_leaves_layer_depth_m(self):
+        base = {"layers": [{"Depth": 0.8, "Type": "Sand"}]}
+        result = convert_inputs(base, "metric")
+        assert result["layers"][0]["Depth"] == 0.8
 
     def test_non_mapped_key_passes_unchanged(self):
         result = convert_inputs(self._BASE, "imperial")

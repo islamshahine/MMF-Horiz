@@ -4,7 +4,10 @@ import streamlit as st
 from engine.media import get_layer_intelligence
 from engine.process import filter_loading
 from engine.backwash import pressure_drop
-from ui.helpers import fmt, ulbl, dv
+from ui.helpers import (
+    fmt, ulbl, dv, pressure_drop_layers_display_frames,
+    geo_volumes_display_rows, media_properties_display_df,
+)
 
 
 def render_tab_media(inputs: dict, computed: dict):
@@ -26,34 +29,20 @@ def render_tab_media(inputs: dict, computed: dict):
     redundancy               = inputs["redundancy"]
     layers                   = inputs["layers"]
 
+    _layers_disp_df, _layers_clog_df = pressure_drop_layers_display_frames(bw_dp["layers"])
+
     st.subheader("Media design")
 
     with st.expander("1 · Geometric volumes", expanded=True):
-        df_geo = pd.DataFrame(geo_rows, columns=[
-            "Item", "Depth (m)", "Avg area (m²)",
-            "V_cyl (m³)", "V_ends (m³)", "Total vol (m³)"])
-        st.dataframe(df_geo.style.format({
-            "Depth (m)":      "{:.3f}",
-            "Avg area (m²)":  "{:.4f}",
-            "V_cyl (m³)":     "{:.4f}",
-            "V_ends (m³)":    "{:.4f}",
-            "Total vol (m³)": "{:.4f}",
-        }), use_container_width=True, hide_index=True)
+        _geo_recs, _geo_cols = geo_volumes_display_rows(geo_rows)
+        st.dataframe(
+            pd.DataFrame(_geo_recs, columns=_geo_cols),
+            use_container_width=True, hide_index=True)
 
     with st.expander("2 · Media properties", expanded=True):
-        df_med = pd.DataFrame(base)[
-            ["Type", "Depth", "Vol", "Area", "rho_p_eff", "epsilon0", "d10", "cu"]
-        ].rename(columns={
-            "Type":      "Media",
-            "Depth":     "Depth (m)",
-            "Vol":       "Vol (m³)",
-            "Area":      "Avg area (m²)",
-            "rho_p_eff": "ρ (kg/m³)",
-            "epsilon0":  "ε₀",
-            "d10":       "d10 (mm)",
-            "cu":        "CU",
-        })
-        st.dataframe(df_med, use_container_width=True, hide_index=True)
+        st.dataframe(
+            media_properties_display_df(base),
+            use_container_width=True, hide_index=True)
 
     with st.expander("3 · Pressure drop — clean/moderate/dirty (all scenarios)", expanded=True):
         st.caption(
@@ -62,8 +51,8 @@ def render_tab_media(inputs: dict, computed: dict):
             f"ΔP_cake = α × μ × LV × M.  "
             f"α ({bw_dp['alpha_source']}) = "
             f"{bw_dp['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg  |  "
-            f"M_max = {solid_loading:.2f} kg/m²  |  "
-            f"Feed: ρ={rho_feed:.1f} kg/m³, μ={mu_feed*1000:.4f} cP"
+            f"M_max = {fmt(solid_loading, 'loading_kg_m2', 2)}  |  "
+            f"Feed: ρ={fmt(rho_feed, 'density_kg_m3', 1)}, μ={fmt(mu_feed * 1000.0, 'viscosity_cp', 4)}"
         )
         _load_data_dp = filter_loading(total_flow, streams, n_filters, redundancy)
         _dp_summary = []
@@ -84,27 +73,28 @@ def render_tab_media(inputs: dict, computed: dict):
                 "Scenario":                              sc_label,
                 f"LV ({ulbl('velocity_m_h')})":          round(dv(sc_dp["u_m_h"], 'velocity_m_h'), 2),
                 f"ΔP clean ({ulbl('pressure_bar')})":    round(dv(sc_dp["dp_clean_bar"], 'pressure_bar'), 5),
-                "ΔP clean (mWC)":                        sc_dp["dp_clean_mwc"],
+                f"ΔP clean ({ulbl('pressure_mwc')})":    round(dv(sc_dp["dp_clean_mwc"], 'pressure_mwc'), 3),
                 f"ΔP mod. ({ulbl('pressure_bar')})":     round(dv(sc_dp["dp_moderate_bar"], 'pressure_bar'), 5),
+                f"ΔP mod. ({ulbl('pressure_mwc')})":     round(dv(sc_dp["dp_moderate_mwc"], 'pressure_mwc'), 3),
                 f"ΔP dirty ({ulbl('pressure_bar')})":    round(dv(sc_dp["dp_dirty_bar"], 'pressure_bar'), 5),
-                "ΔP dirty (mWC)":                        sc_dp["dp_dirty_mwc"],
+                f"ΔP dirty ({ulbl('pressure_mwc')})":    round(dv(sc_dp["dp_dirty_mwc"], 'pressure_mwc'), 3),
             })
         st.markdown("**Summary — all scenarios**")
         st.dataframe(pd.DataFrame(_dp_summary),
                      use_container_width=True, hide_index=True)
         st.markdown("**Per-layer breakdown — N scenario**")
-        st.dataframe(pd.DataFrame(bw_dp["layers"]),
+        st.dataframe(_layers_disp_df,
                      use_container_width=True, hide_index=True)
         p1, p2, p3 = st.columns(3)
         p1.metric(f"ΔP clean (N) ({ulbl('pressure_bar')})",
                   fmt(bw_dp['dp_clean_bar'], 'pressure_bar', 5),
-                  delta=f"{bw_dp['dp_clean_mwc']:.3f} mWC", delta_color="off")
+                  delta=fmt(bw_dp['dp_clean_mwc'], 'pressure_mwc', 3), delta_color="off")
         p2.metric(f"ΔP moderate (N) ({ulbl('pressure_bar')})",
                   fmt(bw_dp['dp_moderate_bar'], 'pressure_bar', 5),
-                  delta=f"{bw_dp['dp_moderate_mwc']:.3f} mWC", delta_color="off")
+                  delta=fmt(bw_dp['dp_moderate_mwc'], 'pressure_mwc', 3), delta_color="off")
         p3.metric(f"ΔP dirty ({ulbl('pressure_bar')})",
                   fmt(bw_dp['dp_dirty_bar'], 'pressure_bar', 5),
-                  delta=f"{bw_dp['dp_dirty_mwc']:.3f} mWC", delta_color="off")
+                  delta=fmt(bw_dp['dp_dirty_mwc'], 'pressure_mwc', 3), delta_color="off")
 
     with st.expander("4 · Media inventory", expanded=True):
         total_vessels = streams * n_filters
@@ -132,17 +122,10 @@ def render_tab_media(inputs: dict, computed: dict):
 
     with st.expander("5 · Clogging analysis — N scenario", expanded=True):
         st.caption(
-            f"Captured solids density: **{captured_solids_density:.0f} kg/m³**  |  "
-            f"Total solid loading: **{solid_loading:.2f} kg/m²**"
+            f"Captured solids density: **{fmt(captured_solids_density, 'density_kg_m3', 0)}**  |  "
+            f"Total solid loading: **{fmt(solid_loading, 'loading_kg_m2', 2)}**"
         )
-        clog_cols = [
-            "Media", "Support", "Capture (%)",
-            "Solid load (kg/m²)", "Solid vol (m³/m²)",
-            "ΔεF", "Clogging (%)", "ε clean",
-            "Cake ΔP mod (bar)", "Cake ΔP dirty (bar)",
-        ]
-        clog_df = pd.DataFrame(bw_dp["layers"])[clog_cols]
-        st.dataframe(clog_df, use_container_width=True, hide_index=True)
+        st.dataframe(_layers_clog_df, use_container_width=True, hide_index=True)
         st.caption(
             "Support layers (e.g., Gravel) retain no solids. "
             "Cake ΔP = α × μ × LV × M, distributed by capture fraction. "

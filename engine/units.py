@@ -55,16 +55,31 @@ QUANTITIES = {
         4.40287,    # 1 m³/h = 4.40287 gpm
         0.22712,    # 1 gpm  = 0.22712 m³/h
     ),
+    "flow_m3_min": (
+        "m³/min", "ft³/min",
+        35.3147,
+        0.0283168464,
+    ),
     "flow_m3d": (
         "m³/d", "MGD",
         0.000264172,  # 1 m³/d = 0.000264172 MGD
         3785.41,      # 1 MGD  = 3785.41 m³/d
+    ),
+    "volume_m3_per_day": (
+        "m³/d", "ft³/d",
+        35.3147,     # 1 m³/d → ft³/d
+        0.0283168464,
     ),
     # Velocity / loading rate
     "velocity_m_h": (
         "m/h", "gpm/ft²",
         0.40746,    # 1 m/h = 0.40746 gpm/ft²
         2.4542,     # 1 gpm/ft² = 2.4542 m/h
+    ),
+    "velocity_m_s": (
+        "m/s", "ft/s",
+        3.28084,
+        0.30480,
     ),
     # Pressure
     "pressure_bar": (
@@ -76,6 +91,11 @@ QUANTITIES = {
         "mWC", "ft WC",
         3.28084,    # 1 mWC = 3.28084 ft WC
         0.30480,    # 1 ft WC = 0.30480 mWC
+    ),
+    "pressure_kpa": (
+        "kPa", "psi",
+        0.145037738,   # 1 kPa → psi
+        6.8947572932,  # 1 psi → kPa
     ),
     # Length
     "length_m": (
@@ -111,6 +131,11 @@ QUANTITIES = {
         1.10231,    # 1 metric ton = 1.10231 short tons
         0.907185,   # 1 short ton = 0.907185 t
     ),
+    "mass_rate_kg_d": (
+        "kg/d", "lb/d",
+        2.20462,
+        0.453592,
+    ),
     # Temperature
     "temperature_c": (
         "°C", "°F",
@@ -123,16 +148,63 @@ QUANTITIES = {
         0.062428,   # 1 kg/m³ = 0.062428 lb/ft³
         16.0185,    # 1 lb/ft³ = 16.0185 kg/m³
     ),
+    "co2_intensity_kg_m3": (
+        "kg CO₂/m³", "lb CO₂/ft³",
+        0.062428,
+        16.0185,
+    ),
+    "co2_kg_per_kwh": (
+        "kg CO₂/kWh", "lb CO₂/kWh",
+        2.20462,
+        0.453592,
+    ),
+    # Areal loading (cake / solids on media)
+    "loading_kg_m2": (
+        "kg/m²", "lb/ft²",
+        0.204816,   # 1 kg/m² = (2.20462 lb/kg) / (10.7639 ft²/m²)
+        4.88243,    # 1 lb/ft² → kg/m²
+    ),
+    "linear_density_kg_m": (
+        "kg/m", "lb/ft",
+        0.671969,   # kg/m → lb/ft
+        1.48816,
+    ),
+    # Dynamic viscosity (engine uses cP); imperial shown as lb·s/ft²
+    "viscosity_cp": (
+        "cP", "lb·s/ft²",
+        6.8523e-5,  # 1 cP = 10⁻³ Pa·s = (10⁻³/14.5939) lb·s/ft²
+        14593.9,
+    ),
     # Power
     "power_kw": (
         "kW", "hp",
         1.34102,    # 1 kW = 1.34102 hp
         0.745700,   # 1 hp = 0.7457 kW
     ),
+    "energy_kwh_m3": (
+        "kWh/m³", "kWh/ft³",
+        0.0283168464,  # kWh per m³ → kWh per ft³ (= ÷ 35.3147)
+        35.3147,
+    ),
     # Cost — no conversion, always USD
     "cost_usd": (
         "USD", "USD",
         1.0, 1.0,
+    ),
+    "cost_usd_per_m3": (
+        "USD/m³", "USD/ft³",
+        0.0283168464,
+        35.3147,
+    ),
+    "cost_usd_per_m3d": (
+        "USD/(m³/d)", "USD/(ft³/d)",
+        0.0283168464,
+        35.3147,
+    ),
+    "cost_usd_per_kg": (
+        "USD/kg", "USD/lb",
+        0.453592,
+        2.20462,
     ),
     # Dimensionless — no conversion
     "dimensionless": (
@@ -162,6 +234,33 @@ QUANTITIES = {
     "alpha_m_kg": (
         "×10⁹ m/kg", "×10⁹ m/kg",
         1.0, 1.0,
+    ),
+    # Scalar reported per m² of plate (e.g. nozzles/m²) → per ft²
+    "quantity_per_m2": (
+        "/m²", "/ft²",
+        0.092903,   # multiply SI value (per m²) → per ft²
+        10.7639,
+    ),
+    # Traditional pressure-unit stress (not SI Pa)
+    "stress_kgf_cm2": (
+        "kgf/cm²", "psi",
+        14.2233433071,
+        0.07030695796,
+    ),
+    "force_kn": (
+        "kN", "lbf",
+        224.809,
+        0.00444822,
+    ),
+    "moment_knm": (
+        "kN·m", "ft·lbf",
+        737.562,
+        0.00135582,
+    ),
+    "flow_l_min": (
+        "L/min", "gal/min",
+        0.264172,
+        3.78541,
     ),
 }
 
@@ -252,19 +351,78 @@ INPUT_QUANTITY_MAP = {
     "collector_h":        "length_m",
     "feed_temp":          "temperature_c",
     "bw_temp":            "temperature_c",
+    "temp_low":           "temperature_c",
+    "temp_high":          "temperature_c",
+    "design_temp":        "temperature_c",
+    "blower_inlet_temp_c": "temperature_c",
     "design_pressure":    "pressure_bar",
+    "dp_trigger_bar":     "pressure_bar",
+    "vessel_pressure_bar": "pressure_bar",
+    "np_slot_dp":         "pressure_bar",
+    "p_residual":         "pressure_bar",
+    "dp_inlet_pipe":      "pressure_bar",
+    "dp_dist":            "pressure_bar",
+    "dp_outlet_pipe":     "pressure_bar",
     "corrosion":          "length_mm",
     "lining_mm":          "length_mm",
     "np_bore_dia":        "length_mm",
     "np_beam_sp":         "length_mm",
+    "np_override_t":      "length_mm",
+    "ov_shell":           "length_mm",
+    "ov_head":            "length_mm",
+    "nozzle_stub_len":    "length_mm",
+    "air_header_dn":      "length_mm",
+    "freeboard_mm":       "length_mm",
+    "base_plate_t":       "length_mm",
+    "gusset_t":           "length_mm",
+    "leg_section":        "length_mm",
     "bw_velocity":        "velocity_m_h",
     "air_scour_rate":     "velocity_m_h",
     "velocity_threshold": "velocity_m_h",
-    "solid_loading":      "mass_kg",
+    "cart_flow":          "flow_m3h",
+    "solid_loading":      "loading_kg_m2",
+    "captured_solids_density": "density_kg_m3",
+    "steel_density":      "density_kg_m3",
+    "bw_head_mwc":        "pressure_mwc",
+    "static_head":        "pressure_mwc",
+    "saddle_h":           "length_m",
+    "leg_h":              "length_m",
     "tss_low":            "concentration_mg_l",
     "tss_avg":            "concentration_mg_l",
     "tss_high":           "concentration_mg_l",
 }
+
+
+def transpose_display_value(
+    disp_val: float,
+    quantity: str,
+    old_system: str,
+    new_system: str,
+) -> float:
+    """Convert a single display value from old_system units to new_system units."""
+    if old_system == new_system or disp_val is None:
+        return disp_val
+    si = si_value(disp_val, quantity, old_system)
+    return display_value(si, quantity, new_system)
+
+
+def _build_session_widget_quantities() -> dict:
+    """Map Streamlit widget session_state keys → quantity for unit-system toggles."""
+    from engine import project_io as _pio
+    # inputs dict keys that map to different widget keys per layout branch
+    _skip_inputs = {"base_plate_t", "gusset_t", "leg_section"}
+    m: dict = {}
+    for inp_key, qty in INPUT_QUANTITY_MAP.items():
+        if inp_key in _skip_inputs:
+            continue
+        wkey = _pio.WIDGET_KEY_MAP.get(inp_key, inp_key)
+        m[wkey] = qty
+    for wkey, qty in (
+        ("sad_bp", "length_mm"), ("sad_gt", "length_mm"),
+        ("leg_bp", "length_mm"), ("leg_gt", "length_mm"), ("leg_s", "length_mm"),
+    ):
+        m[wkey] = qty
+    return m
 
 
 def convert_inputs(
@@ -282,4 +440,12 @@ def convert_inputs(
     for key, qty in INPUT_QUANTITY_MAP.items():
         if key in result and result[key] is not None:
             result[key] = si_value(result[key], qty, system)
+    # Media layer depths are entered in display length units (m or ft)
+    if "layers" in result and result["layers"]:
+        for layer in result["layers"]:
+            if layer is not None and layer.get("Depth") is not None:
+                layer["Depth"] = si_value(layer["Depth"], "length_m", system)
     return result
+
+
+SESSION_WIDGET_QUANTITIES = _build_session_widget_quantities()

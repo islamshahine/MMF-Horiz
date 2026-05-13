@@ -49,6 +49,7 @@ WIDGET_KEY_MAP: dict[str, str] = {
     "vessel_pressure_bar": "ves_press", "blower_eta": "blower_eta",
     "blower_inlet_temp_c": "blower_t",  "tank_sf": "tank_sf", "bw_head_mwc": "bw_hd",
     "air_header_dn": "ah_dn",
+    "saddle_h": "sad_h",
     # Econ — hydraulics
     "np_slot_dp": "np_slot", "p_residual": "p_res",   "dp_inlet_pipe": "dp_in",
     "dp_dist": "dp_dist",    "dp_outlet_pipe": "dp_out", "static_head": "stat_h",

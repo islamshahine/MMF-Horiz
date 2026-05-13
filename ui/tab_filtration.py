@@ -3,7 +3,10 @@ import pandas as pd
 import streamlit as st
 from engine.process import filter_loading
 from engine.backwash import pressure_drop
-from ui.helpers import fmt, ulbl, dv, show_alert
+from ui.helpers import (
+    fmt, ulbl, dv, show_alert, pressure_drop_layers_display_frames,
+    cycle_matrix_temp_title, cycle_matrix_tss_row_title, filtration_dp_curve_display_df,
+)
 
 
 def render_tab_filtration(inputs: dict, computed: dict):
@@ -18,9 +21,9 @@ def render_tab_filtration(inputs: dict, computed: dict):
     rho_feed           = computed["rho_feed"]
     q_per_filter       = computed["q_per_filter"]
     cart_result        = computed["cart_result"]
-    _tss_labels        = computed["tss_labels"]
+    _tss_col_keys      = computed["tss_col_keys"]
     _tss_vals          = computed["tss_vals"]
-    _temp_labels       = computed["temp_labels"]
+    _temp_col_keys     = computed["temp_col_keys"]
     _lv_severity       = computed["lv_severity_fn"]
     _ebct_severity     = computed["ebct_severity_fn"]
 
@@ -38,6 +41,9 @@ def render_tab_filtration(inputs: dict, computed: dict):
     redundancy         = inputs["redundancy"]
     temp_low           = inputs["temp_low"]
     temp_high          = inputs["temp_high"]
+    tss_low            = inputs["tss_low"]
+    tss_avg            = inputs["tss_avg"]
+    tss_high           = inputs["tss_high"]
 
     st.caption("Hydraulic loading, contact times, pressure drop and post-treatment across all redundancy scenarios.")
 
@@ -46,20 +52,20 @@ def render_tab_filtration(inputs: dict, computed: dict):
         with w1:
             st.markdown("**Feed water**")
             st.table(pd.DataFrame([
-                ["Temperature",   f"{feed_wp['temp_c']:.1f} °C"],
-                ["Salinity",      f"{feed_wp['salinity_ppt']:.2f} ppt"],
-                ["Density",       f"{feed_wp['density_kg_m3']:.3f} kg/m³"],
-                ["Viscosity",     f"{feed_wp['viscosity_cp']:.4f} cP"],
-                ["TDS (approx.)", f"{feed_wp['tds_mg_l']:,.0f} mg/L"],
+                ["Temperature",   fmt(feed_wp['temp_c'], 'temperature_c', 1)],
+                ["Salinity",      f"{feed_wp['salinity_ppt']:.2f} {ulbl('salinity_ppt')}"],
+                ["Density",       fmt(feed_wp['density_kg_m3'], 'density_kg_m3', 3)],
+                ["Viscosity",     fmt(feed_wp['viscosity_cp'], 'viscosity_cp', 4)],
+                ["TDS (approx.)", f"{feed_wp['tds_mg_l']:,.0f} {ulbl('concentration_mg_l')}"],
             ], columns=["Property", "Value"]))
         with w2:
             st.markdown("**Backwash water**")
             st.table(pd.DataFrame([
-                ["Temperature",   f"{bw_wp['temp_c']:.1f} °C"],
-                ["Salinity",      f"{bw_wp['salinity_ppt']:.2f} ppt"],
-                ["Density",       f"{bw_wp['density_kg_m3']:.3f} kg/m³"],
-                ["Viscosity",     f"{bw_wp['viscosity_cp']:.4f} cP"],
-                ["TDS (approx.)", f"{bw_wp['tds_mg_l']:,.0f} mg/L"],
+                ["Temperature",   fmt(bw_wp['temp_c'], 'temperature_c', 1)],
+                ["Salinity",      f"{bw_wp['salinity_ppt']:.2f} {ulbl('salinity_ppt')}"],
+                ["Density",       fmt(bw_wp['density_kg_m3'], 'density_kg_m3', 3)],
+                ["Viscosity",     fmt(bw_wp['viscosity_cp'], 'viscosity_cp', 4)],
+                ["TDS (approx.)", f"{bw_wp['tds_mg_l']:,.0f} {ulbl('concentration_mg_l')}"],
             ], columns=["Property", "Value"]))
         st.info(
             "Water properties feed directly into: terminal velocity (u_t), "
@@ -135,7 +141,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
             f"Clean ΔP: Ergun equation on virgin bed.  "
             f"Moderate = 50 % loaded · Dirty = 100 % loaded — cake model (Ruth).  "
             f"α ({bw_dp['alpha_source']}) = {bw_dp['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg  |  "
-            f"M_max = {solid_loading:.2f} kg/m²"
+            f"M_max = {fmt(solid_loading, 'loading_kg_m2', 2)}"
         )
         _load_data_dp = filter_loading(total_flow, streams, n_filters, redundancy)
         _dp_summary = []
@@ -152,57 +158,88 @@ def render_tab_filtration(inputs: dict, computed: dict):
                 "Scenario":                              sc_label,
                 f"LV ({ulbl('velocity_m_h')})":          round(dv(sc_dp["u_m_h"], 'velocity_m_h'), 2),
                 f"ΔP clean ({ulbl('pressure_bar')})":    round(dv(sc_dp["dp_clean_bar"], 'pressure_bar'), 5),
-                "ΔP clean (mWC)":                        sc_dp["dp_clean_mwc"],
+                f"ΔP clean ({ulbl('pressure_mwc')})":    round(dv(sc_dp["dp_clean_mwc"], 'pressure_mwc'), 3),
                 f"ΔP mod. ({ulbl('pressure_bar')})":     round(dv(sc_dp["dp_moderate_bar"], 'pressure_bar'), 5),
+                f"ΔP mod. ({ulbl('pressure_mwc')})":     round(dv(sc_dp["dp_moderate_mwc"], 'pressure_mwc'), 3),
                 f"ΔP dirty ({ulbl('pressure_bar')})":    round(dv(sc_dp["dp_dirty_bar"], 'pressure_bar'), 5),
-                "ΔP dirty (mWC)":                        sc_dp["dp_dirty_mwc"],
+                f"ΔP dirty ({ulbl('pressure_mwc')})":    round(dv(sc_dp["dp_dirty_mwc"], 'pressure_mwc'), 3),
             })
         st.markdown("**Summary — all scenarios**")
         st.dataframe(pd.DataFrame(_dp_summary), use_container_width=True, hide_index=True)
         st.markdown("**Per-layer breakdown — N scenario**")
-        st.dataframe(pd.DataFrame(bw_dp["layers"]), use_container_width=True, hide_index=True)
+        _layers_full, _ = pressure_drop_layers_display_frames(bw_dp["layers"])
+        st.dataframe(_layers_full, use_container_width=True, hide_index=True)
         p1, p2, p3 = st.columns(3)
-        p1.metric("ΔP clean (N)",    f"{bw_dp['dp_clean_bar']:.5f} bar",
-                  delta=f"{bw_dp['dp_clean_mwc']:.3f} mWC", delta_color="off")
-        p2.metric("ΔP moderate (N)", f"{bw_dp['dp_moderate_bar']:.5f} bar",
-                  delta=f"{bw_dp['dp_moderate_mwc']:.3f} mWC", delta_color="off")
-        p3.metric("ΔP dirty → nozzle plate ΔP", f"{bw_dp['dp_dirty_bar']:.5f} bar",
-                  delta=f"{bw_dp['dp_dirty_mwc']:.3f} mWC", delta_color="off")
+        p1.metric(
+            f"ΔP clean (N) ({ulbl('pressure_bar')})",
+            fmt(bw_dp["dp_clean_bar"], "pressure_bar", 5),
+            delta=fmt(bw_dp["dp_clean_mwc"], "pressure_mwc", 3),
+            delta_color="off",
+        )
+        p2.metric(
+            f"ΔP moderate (N) ({ulbl('pressure_bar')})",
+            fmt(bw_dp["dp_moderate_bar"], "pressure_bar", 5),
+            delta=fmt(bw_dp["dp_moderate_mwc"], "pressure_mwc", 3),
+            delta_color="off",
+        )
+        p3.metric(
+            f"ΔP dirty → nozzle plate ({ulbl('pressure_bar')})",
+            fmt(bw_dp["dp_dirty_bar"], "pressure_bar", 5),
+            delta=fmt(bw_dp["dp_dirty_mwc"], "pressure_mwc", 3),
+            delta_color="off",
+        )
 
     with st.expander("Filtration cycle matrix — TSS × temperature", expanded=True):
         if filt_cycles and cycle_matrix:
             first_cyc = next(iter(filt_cycles.values()))
             st.info(
-                f"**Ruth cake model** · BW setpoint {dp_trigger_bar:.2f} bar · "
-                f"M_max {solid_loading:.2f} kg/m² · "
+                f"**Ruth cake model** · BW setpoint {fmt(dp_trigger_bar, 'pressure_bar', 2)} · "
+                f"M_max {fmt(solid_loading, 'loading_kg_m2', 2)} · "
                 f"α ({first_cyc['alpha_source']}) = {first_cyc['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg · "
-                f"Temperature range {temp_low:.0f} – {feed_temp:.0f} – {temp_high:.0f} °C"
+                f"Temperature range {fmt(temp_low, 'temperature_c', 0)} — "
+                f"{fmt(feed_temp, 'temperature_c', 0)} — {fmt(temp_high, 'temperature_c', 0)}"
             )
+            _temp_si = {
+                "temp_min": temp_low, "temp_design": feed_temp, "temp_max": temp_high,
+            }
+            _tss_si = {
+                "tss_low": tss_low, "tss_avg": tss_avg, "tss_high": tss_high,
+            }
+            _temp_order = {"temp_min": 0, "temp_design": 1, "temp_max": 2}
             for sc_lbl, sc_temps in cycle_matrix.items():
                 _lv = filt_cycles[sc_lbl]["lv_m_h"]
                 st.markdown(f"**Scenario {sc_lbl} · LV = {fmt(_lv, 'velocity_m_h', 1)}**")
                 mat_rows = []
                 _by_sched = set()   # track which temp columns are M_max-limited
-                for tss_lbl, tss_v in zip(_tss_labels, _tss_vals):
-                    row = {"Feed TSS": tss_lbl}
-                    for t_lbl in _temp_labels:
-                        cyc_t = sc_temps[t_lbl]
+                for tss_key in _tss_col_keys:
+                    tss_v = _tss_si[tss_key]
+                    row = {"Feed TSS": cycle_matrix_tss_row_title(tss_key, tss_v)}
+                    for tk in _temp_col_keys:
+                        col_disp = cycle_matrix_temp_title(tk, _temp_si[tk])
+                        cyc_t = sc_temps[tk]
                         tr = next((r for r in cyc_t["tss_results"] if r["TSS (mg/L)"] == tss_v), None)
                         _sched = "M_max" in cyc_t.get("note", "")
                         if _sched:
-                            _by_sched.add(t_lbl)
+                            _by_sched.add(tk)
                         _suffix = " ★" if _sched else ""
-                        row[t_lbl] = f"{tr['Cycle duration (h)']:.1f} h{_suffix}" if tr else "—"
+                        row[col_disp] = f"{tr['Cycle duration (h)']:.1f} h{_suffix}" if tr else "—"
                     mat_rows.append(row)
                 st.dataframe(pd.DataFrame(mat_rows).set_index("Feed TSS"), use_container_width=True)
                 if _by_sched:
+                    _sched_disp = ", ".join(
+                        cycle_matrix_temp_title(k, _temp_si[k])
+                        for k in sorted(_by_sched, key=lambda x: _temp_order.get(x, 99))
+                    )
                     st.caption(
                         f"★ BW by solid loading schedule (M_max) — pressure trigger not reached at "
-                        f"{', '.join(sorted(_by_sched))}. Lower α or higher dp setpoint would make "
+                        f"{_sched_disp}. Lower α or higher dp setpoint would make "
                         "cycle length temperature-sensitive in those columns."
                     )
             with st.expander("ΔP vs M curve — N scenario, design temperature", expanded=False):
-                st.dataframe(pd.DataFrame(first_cyc["dp_curve"]), use_container_width=True, hide_index=True)
+                st.dataframe(
+                    filtration_dp_curve_display_df(first_cyc["dp_curve"]),
+                    use_container_width=True, hide_index=True,
+                )
         else:
             st.info("No filtration cycle data available.")
 
@@ -220,7 +257,8 @@ def render_tab_filtration(inputs: dict, computed: dict):
                    delta=f"{cart_result['n_elem_per_housing']} elem./housing", delta_color="off")
         ca3.metric(f"Flow / element ({ulbl('flow_m3h')})",
                    fmt(cart_result['actual_flow_m3h_element'], 'flow_m3h', 3),
-                   delta=f"{cart_result['q_lpm_element']:.1f} lpm", delta_color="off")
+                   delta=fmt(cart_result["q_lpm_element"], "flow_l_min", 1),
+                   delta_color="off")
         ca4.metric("Dirt hold / element", f"{cart_result['dhc_g_element']:.0f} g",
                    delta=f"{cart_result['element_ties']} TIE", delta_color="off")
         st.table(pd.DataFrame([
@@ -230,8 +268,8 @@ def render_tab_filtration(inputs: dict, computed: dict):
             ["Elements required",    str(cart_result["n_elements"])],
             ["Housings required",    str(cart_result["n_housings"])],
             [f"Flow / element ({ulbl('flow_m3h')})", fmt(cart_result['actual_flow_m3h_element'], 'flow_m3h', 3)],
-            ["ΔP clean (BOL)",       f"{cart_result['dp_clean_bar']*1000:.1f} mbar"],
-            ["ΔP EOL",               f"{cart_result['dp_eol_bar']:.2f} bar"],
+            ["ΔP clean (BOL)",       fmt(cart_result["dp_clean_bar"], "pressure_bar", 4)],
+            ["ΔP EOL",               fmt(cart_result["dp_eol_bar"], "pressure_bar", 4)],
             ["DHC / element",        f"{cart_result['dhc_g_element']:.0f} g"],
             ["Replacement interval", f"{cart_result['replacement_freq_days']:.0f} days"],
             ["Annual element cost",  f"USD {cart_result['annual_cost_usd']:,.0f}"],
