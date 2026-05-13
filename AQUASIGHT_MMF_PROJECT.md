@@ -13,7 +13,8 @@
 - Backwash system design (bed expansion, hydraulics, scheduling)
 - Economics (CAPEX, OPEX, carbon footprint, LCOW benchmarking)
 - Engineering assessment with severity scoring
-- Technical report generation (Word .docx download)
+- **Design comparison** (⚖️ Compare tab): sidebar design vs editable alternative, second `compute_all`, 13-metric diff table, CSV export
+- Technical report generation (Word .docx + optional PDF)
 
 **Target users:** Process engineers and filter designers at water treatment / desalination companies.
 
@@ -23,7 +24,7 @@
 
 ## Architecture (Post-Refactor)
 
-The app was refactored from a 3,059-line monolithic `app.py` into a clean modular structure. `app.py` is now a short thin orchestrator (~160 lines).
+The app was refactored from a 3,059-line monolithic `app.py` into a clean modular structure. `app.py` is now a short thin orchestrator (~190 lines, 8 main content tabs).
 
 ### Data flow
 
@@ -39,6 +40,7 @@ app.py
   │
   └─ with main:
         render_tab_*(inputs, computed)               ← fmt()/ulbl()/dv() at display boundary
+        (includes ⚖️ Compare: compute_all on session copy of Design B inputs)
 ```
 
 **Unit system rule:** engine always works in SI. Conversion happens only at the UI boundary:
@@ -73,11 +75,11 @@ st.columns([1, 4])
 
 ```
 MMF-Horiz/
-├── app.py                    # ~160 lines — thin orchestrator
+├── app.py                    # ~190 lines — thin orchestrator (8 `st.tabs` + status column)
 │
 ├── engine/                   # Pure Python calculation modules (no Streamlit)
-│   ├── comparison.py         # Design A vs B: diff_value, compare_designs, COMPARISON_METRICS
-│   ├── compute.py            # compute_all(inputs) → computed dict (~765 lines)
+│   ├── compute.py            # compute_all(inputs) → computed dict (~810 lines)
+│   ├── comparison.py         # Design A vs B: diff_value, compare_designs, COMPARISON_METRICS (~110 lines)
 │   ├── units.py              # Unit catalogue: display_value/si_value/unit_label/
 │   │                         #   format_value, convert_inputs, transpose_display_value;
 │   │                         #   extended qty keys (e.g. pressure_kpa, energy_kwh_m3,
@@ -118,7 +120,7 @@ MMF-Horiz/
 │   ├── tab_report.py         # 📄 Report tab + JSON save/load; PDF/Word use fmt; PDF passes unit_system
 │   ├── tab_compare.py        # ⚖️ Compare tab — Design B vs sidebar A, compute_all×2, CSV export
 │
-└── tests/                    # pytest — ~283 passed, 2 skipped (includes test_comparison)
+└── tests/                    # pytest — ~285 collected; 283 passed, 2 skipped (includes test_comparison)
     ├── conftest.py           # Shared fixtures (standard_layers)
     ├── test_water.py         # Water property functions
     ├── test_process.py       # filter_loading(), filter_area()
@@ -126,7 +128,7 @@ MMF-Horiz/
     ├── test_backwash.py      # Ergun ΔP, bed expansion, Wen-Yu, BW hydraulics
     ├── test_economics.py     # CRF, CAPEX, OPEX, carbon
     ├── test_media.py         # Media catalogue, collector_max_height
-    ├── test_units.py         # Unit conversion — 83 tests, all quantities
+    ├── test_units.py         # Unit conversion — extended catalogue & convert_inputs coverage
     ├── test_integration.py   # compute_all() end-to-end smoke (25 tests)
     └── test_comparison.py    # compare_designs, diff_value, metric definitions
 ```
@@ -189,7 +191,7 @@ MMF-Horiz/
 | Water properties | UNESCO-EOS80 approximation for seawater density; viscosity vs T, S |
 | Filtration cycle | DP-trigger based: solve t_cycle from α, TSS, LV, dp_trigger |
 | BW feasibility | Availability = t_cycle/(t_cycle + t_BW); simultaneous BW demand → n_trains |
-| LCOW | CRF = 8 % annualisation × CAPEX + OPEX / annual throughput |
+| LCOW | User **CRF** (`capital_recovery_factor(discount_rate, design_life_years)`) × CAPEX + annual OPEX, divided by annual throughput (see Economics tab — not a fixed 8 % shortcut) |
 | Carbon | Scope 2 (grid × energy) + Scope 3 (steel + media + concrete) |
 
 ---
@@ -234,6 +236,7 @@ Three-tier system applied to every scenario × layer combination:
 - **Economics are order-of-magnitude** — vendor quotes not included; benchmarks are 2024 Middle East / Mediterranean basis.
 - **No real-time database** — all media properties are hardcoded presets in `engine/media.py` with user-editable overrides via `st.session_state`.
 - **No multi-page routing** — single-page Streamlit app; state is preserved in `st.session_state`.
+- **Compare tab scope** — Design **B** exposes a fixed subset of inputs (process, key vessel geometry, nozzle plate height, selected BW fields); all other keys are copied from Design **A** at init/reset. Comparison uses `engine/comparison.py` only (no change to `compute_all` internals).
 
 ---
 
@@ -256,6 +259,21 @@ Added in the refactor session following the initial modular architecture:
 | 11 | **Design comparison tab** — Design A vs B, `engine/comparison.py` + `compute_all` for B, session `compare_inputs_b`, CSV export | `engine/comparison.py`, `ui/tab_compare.py`, `app.py` |
 
 ## Remaining Enhancement Areas
+
+High-level backlog (not yet implemented end-to-end unless noted):
+
+| # | Area | Notes |
+|---|------|--------|
+| 1 | **Optimisation mode** | Auto-search minimum `n_filters` / `nominal_id` under LV & EBCT limits. *Started:* Assessment **n_filters sweep** (manual band, full `compute_all` per step; does not write sidebar). |
+| 2 | **Multi-case comparison** | Named presets, JSON load, or 3+ trains side-by-side. *Partial:* **⚖️ Compare** = A (sidebar) vs B (session) + CSV. |
+| 3 | **Vendor nozzle catalogue** | Replace / augment estimated nozzle schedule with vendor tables (e.g. Wavin, Aqseptence). |
+| 4 | **Live BW scheduler** | Gantt-style 24 h availability + BW train allocation. |
+| 5 | **Media cost database** | External / configurable media pricing. |
+| 6 | **Fouling index model** | SDI/MFI (or similar) → auto `solid_loading` / risk hints. |
+| 7 | **Collector hydraulics** | Lateral ΔP sizing (today: height / carryover check only). |
+| 8 | **Air scour optimisation** | Auto air-scour rate for target bed expansion. |
+
+### Detail (same backlog, narrative)
 
 1. **Optimisation mode** — given constraints (LV < threshold, EBCT > threshold), find minimum n_filters or minimum nominal_id  
    - *MVP (started):* Assessment tab — **sweep `n_filters` (per stream)** over a user band; each point runs full `compute_all`; table shows **N-scenario LV** vs velocity threshold (does not auto-write sidebar).
