@@ -1,0 +1,219 @@
+"""Centralised engineering input validation for AQUASIGHT™ MMF (pure Python)."""
+from __future__ import annotations
+
+import copy
+from typing import Any, List, Sequence
+
+# Reference inputs aligned with tests/test_integration.py::_INPUTS — used only when
+# user inputs fail validation so compute_all can still return a full computed dict.
+_MAT = {"ASTM A516-70": {"S_kgf_cm2": 1200, "T_max_c": 350, "rho": 7850}}
+_REF_LAYERS = [
+    {"Type": "Gravel", "Depth": 0.20, "epsilon0": 0.46, "d10": 6.0, "cu": 1.0,
+     "rho_p_eff": 2600, "psi": 0.90, "is_porous": False, "is_support": True},
+    {"Type": "Fine sand", "Depth": 0.80, "epsilon0": 0.42, "d10": 0.8, "cu": 1.3,
+     "rho_p_eff": 2650, "psi": 0.80, "is_porous": False, "is_support": False},
+    {"Type": "Anthracite", "Depth": 0.80, "epsilon0": 0.48, "d10": 1.3, "cu": 1.5,
+     "rho_p_eff": 1450, "psi": 0.70, "is_porous": False, "is_support": False},
+]
+REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
+    "total_flow": 21000.0, "streams": 1, "n_filters": 16, "redundancy": 1,
+    "feed_temp": 27.0, "feed_sal": 35.0,
+    "temp_low": 15.0, "temp_high": 35.0,
+    "tss_low": 5.0, "tss_avg": 10.0, "tss_high": 20.0,
+    "bw_temp": 27.0, "bw_sal": 35.0,
+    "velocity_threshold": 12.0, "ebct_threshold": 5.0,
+    "nominal_id": 5.5, "total_length": 24.3, "end_geometry": "Elliptic 2:1",
+    "lining_mm": 4.0, "material_name": "ASTM A516-70",
+    "mat_info": _MAT["ASTM A516-70"],
+    "shell_radio": "FULL", "head_radio": "FULL",
+    "design_pressure": 7.0, "corrosion": 1.5, "steel_density": 7850.0,
+    "ov_shell": 0.0, "ov_head": 0.0,
+    "nozzle_plate_h": 1.0, "np_bore_dia": 50.0, "np_density": 50.0,
+    "np_beam_sp": 500.0, "np_override_t": 0.0, "np_slot_dp": 0.03,
+    "collector_h": 4.2, "freeboard_mm": 200,
+    "layers": copy.deepcopy(_REF_LAYERS),
+    "solid_loading": 1.5, "captured_solids_density": 1020.0,
+    "alpha_specific": 1e12, "dp_trigger_bar": 1.0,
+    "bw_velocity": 30.0, "air_scour_rate": 55.0, "bw_cycles_day": 1,
+    "bw_s_drain": 10, "bw_s_air": 1, "bw_s_airw": 5,
+    "bw_s_hw": 10, "bw_s_settle": 2, "bw_s_fill": 10, "bw_total_min": 38,
+    "vessel_pressure_bar": 4.0, "blower_eta": 0.70, "blower_inlet_temp_c": 30.0,
+    "tank_sf": 1.5, "bw_head_mwc": 15.0,
+    "default_rating": "150#", "nozzle_stub_len": 350, "strainer_mat": "SS 316L",
+    "air_header_dn": 200, "manhole_dn": 600, "n_manholes": 1,
+    "support_type": "Saddle", "saddle_h": 0.8, "saddle_contact_angle": 120.0,
+    "leg_h": 1.2, "leg_section": 150.0, "base_plate_t": 20.0, "gusset_t": 12.0,
+    "protection_type": "Rubber lining",
+    "rubber_type_sel": "EPDM", "rubber_layers": 2,
+    "rubber_cost_m2": 0.0, "rubber_labor_m2": 0.0,
+    "epoxy_type_sel": "High-build epoxy", "epoxy_dft_um": 350.0,
+    "epoxy_coats": 2, "epoxy_cost_m2": 0.0, "epoxy_labor_m2": 0.0,
+    "ceramic_type_sel": "Ceramic-filled epoxy", "ceramic_dft_um": 500.0,
+    "ceramic_coats": 2, "ceramic_cost_m2": 0.0, "ceramic_labor_m2": 0.0,
+    "cart_flow": 21000.0, "cart_size": '40"', "cart_rating": 10,
+    "cart_housing": 40, "cart_cip": False,
+    "cf_inlet_tss": 10.0, "cf_outlet_tss": 1.5,
+    "dp_dist": 0.02, "dp_inlet_pipe": 0.30, "dp_outlet_pipe": 0.20,
+    "p_residual": 0.5, "static_head": 0.0,
+    "pump_eta": 0.75, "bw_pump_eta": 0.72, "motor_eta": 0.95,
+    "elec_tariff": 0.10, "op_hours_yr": 8400,
+    "design_life_years": 20, "discount_rate": 5.0,
+    "steel_cost_usd_kg": 3.5,
+    "erection_usd_vessel": 50000.0, "piping_usd_vessel": 80000.0,
+    "instrumentation_usd_vessel": 30000.0, "civil_usd_vessel": 40000.0,
+    "engineering_pct": 12.0, "contingency_pct": 10.0,
+    "media_replace_years": 7.0,
+    "econ_media_gravel": 80.0, "econ_media_sand": 150.0,
+    "econ_media_anthracite": 400.0,
+    "nozzle_replace_years": 10.0, "nozzle_unit_cost": 15.0,
+    "labour_usd_filter_yr": 5000.0, "chemical_cost_m3": 0.005,
+    "grid_intensity": 0.45, "steel_carbon_kg": 1.85, "concrete_carbon_kg": 0.13,
+    "media_co2": {"Fine sand": 0.006, "Anthracite": 0.150},
+}
+
+
+def validate_positive(name: str, value: Any, errors: List[str], *, exclusive_min: float = 0.0) -> None:
+    """Append an error if value is not a number > exclusive_min."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        errors.append(f"{name}: value is not numeric ({value!r}).")
+        return
+    if v <= exclusive_min:
+        errors.append(f"{name}: must be > {exclusive_min:g} (got {v:g}).")
+
+
+def validate_range(
+    name: str,
+    value: Any,
+    lo: float,
+    hi: float,
+    errors: List[str],
+    *,
+    inclusive: bool = True,
+) -> None:
+    """Append an error if value is outside [lo, hi] (inclusive) or (lo, hi) if not inclusive."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        errors.append(f"{name}: value is not numeric ({value!r}).")
+        return
+    if inclusive:
+        ok = lo <= v <= hi
+    else:
+        ok = lo < v < hi
+    if not ok:
+        errors.append(f"{name}: must be within [{lo:g}, {hi:g}] (got {v:g}).")
+
+
+def validate_required(keys: Sequence[str], data: dict, errors: List[str]) -> None:
+    """Append errors for any missing keys in data."""
+    for k in keys:
+        if k not in data or data[k] is None:
+            errors.append(f"Missing required input: {k}.")
+
+
+def validate_layers(layers: Any, errors: List[str], warnings: List[str]) -> None:
+    """Validate media layer list structure and physical fields."""
+    if not isinstance(layers, list) or len(layers) == 0:
+        errors.append("Media layers: at least one layer is required.")
+        return
+    for i, layer in enumerate(layers):
+        if not isinstance(layer, dict):
+            errors.append(f"Media layer {i + 1}: must be a dict.")
+            continue
+        depth = layer.get("Depth")
+        try:
+            d = float(depth)
+        except (TypeError, ValueError):
+            errors.append(f"Media layer {i + 1}: Depth must be numeric.")
+        else:
+            if d <= 0:
+                errors.append(f"Media layer {i + 1}: Depth must be > 0.")
+
+        mtype = str(layer.get("Type", ""))
+        d10 = layer.get("d10")
+        if mtype.strip().lower() != "custom":
+            try:
+                d10v = float(d10)
+            except (TypeError, ValueError):
+                errors.append(f"Media layer {i + 1} ({mtype}): d10 must be numeric.")
+            else:
+                if d10v <= 0:
+                    errors.append(f"Media layer {i + 1} ({mtype}): d10 must be > 0.")
+
+        eps = layer.get("epsilon0")
+        try:
+            ev = float(eps)
+        except (TypeError, ValueError):
+            errors.append(f"Media layer {i + 1}: epsilon0 must be numeric.")
+        else:
+            if not (0.0 < ev < 1.0):
+                errors.append(
+                    f"Media layer {i + 1}: epsilon0 must be strictly between 0 and 1 (got {ev:g})."
+                )
+
+
+def validate_inputs(inputs: dict) -> dict:
+    """
+    Cross-check key engineering inputs.
+
+    Returns
+    -------
+    dict with keys:
+        valid: bool
+        errors: list[str]
+        warnings: list[str]
+    """
+    errors: List[str] = []
+    warnings: List[str] = []
+
+    validate_required(
+        [
+            "total_flow", "streams", "n_filters", "nominal_id", "total_length",
+            "nozzle_plate_h", "collector_h", "bw_velocity", "layers",
+        ],
+        inputs,
+        errors,
+    )
+    if errors:
+        return {"valid": False, "errors": errors, "warnings": warnings}
+
+    validate_positive("total_flow", inputs["total_flow"], errors)
+    validate_positive("streams", inputs["streams"], errors)
+    try:
+        nf = int(inputs["n_filters"])
+        if nf < 1:
+            errors.append("n_filters: must be an integer >= 1.")
+    except (TypeError, ValueError):
+        errors.append("n_filters: must be an integer >= 1.")
+
+    validate_positive("nominal_id", inputs["nominal_id"], errors)
+
+    try:
+        nid = float(inputs["nominal_id"])
+        tlen = float(inputs["total_length"])
+        if tlen <= nid:
+            errors.append(
+                f"total_length ({tlen:g} m) must be greater than nominal_id ({nid:g} m)."
+            )
+    except (TypeError, ValueError):
+        errors.append("nominal_id / total_length: must be numeric.")
+
+    validate_positive("bw_velocity", inputs["bw_velocity"], errors)
+
+    try:
+        np_h = float(inputs["nozzle_plate_h"])
+        col_h = float(inputs["collector_h"])
+        if col_h <= np_h:
+            errors.append(
+                f"collector_h ({col_h:g} m) must be greater than nozzle_plate_h ({np_h:g} m)."
+            )
+    except (TypeError, ValueError):
+        errors.append("nozzle_plate_h / collector_h: must be numeric.")
+
+    layers = inputs.get("layers")
+    validate_layers(layers, errors, warnings)
+
+    valid = len(errors) == 0
+    return {"valid": valid, "errors": errors, "warnings": warnings}
