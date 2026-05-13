@@ -5,6 +5,7 @@ import streamlit as st
 
 from engine.comparison import compare_designs
 from engine.compute import compute_all
+from engine.financial_economics import calculate_incremental_economics
 from engine.units import convert_inputs, display_value, unit_label
 from ui.helpers import fmt, ulbl, dv
 
@@ -223,3 +224,14 @@ def render_tab_compare(inputs: dict, computed: dict) -> None:
                 mime="text/csv",
                 use_container_width=True,
             )
+
+            _fin_a = computed.get("econ_financial") or {}
+            _fin_b = st.session_state.get("compare_computed_b", {}).get("econ_financial") or {}
+            if _fin_a and _fin_b:
+                st.markdown("#### Incremental lifecycle economics (B − A)")
+                _inc = calculate_incremental_economics(_fin_a, _fin_b)
+                ic1, ic2, ic3 = st.columns(3)
+                ic1.metric("Δ CAPEX (B−A)", f"USD {_inc['delta_capex_usd']:,.0f}")
+                ic2.metric("Δ NPV", f"USD {_inc['delta_npv_usd']:,.0f}")
+                ic3.metric("Δ Year-1 operating cash", f"USD {_inc['delta_first_year_operating_cash_usd']:,.0f}")
+                st.caption(_inc.get("economic_summary", ""))

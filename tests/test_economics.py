@@ -46,6 +46,7 @@ from engine.economics import (
     capex_breakdown,
     opex_annual,
     carbon_footprint,
+    npv_lifecycle_cost_profile,
 )
 
 
@@ -125,6 +126,37 @@ class TestCapitalRecoveryFactor:
         for r in [3.0, 5.0, 8.0, 10.0, 12.0]:
             for n in [10, 15, 20, 25, 30]:
                 assert capital_recovery_factor(r, n) > 0
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# NPV — lifecycle cost profile
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestNpvLifecycleCostProfile:
+
+    def test_zero_discount_is_undiscounted_sum(self):
+        """NPV at 0 % = −CAPEX − N × OPEX (N operating years after year 0)."""
+        r = npv_lifecycle_cost_profile(1000.0, 100.0, 0.0, 5)
+        assert r["npv_total_usd"] == pytest.approx(-1500.0, rel=1e-9)
+        assert r["years"] == [0, 1, 2, 3, 4, 5]
+        assert r["cumulative_pv_usd"][-1] == r["npv_total_usd"]
+
+    def test_positive_discount(self):
+        """Two operating years at 10 %: PV = −1000 − 100/1.1 − 100/1.1²."""
+        r = npv_lifecycle_cost_profile(1000.0, 100.0, 10.0, 2)
+        expected = -1000.0 - 100.0 / 1.1 - 100.0 / 1.1**2
+        assert r["npv_total_usd"] == pytest.approx(expected, abs=0.02)
+
+    def test_annual_pv_sums_to_npv(self):
+        """Rounded yearly PVs should match lifecycle NPV within rounding tolerance."""
+        r = npv_lifecycle_cost_profile(500.0, 50.0, 7.5, 10)
+        assert sum(r["annual_discounted_usd"]) == pytest.approx(r["npv_total_usd"], abs=0.05)
+
+    def test_design_life_minimum_one_year(self):
+        """Non-positive design life is treated as one operating year after year 0."""
+        r = npv_lifecycle_cost_profile(100.0, 10.0, 5.0, 0)
+        assert r["design_life_years"] == 1
+        assert len(r["years"]) == 2
 
 
 # ═════════════════════════════════════════════════════════════════════════════

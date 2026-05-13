@@ -24,10 +24,35 @@ from engine.cartridge  import cartridge_design, cartridge_optimise
 from engine.energy     import hydraulic_profile, energy_summary, bw_equipment_hours_per_event
 from engine.economics  import (
     capex_breakdown, opex_annual, carbon_footprint,
-    global_benchmark_comparison,
+    global_benchmark_comparison, npv_lifecycle_cost_profile,
 )
+from engine.financial_economics import build_econ_financial
 from engine.validators import REFERENCE_FALLBACK_INPUTS, validate_inputs
 from engine.environment_loads import compute_environment_structural
+
+
+def lv_severity_classify(vel: float, threshold: float):
+    """Map filtration LV vs envelope threshold → advisory | warning | critical | None."""
+    if vel <= threshold:
+        return None
+    ovr = (vel - threshold) / threshold
+    if ovr <= 0.05:
+        return "advisory"
+    if ovr <= 0.15:
+        return "warning"
+    return "critical"
+
+
+def ebct_severity_classify(ebct: float, threshold: float):
+    """Map EBCT vs lower limit → advisory | warning | critical | None."""
+    if ebct >= threshold:
+        return None
+    short = (threshold - ebct) / threshold
+    if short <= 0.10:
+        return "advisory"
+    if short <= 0.25:
+        return "warning"
+    return "critical"
 
 
 def compute_all(inputs: dict) -> dict:
@@ -796,25 +821,24 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             operating_hours    = float(op_hours_yr),
             discount_rate_pct  = float(discount_rate),
         )
+        econ_npv = npv_lifecycle_cost_profile(
+            capex_total_usd   = float(econ_capex["total_capex_usd"]),
+            annual_opex_usd   = float(econ_opex["total_opex_usd_yr"]),
+            discount_rate_pct = float(discount_rate),
+            design_life_years = int(design_life_years),
+        )
+        econ_financial = build_econ_financial(
+            inputs=_work,
+            econ_capex=econ_capex,
+            econ_opex=econ_opex,
+            econ_carbon=econ_carbon,
+            econ_bench=econ_bench,
+            lining_result=lining_result,
+            n_vessels=_n_total_vessels,
+        )
 
         # ── Assessment pre-computation ────────────────────────────────────────────
         load_data = _load_data_cyc
-
-        def _lv_severity(vel, threshold):
-            if vel <= threshold:
-                return None
-            ovr = (vel - threshold) / threshold
-            if ovr <= 0.05:  return "advisory"
-            if ovr <= 0.15:  return "warning"
-            return "critical"
-
-        def _ebct_severity(ebct, threshold):
-            if ebct >= threshold:
-                return None
-            short = (threshold - ebct) / threshold
-            if short <= 0.10: return "advisory"
-            if short <= 0.25: return "warning"
-            return "critical"
 
         all_lv_issues   = []
         all_ebct_issues = []
@@ -829,8 +853,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                     continue
                 _vel  = _q / _b["Area"] if _b["Area"] > 0 else 0
                 _ebct = (_b["Vol"] / _q) * 60 if _q > 0 else 0
-                _lv_sev = _lv_severity(_vel, velocity_threshold)
-                _eb_sev = _ebct_severity(_ebct, ebct_threshold)
+                _lv_sev = lv_severity_classify(_vel, velocity_threshold)
+                _eb_sev = ebct_severity_classify(_ebct, ebct_threshold)
                 if _lv_sev:
                     all_lv_issues.append((_sc, _b["Type"], _lv_sev, _vel))
                     if _lv_sev == "critical":   n_criticals  += 1
@@ -923,8 +947,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                     continue
                 _v = _q / _b["Area"] if _b["Area"] > 0 else 0
                 _e = (_b["Vol"] / _q) * 60 if _q > 0 else 0
-                _sv = _lv_severity(_v, velocity_threshold)
-                _se = _ebct_severity(_e, ebct_threshold)
+                _sv = lv_severity_classify(_v, velocity_threshold)
+                _se = ebct_severity_classify(_e, ebct_threshold)
                 if _sev_rank.get(_sv, 0) > _sev_rank.get(_worst_lv_sev, 0): _worst_lv_sev = _sv
                 if _sev_rank.get(_se, 0) > _sev_rank.get(_worst_eb_sev, 0): _worst_eb_sev = _se
             _lv_label = _sev_to_label(_worst_lv_sev)
@@ -947,7 +971,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             "feed_wp": feed_wp, "bw_wp": bw_wp,
             "rho_feed": rho_feed, "mu_feed": mu_feed, "rho_bw": rho_bw, "mu_bw": mu_bw,
             # severity functions (tabs need them as callables)
-            "lv_severity_fn": _lv_severity, "ebct_severity_fn": _ebct_severity,
+            "lv_severity_fn": lv_severity_classify,
+            "ebct_severity_fn": ebct_severity_classify,
             # geometry
             "h_dish": h_dish, "cyl_len": cyl_len, "real_id": real_id,
             "nominal_id": nominal_id, "total_length": total_length,
@@ -995,6 +1020,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             # economics
             "econ_capex": econ_capex, "econ_opex": econ_opex,
             "econ_carbon": econ_carbon, "econ_bench": econ_bench,
+            "econ_npv": econ_npv,
+            "econ_financial": econ_financial,
             # assessment
             "overall_risk": overall_risk, "risk_color": risk_color,
             "risk_border": risk_border, "risk_icon": risk_icon,

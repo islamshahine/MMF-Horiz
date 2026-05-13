@@ -29,6 +29,8 @@ def test_compute_valid_returns_engine_outputs(client: TestClient):
     data = r.json()
     assert "overall_risk" in data
     assert "econ_capex" in data
+    assert "econ_npv" in data
+    assert "econ_financial" in data
     assert "input_validation" in data
     assert data["input_validation"]["valid"] is True
 

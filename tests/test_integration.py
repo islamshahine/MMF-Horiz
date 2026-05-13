@@ -94,6 +94,19 @@ _INPUTS = {
     "pump_eta": 0.75, "bw_pump_eta": 0.72, "motor_eta": 0.95,
     "elec_tariff": 0.10, "op_hours_yr": 8400,
     "design_life_years": 20, "discount_rate": 5.0,
+    "project_life_years": 20,
+    "inflation_rate": 2.0,
+    "escalation_energy_pct": 2.5,
+    "escalation_maintenance_pct": 3.0,
+    "tax_rate": 0.0,
+    "depreciation_method": "straight_line",
+    "depreciation_years": 20,
+    "salvage_value_pct": 5.0,
+    "maintenance_pct_capex": 2.0,
+    "replacement_interval_media": 7.0,
+    "replacement_interval_nozzles": 10.0,
+    "replacement_interval_lining": 15.0,
+    "annual_benefit_usd": 0.0,
     "steel_cost_usd_kg": 3.5,
     "erection_usd_vessel": 50000.0, "piping_usd_vessel": 80000.0,
     "instrumentation_usd_vessel": 30000.0, "civil_usd_vessel": 40000.0,
@@ -136,7 +149,7 @@ class TestSmoke:
         """Core output sections must all be present in the result dict."""
         for key in ["mech", "bw_exp", "bw_dp", "bw_hyd", "bw_col",
                     "load_data", "econ_capex", "econ_opex", "econ_carbon",
-                    "feed_wp", "rho_feed", "q_per_filter", "env_structural"]:
+                    "econ_npv", "econ_financial", "feed_wp", "rho_feed", "q_per_filter", "env_structural"]:
             assert key in result, f"Missing key: {key}"
 
     def test_env_structural_wind_zero_when_no_wind(self, result):

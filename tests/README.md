@@ -18,6 +18,7 @@ tests/
   test_logging.py        engine.logger file output + compute/project_io hooks
   test_fouling.py        fouling correlations (SDI/TSS/LV monotonicity + warnings)
   test_api.py            FastAPI /compute + /health + OpenAPI smoke
+  test_financial_economics.py  Lifecycle cash flow, NPV/IRR, depreciation, incremental economics
   test_optimisation.py   constraint_check + optimise_design grid ranking
 ```
 

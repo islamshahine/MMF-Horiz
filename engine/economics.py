@@ -263,3 +263,61 @@ def global_benchmark_comparison(
         "daily_flow_m3d":      round(daily_flow_m3d, 1),
         "annual_flow_m3":      round(annual_flow_m3),
     }
+
+
+def npv_lifecycle_cost_profile(
+    capex_total_usd: float,
+    annual_opex_usd: float,
+    discount_rate_pct: float,
+    design_life_years: int,
+) -> dict:
+    """Cumulative present value of **costs** (owner cash out; negative NPV).
+
+    Year 0: total installed CAPEX. Years 1…N: constant annual OPEX matching the
+    levelized totals from ``opex_annual`` (media/nozzle already spread to USD/yr).
+
+    ``npv_total_usd`` is the sum of discounted flows through the last year
+    (same as the final point on the cumulative curve).
+    """
+    n = max(int(design_life_years), 1)
+    i = float(discount_rate_pct) / 100.0
+    capex = float(capex_total_usd)
+    opex = float(annual_opex_usd)
+
+    flows = [-capex] + [-opex] * n
+    years = list(range(n + 1))
+
+    def _df(t: int) -> float:
+        if i <= 0.0:
+            return 1.0
+        return 1.0 / ((1.0 + i) ** t)
+
+    raw_pv: list[float] = []
+    for t, cf in enumerate(flows):
+        raw_pv.append(cf * _df(t))
+    total_pv = sum(raw_pv)
+    cumulative = [round(sum(raw_pv[: k + 1]), 2) for k in range(len(raw_pv))]
+    annual_discounted_usd = [round(x, 2) for x in raw_pv]
+
+    return {
+        "npv_total_usd": round(total_pv, 2),
+        "design_life_years": n,
+        "discount_rate_pct": float(discount_rate_pct),
+        "years": years,
+        "cumulative_pv_usd": cumulative,
+        "annual_discounted_usd": annual_discounted_usd,
+    }
+
+
+from engine.financial_economics import (  # noqa: E402
+    build_econ_financial,
+    calculate_cash_flow,
+    calculate_discounted_payback,
+    calculate_incremental_economics,
+    calculate_irr,
+    calculate_lifecycle_cost,
+    calculate_npv,
+    calculate_roi,
+    calculate_simple_payback,
+    generate_depreciation_schedule,
+)

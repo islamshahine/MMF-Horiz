@@ -784,6 +784,53 @@ def render_sidebar(
         out["chemical_cost_m3"]      = st.number_input("Chemical cost (USD/m³ treated)", value=0.005,
                                                         step=0.001, format="%.3f", key="chem_m3")
 
+        st.markdown("**Financial lifecycle (NPV · IRR · replacements)**")
+        out["project_life_years"] = int(st.number_input(
+            "Project life for cash flow (years)",
+            value=int(out.get("design_life_years", 20)),
+            step=1, min_value=5, max_value=60, key="proj_life",
+            help="Often equals design life; extend for concession / contract horizon.",
+        ))
+        out["inflation_rate"] = st.number_input("General inflation (%/yr)", value=2.0, step=0.25, min_value=0.0, key="fin_infl")
+        out["escalation_energy_pct"] = st.number_input(
+            "Energy cost escalation (%/yr)", value=2.5, step=0.25, min_value=0.0, key="fin_esc_e",
+        )
+        out["escalation_maintenance_pct"] = st.number_input(
+            "Maintenance escalation (%/yr)", value=3.0, step=0.25, min_value=0.0, key="fin_esc_m",
+        )
+        out["maintenance_pct_capex"] = st.number_input(
+            "Scheduled maintenance (% of CAPEX / yr)", value=2.0, step=0.25, min_value=0.0, key="fin_maint_pct",
+        )
+        out["tax_rate"] = st.number_input(
+            "Corporate tax rate (%, 0 = off)", value=0.0, step=1.0, min_value=0.0, max_value=50.0, key="fin_tax",
+        )
+        out["salvage_value_pct"] = st.number_input(
+            "Salvage value (% of CAPEX, end of life)", value=5.0, step=0.5, min_value=0.0, key="fin_salv",
+        )
+        out["annual_benefit_usd"] = st.number_input(
+            "Annual benefit / revenue proxy (USD/yr, 0 = cost-only)",
+            value=0.0, step=100_000.0, min_value=0.0, key="fin_benefit",
+            help="Optional uniform inflow for IRR / payback (e.g. avoided legacy OPEX or water sales).",
+        )
+        _dep_m = st.selectbox(
+            "Depreciation method", ["straight_line", "declining_balance"], index=0, key="fin_dep_m",
+        )
+        out["depreciation_method"] = _dep_m
+        out["depreciation_years"] = int(st.number_input(
+            "Depreciation period (years)", value=20, step=1, min_value=1, max_value=60, key="fin_dep_y",
+        ))
+        out["replacement_interval_media"] = st.number_input(
+            "Media replacement — cash events (years)", value=float(out["media_replace_years"]),
+            step=1.0, min_value=1.0, key="fin_med_rep",
+        )
+        out["replacement_interval_nozzles"] = st.number_input(
+            "Nozzle replacement — cash events (years)", value=float(out["nozzle_replace_years"]),
+            step=1.0, min_value=1.0, key="fin_noz_rep",
+        )
+        out["replacement_interval_lining"] = st.number_input(
+            "Lining replacement interval (years)", value=15.0, step=1.0, min_value=1.0, key="fin_lin_rep",
+        )
+
         st.markdown("**Carbon footprint**")
         out["grid_intensity"]       = st.number_input("Grid intensity (kgCO₂/kWh)", value=0.45, step=0.01, key="grid_co2")
         out["steel_carbon_kg"]      = st.number_input("Steel embodied carbon (kgCO₂/kg)", value=1.85, step=0.05, key="st_co2")

@@ -30,8 +30,8 @@ from engine.cartridge import (
 )
 from engine.nozzles import FLANGE_RATINGS
 
-from engine.compute import compute_all
 from ui.sidebar import render_sidebar
+from ui.compute_cache import compute_all_cached
 from ui.helpers import fmt
 from ui.tab_filtration  import render_tab_filtration
 from ui.tab_backwash    import render_tab_backwash
@@ -129,7 +129,7 @@ with ctx:
         DEFAULT_ELEMENTS_PER_HOUSING, SAFETY_FACTOR_CIP, SAFETY_FACTOR_STD,
     )
 
-computed = compute_all(inputs)
+computed = compute_all_cached(inputs)
 _iv = computed.get("input_validation") or {}
 for _msg in _iv.get("errors", ()):
     st.error(_msg)

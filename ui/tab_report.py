@@ -34,6 +34,7 @@ def render_tab_report(inputs: dict, computed: dict):
     bw_sizing     = computed["bw_sizing"]
     hyd_prof      = computed["hyd_prof"]
     energy        = computed["energy"]
+    econ_financial = computed.get("econ_financial") or {}
     cart_result   = computed["cart_result"]
     nominal_id    = computed["nominal_id"]
     real_id       = computed["real_id"]
@@ -157,6 +158,7 @@ def render_tab_report(inputs: dict, computed: dict):
         st.markdown("**F · Energy & Economics**")
         s_hyd_prof = st.checkbox("Hydraulic head profile", value=True, key="rs_hyd")
         s_energy   = st.checkbox("Energy & OPEX",          value=True, key="rs_energy")
+        s_financial = st.checkbox("Lifecycle financial (NPV / cash flow)", value=True, key="rs_fin")
         st.markdown("**G · Post-treatment**")
         s_cart     = st.checkbox("Cartridge filter",       value=True, key="rs_cart")
 
@@ -449,6 +451,38 @@ def render_tab_report(inputs: dict, computed: dict):
                 ("Annual energy OPEX",       f"USD {energy['cost_usd_yr']:,.0f}/yr"),
             ])
 
+        if s_financial and econ_financial:
+            _sec("Lifecycle Financial Summary")
+            _irr = econ_financial.get("irr_pct")
+            _roi = econ_financial.get("roi_pct")
+            _tbl([
+                ("NPV (net cash flow)", f"USD {econ_financial.get('npv', 0):,.0f}"),
+                ("IRR", f"{_irr:.2f} %" if _irr is not None else "—"),
+                ("ROI (simple)", f"{_roi:.1f} %" if _roi is not None else "—"),
+                ("Simple payback (yr)",
+                 f"{econ_financial['simple_payback_years']:.2f}"
+                 if econ_financial.get("simple_payback_years") is not None else "—"),
+                ("Discounted payback (yr)",
+                 f"{econ_financial['discounted_payback_years']:.2f}"
+                 if econ_financial.get("discounted_payback_years") is not None else "—"),
+                ("Lifecycle cost (undisc. sum of net CF)", f"USD {econ_financial.get('lifecycle_cost', 0):,.0f}"),
+                ("Annualized cost (LCOW × flow)", f"USD {econ_financial.get('annualized_cost', 0):,.0f}/yr"
+                 if econ_financial.get("annualized_cost") is not None else "—"),
+            ])
+            _cf = econ_financial.get("cashflow_table") or []
+            if _cf:
+                _sec("Cash flow table (excerpt)")
+                _hdr = list(_cf[0].keys())
+                _rows = [_hdr] + [[str(r.get(h, "")) for h in _hdr] for r in _cf[: min(12, len(_cf))]]
+                _tbl(_rows, cols=tuple(_hdr))
+            _rs = econ_financial.get("replacement_schedule") or []
+            if _rs:
+                _sec("Replacement schedule")
+                _tbl([["Year", "Events", "Spend (USD)"]] + [
+                    [str(r.get("year", "")), ",".join(r.get("events", [])), f"{r.get('replacement_spend_usd', 0):,.0f}"]
+                    for r in _rs
+                ], cols=("Year", "Events", "Spend (USD)"))
+
         if s_cart:
             _sec("Cartridge Filter")
             _tbl([
@@ -492,7 +526,7 @@ def render_tab_report(inputs: dict, computed: dict):
         s_process, s_water, s_media, s_dp, s_cycle,
         s_vessel, s_nzpl, s_wt_empty, s_wt_oper, s_saddle,
         s_bw_hyd, s_bw_equip, s_lining and _has_lining,
-        s_hyd_prof, s_energy, s_cart,
+        s_hyd_prof, s_energy, s_financial, s_cart,
     ])
     st.caption(
         f"{_n_sections} section(s) selected + Identification & Sign-off (always included)")
@@ -514,7 +548,7 @@ def render_tab_report(inputs: dict, computed: dict):
             _pdf_sections = {
                 "process": s_process, "water": s_water, "media": s_media,
                 "dp": s_dp, "vessel": s_vessel, "bw_hyd": s_bw_hyd,
-                "bw_equip": s_bw_equip, "energy": s_energy,
+                "bw_equip": s_bw_equip, "energy": s_energy, "financial": s_financial,
             }
             st.download_button(
                 label="⬇️  Download PDF report (.pdf)",
@@ -718,6 +752,21 @@ def render_tab_report(inputs: dict, computed: dict):
 | Annual energy OPEX | USD {energy['cost_usd_yr']:,.0f}/yr |
 """)
 
+    if s_financial and econ_financial:
+        st.markdown("### F3 · Lifecycle financial")
+        _fi = econ_financial
+        _i2 = _fi.get("irr_pct")
+        _r2 = _fi.get("roi_pct")
+        _irr_txt = f"{_i2:.2f} %" if _i2 is not None else "—"
+        _roi_txt = f"{_r2:.1f} %" if _r2 is not None else "—"
+        st.markdown(f"""
+| KPI | Value |
+|---|---|
+| NPV | USD {_fi.get('npv', 0):,.0f} |
+| IRR | {_irr_txt} |
+| ROI (simple) | {_roi_txt} |
+| Summary | {_fi.get('economic_summary', '—')} |
+""")
     if s_cart:
         st.markdown("### G · Cartridge Filter")
         st.markdown(f"""

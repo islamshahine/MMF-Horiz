@@ -1,6 +1,6 @@
 """engine/pdf_report.py — PDF generation via ReportLab Platypus.
 Exports: PDF_OK (bool), build_pdf(inputs, computed, sections, unit_system) -> bytes.
-sections keys: process, water, media, dp, vessel, bw_hyd, bw_equip, energy.
+sections keys: process, water, media, dp, vessel, bw_hyd, bw_equip, energy, financial.
 No Streamlit imports — pure Python only.
 """
 import io
@@ -161,6 +161,29 @@ def build_pdf(
               ["Blower power (elec.)", fv(en.get("p_blower_elec_kw",0), "power_kw", 1)],
               ["Annual energy",f"{en.get('e_total_kwh_yr',0)/1e3:,.0f} MWh/yr"],
               ["Specific energy", fv(en.get("kwh_per_m3",0), "energy_kwh_m3", 4)]])
+
+    if sections.get("financial"):
+        fin = computed.get("econ_financial") or {}
+        _h("F2 · Lifecycle Financial")
+        _irr = fin.get("irr_pct")
+        _roi = fin.get("roi_pct")
+        _add([
+            ["NPV (net CF)", f"USD {fin.get('npv', 0):,.0f}"],
+            ["IRR", f"{_irr:.2f} %" if _irr is not None else "—"],
+            ["ROI (simple)", f"{_roi:.1f} %" if _roi is not None else "—"],
+            ["Simple payback (yr)",
+             f"{fin['simple_payback_years']:.2f}" if fin.get("simple_payback_years") is not None else "—"],
+            ["Discounted payback (yr)",
+             f"{fin['discounted_payback_years']:.2f}" if fin.get("discounted_payback_years") is not None else "—"],
+            ["Lifecycle cost (undisc.)", f"USD {fin.get('lifecycle_cost', 0):,.0f}"],
+        ])
+        _rs = fin.get("replacement_schedule") or []
+        if _rs:
+            _h("Replacement events")
+            _add([["Year", "Events", "USD"]] + [
+                [str(r.get("year", "")), ",".join(r.get("events", [])), f"{r.get('replacement_spend_usd', 0):,.0f}"]
+                for r in _rs[:20]
+            ])
 
     story += [Spacer(1,6*mm), HRFlowable(width="100%", thickness=0.5, color=_BLUE),
               Paragraph(f"{eg} · AQUASIGHT™ · {dn} Rev {rv} · {_date.today()}",

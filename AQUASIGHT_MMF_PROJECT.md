@@ -12,9 +12,10 @@
 - Vessel mechanical design (ASME VIII Div. 1 thickness, weights)
 - Backwash system design (bed expansion, hydraulics, scheduling)
 - Economics (CAPEX, OPEX, carbon footprint, LCOW benchmarking) — **intermittent BW** pump & blower duty from the BW step table for annual kWh; OPEX energy and operational CO₂ use **metered-style Σ kWh × tariff / grid** (not 24/7 rated pump power)
+- **Lifecycle financials** — discounted cash flows, replacements (media / nozzles / lining), escalation, optional benefit stream for IRR, depreciation (straight-line / declining balance), NPV sensitivity **spider chart**; outputs in `computed["econ_financial"]` (+ legacy `econ_npv` simplified curve)
 - Engineering assessment with severity scoring
 - **Design comparison** (⚖️ Compare tab): sidebar design vs editable alternative, second `compute_all`, 13-metric diff table, CSV export
-- Technical report generation (Word .docx + optional PDF)
+- Technical report generation (Word .docx + optional PDF) — includes optional **lifecycle financial** section (NPV / IRR summary, cash-flow excerpt, replacement table) and matching **PDF** section (`financial`)
 
 **Target users:** Process engineers and filter designers at water treatment / desalination companies.
 
@@ -24,7 +25,7 @@
 
 ## Architecture (Post-Refactor)
 
-The app was refactored from a 3,059-line monolithic `app.py` into a clean modular structure. `app.py` is now a short thin orchestrator (~190 lines, 8 main content tabs).
+The app was refactored from a 3,059-line monolithic `app.py` into a clean modular structure. `app.py` is now a short thin orchestrator (~205 lines, 8 main content tabs). **`ui/compute_cache.py`** wraps `compute_all` with `st.cache_data` so unchanged inputs do not re-run the full pipeline on every Streamlit rerun (return payload must stay pickleable).
 
 ### Data flow
 
@@ -34,7 +35,7 @@ app.py
   ├─ with ctx:  render_sidebar(...) → inputs: dict   ← display units in, SI out
   │               └─ convert_inputs(out, unit_system) converts widget values to SI
   │
-  ├─ compute_all(inputs) → computed: dict             ← always receives SI
+  ├─ compute_all_cached(inputs) → computed: dict      ← `ui/compute_cache.py`; deep-copy + LRU cache
   │
   ├─ with ctx:  status badges (uses inputs + computed)
   │
@@ -75,7 +76,7 @@ st.columns([1, 4])
 
 ```
 MMF-Horiz/
-├── app.py                    # ~190 lines — thin orchestrator (8 `st.tabs` + status column)
+├── app.py                    # ~205 lines — thin orchestrator (8 `st.tabs` + status column); uses `compute_all_cached`
 │
 ├── api/                      # FastAPI compute layer (optional headless / integration)
 │   ├── main.py               # app + /health
@@ -104,10 +105,12 @@ MMF-Horiz/
 │   ├── nozzles.py            # Nozzle schedule, DN series, flange ratings
 │   ├── energy.py             # Hydraulic profile; energy_summary; bw_equipment_hours_per_event()
 │   │                         #   (split BW water-pump vs air-scour hours from bw_sequence steps)
-│   ├── economics.py          # CAPEX, OPEX, carbon footprint, LCOW; capital_recovery_factor();
+│   ├── economics.py          # CAPEX, OPEX, carbon footprint, LCOW; capital_recovery_factor(); npv_lifecycle_cost_profile;
 │   │                         #   opex_annual / carbon_footprint accept energy_kwh_yr_by_component (metered annual kWh)
 │   │                         #   global_benchmark_comparison() returns SI numeric *bench_si* tuples
 │   │                         #   (UI formats ranges via fmt_si_range — no hardcoded unit strings)
+│   │                         #   re-exports financial_economics API (NPV, IRR, cash flow builders)
+│   ├── financial_economics.py # Lifecycle cash flow, NPV/IRR/payback, depreciation, incremental economics, sensitivity scan
 │   ├── drawing.py            # ISO 128 vessel elevation: hatching, centreline, title block
 │   ├── media.py              # Media DB (14 types + aliases), get_layer_intelligence()
 │   ├── project_io.py         # JSON save/load: inputs_to_json(), get_widget_state_map()
@@ -116,7 +119,7 @@ MMF-Horiz/
 │   ├── fouling.py            # SDI/MFI/TSS/LV → solids loading, run time, severity, BW interval (empirical)
 │   ├── logger.py             # File logging: compute + validation + JSON/DB project events (configure for tests)
 │   ├── sensitivity.py        # OAT tornado: run_sensitivity(); OUTPUT_DEFS descriptions; tornado_narrative()
-│   └── pdf_report.py         # ReportLab PDF: build_pdf(inputs, computed, sections, unit_system)
+│   └── pdf_report.py         # ReportLab PDF: build_pdf(inputs, computed, sections, unit_system); `financial` section
 │
 ├── ui/                       # Streamlit rendering modules
 │   ├── sidebar.py            # render_sidebar(...) → inputs dict (all widgets keyed)
@@ -129,12 +132,13 @@ MMF-Horiz/
 │   ├── tab_backwash.py       # 🔄 Backwash tab
 │   ├── tab_mechanical.py     # ⚙️ Mechanical tab (nozzle data_editor in display units; DN stays ISO mm)
 │   ├── tab_media.py          # 🧱 Media tab + intelligence expander
-│   ├── tab_economics.py      # 💰 Economics tab (benchmark column uses fmt_si_range + *bench_si*)
+│   ├── compute_cache.py      # st.cache_data wrapper for compute_all (pickle-safe computed)
+│   ├── tab_economics.py      # 💰 Economics tab — CAPEX/OPEX/carbon/benchmark; NPV curve; lifecycle financial + Plotly spider
 │   ├── tab_assessment.py     # 🎯 Assessment tab + n_filters LV sweep + OAT tornado chart
 │   ├── tab_report.py         # 📄 Report tab + JSON save/load; PDF/Word use fmt; PDF passes unit_system
-│   ├── tab_compare.py        # ⚖️ Compare tab — Design B vs sidebar A, compute_all×2, CSV export
+│   ├── tab_compare.py        # ⚖️ Compare tab — Design B vs sidebar A, compute_all×2, CSV export; incremental `econ_financial`
 │
-└── tests/                    # pytest — ~368 collected; 366 passed, 2 skipped (typical local run)
+└── tests/                    # pytest — ~382 collected; ~380 passed, 2 skipped (typical local run)
     ├── conftest.py           # Shared fixtures (standard_layers, …)
     ├── test_water.py         # Water property functions
     ├── test_process.py       # filter_loading(), filter_area()
@@ -153,6 +157,7 @@ MMF-Horiz/
     ├── test_logging.py       # logger file output + compute/project hooks
     ├── test_fouling.py       # fouling correlations
     ├── test_api.py           # FastAPI /health, /compute, OpenAPI
+    ├── test_financial_economics.py  # NPV, IRR, payback, depreciation, cash flow, incremental economics
     └── test_optimisation.py  # constraint_check, optimise_design grid MVP
 ```
 
@@ -174,7 +179,8 @@ MMF-Horiz/
 | Media layers | `layers` — list of dicts with `{Type, Depth, d10, cu, epsilon0, rho_p_eff, psi, d60, is_porous, is_support, capture_pct}` |
 | Backwash | `bw_velocity`, `air_scour_rate`, `bw_cycles_day`, `bw_s_*` (step durations), `bw_total_min` |
 | Energy | `pump_eta`, `bw_pump_eta`, `motor_eta`, `elec_tariff`, `op_hours_yr` |
-| Economics | `steel_cost_usd_kg`, `erection_usd_vessel`, `engineering_pct`, `contingency_pct`, `media_replace_years`, etc. |
+| Economics | `steel_cost_usd_kg`, `erection_usd_vessel`, `engineering_pct`, `contingency_pct`, `media_replace_years`, `design_life_years`, `discount_rate`, etc. |
+| Financial lifecycle | `project_life_years`, `inflation_rate`, `escalation_energy_pct`, `escalation_maintenance_pct`, `tax_rate`, `depreciation_method`, `depreciation_years`, `salvage_value_pct`, `maintenance_pct_capex`, `replacement_interval_media` / `_nozzles` / `_lining`, `annual_benefit_usd` (optional IRR driver) |
 | Carbon | `grid_intensity`, `steel_carbon_kg`, `media_co2_gravel/sand/anthracite` |
 | Design limits | `velocity_threshold`, `ebct_threshold`, `dp_trigger_bar`, `solid_loading` |
 
@@ -197,7 +203,7 @@ MMF-Horiz/
 | Hydraulics & energy | `hyd_prof`, `energy` (incl. `h_bw_pump_plant_day`, `h_blower_plant_day`, annual kWh split) |
 | BW timeline | `bw_timeline` — filters[], peak_concurrent_bw, hours at N / N−1 / below N−1, optional N+1 margin split |
 | Weight | `w_noz`, `w_total`, `vessel_areas`, `lining_result`, `wt_oper` |
-| Economics | `econ_capex`, `econ_opex`, `econ_carbon`, `econ_bench` (includes `*_bench_si` tuples; `econ_opex` may include `energy_kwh_*_yr` when metered) |
+| Economics | `econ_capex`, `econ_opex`, `econ_carbon`, `econ_bench` (includes `*_bench_si` tuples; `econ_opex` may include `energy_kwh_*_yr` when metered); `econ_npv` (simplified cost PV profile); **`econ_financial`** (NPV, IRR, payback, cashflow_table, depreciation_table, replacement_schedule, npv_sensitivity, CO₂–cost path, JSON-serialisable) |
 | Assessment | `overall_risk`, `risk_color/border/icon`, `drivers`, `impacts`, `recommendations`, `n_criticals/warnings/advisories`, `all_lv_issues`, `all_ebct_issues`, `rob_rows` |
 | Severity fns | `lv_severity_fn`, `ebct_severity_fn` (callables passed to tabs) |
 | Input validation | `input_validation` (`valid`, `errors`, `warnings` from `engine/validators.py` — **SI magnitudes**, same `inputs` contract as the rest of the engine) · `compute_used_reference_fallback` (bool; when invalid, `compute_all` uses `REFERENCE_FALLBACK_INPUTS` so tabs still render) |
@@ -245,10 +251,10 @@ Three-tier system applied to every scenario × layer combination:
 | 🔄 Backwash | Collector / carryover check · bed expansion · BW hydraulics · TSS mass balance · BW scheduling feasibility matrix (scenario × temperature × TSS) · BW system sizing (pumps, blower, tank) · **24 h duty Gantt** (Plotly) with plant-wide **N / N−1** hour buckets and dynamic readout |
 | ⚙️ Mechanical | Vessel drawing (ISO 128 style) · ASME thickness · nozzle plate · nozzle schedule · saddle design (Zick) · weight summary · lining/coating |
 | 🧱 Media | Geometric volumes · media properties · pressure drop all scenarios · media inventory · clogging analysis · **Media Engineering Intelligence** (arrangement validation + per-layer role/BW/bio cards) |
-| 💰 Economics | CAPEX breakdown + pie chart · OPEX breakdown + pie chart · carbon footprint · **BW pump / blower h/day** (plant-wide, from step timing × cycles) · annual kWh split caption · global benchmark with **proper CRF** (i, n user-inputs) · benchmark bands in **active unit system** |
+| 💰 Economics | CAPEX breakdown + pie chart · OPEX breakdown + pie chart · carbon footprint · **BW pump / blower h/day** (plant-wide, from step timing × cycles) · annual kWh split caption · global benchmark with **proper CRF** (i, n user-inputs) · benchmark bands in **active unit system** · **NPV** expander (levelised OPEX curve) · **Lifecycle financial** expander (cash-flow metrics, tables, cumulative / OPEX / CAPEX–OPEX charts, replacement timeline, **NPV sensitivity spider** (Plotly `Scatterpolar`), CO₂ vs cumulative cost) |
 | 🎯 Assessment | Overall risk banner · key drivers · operational impacts · violation tables · Design Robustness Index · **n_filters sweep** — columns **Physical / stream** & **Design N** (standby fixed); **OAT tornado** (9×4) with metric **descriptions**, **tornado_narrative** under chart |
-| 📄 Report | **JSON project save/load** · section selector · **PDF download** (ReportLab) · Word .docx download · inline markdown preview |
-| ⚖️ Compare | Design **A** (current sidebar) vs **B** (editable subset) · second `compute_all` · **13 key metrics** via `compare_designs` · 🟡 significant diff column · winner summary · **CSV export** |
+| 📄 Report | **JSON project save/load** · section selector · **PDF download** (ReportLab, incl. `financial`) · Word .docx download · optional **lifecycle financial** tables · inline markdown preview |
+| ⚖️ Compare | Design **A** (current sidebar) vs **B** (editable subset) · second `compute_all` · **13 key metrics** via `compare_designs` · 🟡 significant diff column · winner summary · **CSV export** · **incremental lifecycle economics** (ΔCAPEX, ΔNPV, Δ year-1 operating cash) when both runs expose `econ_financial` |
 
 ---
 
@@ -274,7 +280,7 @@ Single place to see **what is done in repo + tests**, what is **engine-only** (n
 
 | Item | Typical local result |
 |------|----------------------|
-| pytest | **~368** collected → **366 passed**, **2 skipped**, **0 failed** |
+| pytest | **~382** collected → **~380 passed**, **2 skipped**, **0 failed** |
 | `engine/` coverage (`pytest --cov=engine --cov-report=term-missing`) | **~78%** lines — strong on `compute.py`, `economics.py`, `units.py`; modules not hit in that run show **0%** (e.g. `drawing.py`, `pdf_report.py`, `sensitivity.py` when only `engine/` is measured); thinner coverage on `coating.py`, `media.py`, `project_io.py` (widget map branches), `validators.py` |
 | Headless API | `uvicorn api.main:app` — `GET /health`, `POST /compute` (SI `inputs` JSON), Open **`/docs`** |
 | Baseline milestone | Empty commit **`perf(infrastructure): regression verified platform baseline`** marks a verified test pass on `main` |
@@ -297,7 +303,9 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | **SQLite persistence** | `engine/project_db.py` — `aquasight.db`; `projects` / `snapshots` / `scenarios`; JSON compatible with `project_io`; logging hooks on save/load. | `tests/test_project_db.py` |
 | **Structured logging** | `engine/logger.py` — `logs/aquasight.log`, `configure()` for tests; `compute_all` timing + failures; `project_io` JSON events; `project_db` events. | `tests/test_logging.py` |
 | **Fouling (empirical)** | `engine/fouling.py` — SDI / MFI index / TSS / LV → solids loading, severity, run time, BW interval; documented assumptions + warnings. | `tests/test_fouling.py` |
-| **FastAPI** | `api/` — `POST /compute` → `compute_all`, JSON-safe payload (drops non-serialisable tab callables). | `tests/test_api.py` |
+| **FastAPI** | `api/` — `POST /compute` → `compute_all`, JSON-safe payload (drops non-serialisable tab callables); response includes **`econ_financial`**. | `tests/test_api.py` |
+| **Lifecycle financial engine** | `engine/financial_economics.py` — cash flows, NPV/IRR/payback, depreciation, incremental economics, NPV driver scan; `build_econ_financial` from `compute_all`. | `tests/test_financial_economics.py` |
+| **Streamlit compute cache** | `ui/compute_cache.py` — `st.cache_data` on `compute_all` for snappier reruns. | (integration + manual) |
 | **Optimisation (grid MVP)** | `engine/optimisation.py` — `constraint_check`, `evaluate_candidate`, `optimise_design` (merge patches, rank by `capex` / `opex` / `steel` / `carbon`). Uses **`compute_all` only**. Default EBCT rule: **min layer EBCT ≥ 0.8 × `ebct_threshold`** (documented soft band); optional **`max_dp_dirty_bar`**, steel cap, etc. | `tests/test_optimisation.py` |
 
 **requirements.txt** (API): `fastapi`, `uvicorn[standard]`, `httpx`. **`.gitignore`:** `aquasight.db`, `logs/`.
@@ -351,3 +359,5 @@ Rows **1–11** match **Section A** (original v2). Rows **12–13** are recent h
 | 11 | **Design comparison tab** — Design A vs B, `engine/comparison.py` + `compute_all` for B, session `compare_inputs_b`, CSV export | `engine/comparison.py`, `ui/tab_compare.py`, `app.py` |
 | 12 | **Physical N+1 bank** — `hydraulic_assist` spare/stream; design **N** = installed − spare; BW timeline & loading; sidebar **Calculated N** readout | `engine/process.py`, `engine/compute.py`, `engine/backwash.py`, `engine/validators.py`, `ui/sidebar.py`, `ui/tab_backwash.py`, `ui/tab_compare.py` |
 | 13 | **BW duty → energy / OPEX / CO₂** — `bw_equipment_hours_per_event()` from BW steps; `energy_kwh_yr_by_component` in `opex_annual` / `carbon_footprint` | `engine/energy.py`, `engine/economics.py`, `engine/compute.py`, `ui/tab_economics.py` |
+| 14 | **NPV cost curve + pickle-safe severity** — `npv_lifecycle_cost_profile`; module-level LV/EBCT classifiers for `st.cache_data` | `engine/economics.py`, `engine/compute.py`, `ui/tab_economics.py`, `ui/compute_cache.py` |
+| 15 | **Lifecycle financial + spider** — `econ_financial`, sidebar financial inputs, Economics tab expander 6, Compare incremental, Word/PDF `financial` | `engine/financial_economics.py`, `engine/compute.py`, `ui/sidebar.py`, `ui/tab_economics.py`, `ui/tab_compare.py`, `ui/tab_report.py`, `engine/pdf_report.py`, `tests/test_financial_economics.py` |

@@ -4,9 +4,11 @@ import streamlit as st
 
 try:
     import plotly.graph_objects as _go
+    from plotly.subplots import make_subplots as _make_subplots
     _PLOTLY_OK = True
 except ImportError:
     _PLOTLY_OK = False
+    _make_subplots = None  # type: ignore[misc, assignment]
 
 from ui.helpers import fmt, ulbl, dv, fmt_annual_flow_volume, fmt_si_range
 
@@ -16,6 +18,7 @@ def render_tab_economics(inputs: dict, computed: dict):
     econ_opex   = computed["econ_opex"]
     econ_bench  = computed["econ_bench"]
     econ_carbon = computed["econ_carbon"]
+    econ_npv    = computed.get("econ_npv") or {}
     energy      = computed.get("energy") or {}
 
     steel_cost_usd_kg  = inputs["steel_cost_usd_kg"]
@@ -221,3 +224,242 @@ def render_tab_economics(inputs: dict, computed: dict):
             f"CRF = {econ_bench['crf']:.4f}  "
             f"({discount_rate:.1f} % discount · {design_life_years} yr life)"
         )
+
+    with st.expander("5 · NPV — lifecycle cost (discounted)", expanded=False):
+        _npv = float(econ_npv.get("npv_total_usd") or 0.0)
+        _yrs = econ_npv.get("years") or []
+        _cum = econ_npv.get("cumulative_pv_usd") or []
+        _bar = econ_npv.get("annual_discounted_usd") or []
+        n1, n2 = st.columns(2)
+        n1.metric(
+            "Lifecycle NPV (costs)",
+            f"USD {_npv:,.0f}",
+        )
+        n2.metric(
+            "Horizon",
+            f"{int(econ_npv.get('design_life_years') or design_life_years)} yr",
+            delta=f"{discount_rate:.1f} %/yr discount",
+            delta_color="off",
+        )
+        st.caption(
+            "Cash-flow model: **year 0** = total CAPEX; **years 1–N** = total annual OPEX "
+            "(energy, chemicals, labour, levelized media and nozzle replacement). "
+            "Values are **outflows** (negative); NPV is the discounted sum through the design life."
+        )
+        if _PLOTLY_OK and _make_subplots is not None and len(_yrs) == len(_cum) == len(_bar):
+            _fig_npv = _make_subplots(
+                rows=2,
+                cols=1,
+                row_heights=[0.55, 0.45],
+                vertical_spacing=0.14,
+                subplot_titles=(
+                    "Cumulative present value of costs (USD)",
+                    "Discounted cash flow by year (USD)",
+                ),
+            )
+            _fig_npv.add_trace(
+                _go.Scatter(
+                    x=_yrs,
+                    y=_cum,
+                    mode="lines+markers",
+                    name="Cumulative PV",
+                    line=dict(width=2),
+                    marker=dict(size=6),
+                    hovertemplate="Year %{x}<br>Cumulative PV %{y:$,,.0f}<extra></extra>",
+                ),
+                row=1,
+                col=1,
+            )
+            _fig_npv.add_hline(y=0, line_dash="dot", line_color="rgba(128,128,128,0.6)", row=1, col=1)
+            _fig_npv.add_trace(
+                _go.Bar(
+                    x=_yrs,
+                    y=_bar,
+                    name="Discounted flow",
+                    marker_color="rgba(55, 126, 184, 0.75)",
+                    hovertemplate="Year %{x}<br>PV %{y:$,,.0f}<extra></extra>",
+                ),
+                row=2,
+                col=1,
+            )
+            _fig_npv.update_yaxes(tickformat=",.0f", row=1, col=1)
+            _fig_npv.update_yaxes(tickformat=",.0f", row=2, col=1)
+            _fig_npv.update_xaxes(title_text="Year", row=2, col=1)
+            _fig_npv.update_layout(
+                showlegend=False,
+                height=480,
+                margin=dict(t=36, b=36, l=56, r=16),
+            )
+            st.plotly_chart(_fig_npv, use_container_width=True)
+        elif not _PLOTLY_OK:
+            st.info("Install plotly for the NPV chart.")
+        else:
+            st.warning("NPV series unavailable for this result.")
+
+    _ef = computed.get("econ_financial") or {}
+    if _ef:
+        with st.expander("6 · Lifecycle financial (cash flow · NPV · IRR)", expanded=False):
+            st.caption(
+                "Techno-economic view: cash flows use **engineering OPEX splits** (energy, chemicals, "
+                "labour), **scheduled maintenance** (% CAPEX/yr), **discrete replacement** events "
+                "(media / nozzles / lining), **escalation**, optional **annual benefit** for IRR, and "
+                "**salvage** at end of project life."
+            )
+            f1, f2, f3, f4 = st.columns(4)
+            f1.metric("NPV (net CF)", f"USD {_ef.get('npv', 0):,.0f}")
+            _irr = _ef.get("irr_pct")
+            f2.metric("IRR", f"{_irr:.2f} %" if _irr is not None else "—")
+            _roi = _ef.get("roi_pct")
+            f3.metric("ROI (simple)", f"{_roi:.1f} %" if _roi is not None else "—")
+            _spb = _ef.get("simple_payback_years")
+            f4.metric("Simple payback", f"{_spb:.2f} yr" if _spb is not None else "—")
+            st.markdown(_ef.get("economic_summary", ""))
+            _tbl_cf = _ef.get("cashflow_table") or []
+            if _tbl_cf:
+                st.markdown("**Cash flow (first years)**")
+                st.dataframe(
+                    pd.DataFrame(_tbl_cf[: min(8, len(_tbl_cf))]),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            if _PLOTLY_OK and _make_subplots is not None:
+                _years = [int(r["year"]) for r in _tbl_cf]
+                _und = _ef.get("undiscounted_cumulative_net_usd") or []
+                _dpv = _ef.get("discounted_pv_by_year") or []
+                if _years and len(_und) == len(_years):
+                    _fig1 = _make_subplots(
+                        rows=2, cols=2,
+                        subplot_titles=(
+                            "Cumulative net (undiscounted)",
+                            "Cumulative NPV (discounted)",
+                            "Annual OPEX + replacements (USD)",
+                            "CAPEX vs year-1 operating cash",
+                        ),
+                        vertical_spacing=0.14,
+                        horizontal_spacing=0.10,
+                    )
+                    _fig1.add_trace(
+                        _go.Scatter(x=_years, y=_und, name="Undisc.", line=dict(width=2)),
+                        row=1, col=1,
+                    )
+                    _fig1.add_trace(
+                        _go.Scatter(x=_years, y=_dpv, name="Disc. NPV", line=dict(width=2)),
+                        row=1, col=2,
+                    )
+                    _opex_es = _ef.get("annual_opex_escalation_curve") or []
+                    if _opex_es:
+                        _fig1.add_trace(
+                            _go.Scatter(
+                                x=[r["year"] for r in _opex_es],
+                                y=[r["total_opex_components_usd"] for r in _opex_es],
+                                name="OPEX+repl.",
+                                line=dict(width=2),
+                            ),
+                            row=2, col=1,
+                        )
+                    _capex_v = float(econ_capex.get("total_capex_usd", 0) or 0)
+                    _y1op = float(_ef.get("first_year_operating_cash_usd") or 0.0)
+                    _fig1.add_trace(
+                        _go.Bar(
+                            x=["CAPEX", "Yr-1 net operating"],
+                            y=[_capex_v, abs(_y1op)],
+                            marker_color=["#1f77b4", "#ff7f0e"],
+                        ),
+                        row=2, col=2,
+                    )
+                    _fig1.update_layout(height=520, showlegend=False, margin=dict(t=40, b=30, l=50, r=20))
+                    st.plotly_chart(_fig1, use_container_width=True)
+
+                _repl = _ef.get("replacement_schedule") or []
+                if _repl:
+                    _fig2 = _go.Figure()
+                    _fig2.add_trace(_go.Scatter(
+                        x=[r["year"] for r in _repl],
+                        y=[1] * len(_repl),
+                        mode="markers",
+                        marker=dict(size=14, symbol="diamond"),
+                        text=[",".join(r["events"]) for r in _repl],
+                        hovertemplate="Year %{x}<br>%{text}<extra></extra>",
+                    ))
+                    _fig2.update_layout(
+                        title="Replacement event timeline (marker = event year)",
+                        xaxis_title="Year", yaxis_visible=False, height=220,
+                        margin=dict(t=50, b=40),
+                    )
+                    st.plotly_chart(_fig2, use_container_width=True)
+
+                _sens = _ef.get("npv_sensitivity") or {}
+                if len(_sens) > 1:
+                    _base_np = float(_sens.get("base_npv_usd", 0) or 0)
+                    _sens_order = (
+                        ("discount_plus10pct", "Discount +10 %"),
+                        ("energy_escalation_plus10pct", "Energy escalation +10 %"),
+                        ("capex_plus10pct", "CAPEX +10 %"),
+                        ("life_plus1yr", "Project life +1 yr"),
+                    )
+                    _theta = []
+                    _rd = []
+                    for _sk, _pretty in _sens_order:
+                        if _sk not in _sens:
+                            continue
+                        _theta.append(_pretty)
+                        _rd.append(float(_sens[_sk]) - _base_np)
+                    if len(_theta) >= 2:
+                        _theta.append(_theta[0])
+                        _rd.append(_rd[0])
+                        _fig3 = _go.Figure(
+                            _go.Scatterpolar(
+                                r=_rd,
+                                theta=_theta,
+                                fill="toself",
+                                fillcolor="rgba(44, 160, 44, 0.22)",
+                                mode="lines+markers",
+                                name="ΔNPV",
+                                line=dict(color="#2ca02c", width=2.5),
+                                marker=dict(size=9, color="#217821"),
+                                hovertemplate="%{theta}<br>ΔNPV %{r:$,.0f}<extra></extra>",
+                            )
+                        )
+                        _fig3.update_layout(
+                            title="NPV sensitivity spider (ΔNPV vs base case, USD)",
+                            polar=dict(
+                                bgcolor="rgba(248,249,250,0.9)",
+                                angularaxis=dict(direction="clockwise", linecolor="#ccc"),
+                                radialaxis=dict(
+                                    gridcolor="rgba(0,0,0,0.08)",
+                                    title=dict(text="ΔNPV (USD)"),
+                                ),
+                            ),
+                            height=420,
+                            margin=dict(t=56, b=40, l=48, r=48),
+                            showlegend=False,
+                        )
+                        st.plotly_chart(_fig3, use_container_width=True)
+                        st.caption(
+                            "Each spoke is a **one-at-a-time** stress vs the current inputs: "
+                            "higher discount, higher energy escalation, +10 % CAPEX, or +1 yr project life. "
+                            "Polygon shows **ΔNPV** (scenario NPV − base NPV); same discount rate as LCOW unless noted."
+                        )
+
+                _sc = _ef.get("co2_vs_cost_scatter") or []
+                if len(_sc) > 1:
+                    _fig4 = _go.Figure(_go.Scatter(
+                        x=[p["co2_kg_cumulative"] / 1000.0 for p in _sc],
+                        y=[p["undiscounted_cost_usd"] / 1e6 for p in _sc],
+                        mode="lines+markers",
+                        name="Path",
+                    ))
+                    _fig4.update_layout(
+                        title="Cumulative CO₂ vs cumulative cost (t CO₂ · MUSD)",
+                        xaxis_title="Cumulative operational + construction CO₂ (t)",
+                        yaxis_title="Cumulative cost (MUSD)",
+                        height=360,
+                    )
+                    st.plotly_chart(_fig4, use_container_width=True)
+
+                _disc = float(inputs.get("discount_rate", 5.0) or 5.0)
+                st.caption(
+                    f"Discount rate for NPV curves: **{_disc:.1f} %/yr** · "
+                    f"Project life: **{inputs.get('project_life_years') or design_life_years}** yr · "
+                    f"Inflation: **{inputs.get('inflation_rate', 0):.1f} %/yr**"
+                )
