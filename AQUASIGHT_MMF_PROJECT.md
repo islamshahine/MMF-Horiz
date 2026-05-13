@@ -1,6 +1,6 @@
 # AQUASIGHT™ MMF — Project Context Document
 
-> **Purpose:** Share this file with Claude.ai chat to discuss enhancements, new features, or design decisions with full project context.
+> **Purpose:** Share this file with Claude.ai chat to discuss enhancements, new features, or design decisions with full project context. For a **dated snapshot of roadmap delivery vs backlog**, see **§ Platform status — accomplished vs remaining (2026)** near the end of this document.
 
 ---
 
@@ -83,7 +83,8 @@ MMF-Horiz/
 │   └── models.py             # shared HTTP error payload models
 │
 ├── engine/                   # Pure Python calculation modules (no Streamlit)
-│   ├── compute.py            # compute_all(inputs) → computed dict (~810 lines)
+│   ├── compute.py            # compute_all(inputs) → computed dict (~850 lines; validation + logging wrapper)
+│   ├── validators.py         # validate_inputs + REFERENCE_FALLBACK_INPUTS (SI contract)
 │   ├── comparison.py         # Design A vs B: diff_value, compare_designs, COMPARISON_METRICS (~110 lines)
 │   ├── compare.py            # Public facade: re-exports comparison + compare_numeric, compare_severity, generate_delta_summary
 │   ├── units.py              # Unit catalogue: display_value/si_value/unit_label/
@@ -130,8 +131,8 @@ MMF-Horiz/
 │   ├── tab_report.py         # 📄 Report tab + JSON save/load; PDF/Word use fmt; PDF passes unit_system
 │   ├── tab_compare.py        # ⚖️ Compare tab — Design B vs sidebar A, compute_all×2, CSV export
 │
-└── tests/                    # pytest — ~285 collected; 283 passed, 2 skipped (includes test_comparison)
-    ├── conftest.py           # Shared fixtures (standard_layers)
+└── tests/                    # pytest — ~338 collected; 336 passed, 2 skipped (typical local run)
+    ├── conftest.py           # Shared fixtures (standard_layers, …)
     ├── test_water.py         # Water property functions
     ├── test_process.py       # filter_loading(), filter_area()
     ├── test_mechanical.py    # ASME thickness, weight, saddle
@@ -139,8 +140,15 @@ MMF-Horiz/
     ├── test_economics.py     # CRF, CAPEX, OPEX, carbon
     ├── test_media.py         # Media catalogue, collector_max_height
     ├── test_units.py         # Unit conversion — extended catalogue & convert_inputs coverage
-    ├── test_integration.py   # compute_all() end-to-end smoke (25 tests)
-    └── test_comparison.py    # compare_designs, diff_value, metric definitions
+    ├── test_integration.py   # compute_all() end-to-end smoke
+    ├── test_comparison.py    # compare_designs, diff_value, COMPARISON_METRICS
+    ├── test_compare.py       # engine.compare facade + severity helpers
+    ├── test_validation.py    # validators + compute_all validation hook
+    ├── test_project_db.py    # SQLite project_db API
+    ├── test_logging.py       # logger file output + compute/project hooks
+    ├── test_fouling.py       # fouling correlations
+    ├── test_api.py           # FastAPI /health, /compute, OpenAPI
+    └── test_optimisation.py  # constraint_check, optimise_design grid MVP
 ```
 
 ---
@@ -245,16 +253,82 @@ Three-tier system applied to every scenario × layer combination:
 - **BW frequency is user-input** (`bw_cycles_day`), not auto-derived from the cycle model. The feasibility matrix shows whether the chosen frequency is achievable.
 - **Cartridge filter is post-treatment** — sized for `cart_flow` (separate input from the MMF total flow).
 - **Economics are order-of-magnitude** — vendor quotes not included; benchmarks are 2024 Middle East / Mediterranean basis.
-- **No real-time database** — all media properties are hardcoded presets in `engine/media.py` with user-editable overrides via `st.session_state`.
+- **No project library in the Streamlit UI** — `engine/project_db.py` implements optional **SQLite** persistence (`aquasight.db`, projects / snapshots / scenarios); the Report tab still exposes **JSON file** download/upload only. Media properties remain hardcoded presets in `engine/media.py` with user-editable overrides via `st.session_state`.
 - **No multi-page routing** — single-page Streamlit app; state is preserved in `st.session_state`.
 - **Compare tab scope** — Design **B** exposes a fixed subset of inputs (process, key vessel geometry, nozzle plate height, selected BW fields); all other keys are copied from Design **A** at init/reset. Comparison uses `engine/comparison.py` only (no change to `compute_all` internals).
 - **Input validation is SI-only** — `validate_inputs` runs on the same post-`convert_inputs` dict as `compute_all`. Error strings that quote lengths use **m (SI)**; the unit toggle only affects sidebar labels and tab formatting via `engine/units.py` helpers, not validation thresholds.
 
 ---
 
-## Implemented Enhancements (v2)
+## Platform status — accomplished vs remaining (2026)
 
-Added in the refactor session following the initial modular architecture:
+Single place to see **what is done in repo + tests**, what is **engine-only** (no Streamlit UI yet), and what is **still open**.
+
+### Test & quality baseline
+
+| Item | Typical local result |
+|------|----------------------|
+| pytest | **~338** collected → **336 passed**, **2 skipped**, **0 failed** |
+| `engine/` coverage (`pytest --cov=engine --cov-report=term-missing`) | **~78%** lines — strong on `compute.py`, `economics.py`, `units.py`; modules not hit in that run show **0%** (e.g. `drawing.py`, `pdf_report.py`, `sensitivity.py` when only `engine/` is measured); thinner coverage on `coating.py`, `media.py`, `project_io.py` (widget map branches), `validators.py` |
+| Headless API | `uvicorn api.main:app` — `GET /health`, `POST /compute` (SI `inputs` JSON), Open **`/docs`** |
+| Baseline milestone | Empty commit **`perf(infrastructure): regression verified platform baseline`** marks a verified test pass on `main` |
+
+---
+
+### A. Original v2 product (Streamlit + engine)
+
+Core modular app after the monolith split — unchanged intent, see **quick index** table at the end of this section for file pointers.
+
+---
+
+### B. Roadmap / platform hardening — **delivered** (code + tests)
+
+| Capability | Implementation | Tests |
+|------------|----------------|-------|
+| **Input validation** | `engine/validators.py` — primitives + `validate_layers` + `validate_inputs` → `{valid, errors, warnings}`. `compute_all` integrates hook; invalid inputs → `REFERENCE_FALLBACK_INPUTS` + flags on `computed`. `app.py` surfaces `st.error` / `st.warning` / caption (SI). | `tests/test_validation.py` |
+| **SI contract (validation UX)** | Validators + docs: length errors **m (SI)**; caption that checks are SI regardless of unit toggle. | (behavioural + docs) |
+| **Compare public API** | `engine/compare.py` — re-exports `comparison`; `compare_numeric` (= `diff_value`); `compare_severity`; `generate_delta_summary`. | `tests/test_compare.py`, `tests/test_comparison.py` |
+| **SQLite persistence** | `engine/project_db.py` — `aquasight.db`; `projects` / `snapshots` / `scenarios`; JSON compatible with `project_io`; logging hooks on save/load. | `tests/test_project_db.py` |
+| **Structured logging** | `engine/logger.py` — `logs/aquasight.log`, `configure()` for tests; `compute_all` timing + failures; `project_io` JSON events; `project_db` events. | `tests/test_logging.py` |
+| **Fouling (empirical)** | `engine/fouling.py` — SDI / MFI index / TSS / LV → solids loading, severity, run time, BW interval; documented assumptions + warnings. | `tests/test_fouling.py` |
+| **FastAPI** | `api/` — `POST /compute` → `compute_all`, JSON-safe payload (drops non-serialisable tab callables). | `tests/test_api.py` |
+| **Optimisation (grid MVP)** | `engine/optimisation.py` — `constraint_check`, `evaluate_candidate`, `optimise_design` (merge patches, rank by `capex` / `opex` / `steel` / `carbon`). Uses **`compute_all` only**. Default EBCT rule: **min layer EBCT ≥ 0.8 × `ebct_threshold`** (documented soft band); optional **`max_dp_dirty_bar`**, steel cap, etc. | `tests/test_optimisation.py` |
+
+**requirements.txt** (API): `fastapi`, `uvicorn[standard]`, `httpx`. **`.gitignore`:** `aquasight.db`, `logs/`.
+
+---
+
+### C. **Partially done** — backend exists; **no Streamlit wiring**
+
+| Item | Done | Missing |
+|------|------|---------|
+| **Project library** | `project_db.py` full API | Report tab UI: browse / load / save / snapshots in-app |
+| **Fouling assistant** | `fouling.py` | Sidebar or Process tab: SDI/MFI inputs + “Apply suggested `solid_loading`” (or similar) |
+| **Optimisation UX** | Assessment **n_filters sweep** + `optimise_design()` | Single UX that exposes patch grid / objectives, or “apply best to sidebar” (careful with session state) |
+
+---
+
+### D. **Backlog** — not implemented (or not productised)
+
+| # | Topic | Notes |
+|---|--------|--------|
+| 1 | **Global / automatic optimiser** | No MILP or gradient search; only **manual sweep** (UI) + **grid ranker** (`optimise_design`). Auto-write best design to sidebar is future. |
+| 2 | **Multi-case comparison** | Compare tab = **A vs B** + CSV; no 3+ cases, no named library. |
+| 3 | **Vendor nozzle catalogue** | Still generic `engine/nozzles.py` estimates. |
+| 4 | **Live BW scheduler** | No Gantt / 24 h allocation. |
+| 5 | **External media pricing** | No price database or API feed. |
+| 6 | **Collector lateral hydraulics** | Height / carryover only; no lateral ΔP network. |
+| 7 | **Air scour auto-tune** | User sets `air_scour_rate`; no solver for target expansion. |
+| 8 | **Test depth** | Add coverage for drawing/PDF generation paths, sensitivity engine-only tests, deeper `media`/`coating`/`validators` branches. |
+
+**Narrative (same themes)**  
+(1) Tighter optimisation + UI integration. (2) More than two saved cases. (3) Real vendor nozzle tables. (4) BW timeline visualisation. (5) Configurable media costs. (6) Fouling UI wiring (engine ready). (7) Collector detail model. (8) Air scour solver.
+
+---
+
+## Implemented Enhancements (v2) — quick index
+
+Rows **1–11** match **Section A** (original v2). For roadmap rows **validation → optimisation**, see **Section B** above.
 
 | # | Feature | Files |
 |---|---|---|
@@ -269,30 +343,3 @@ Added in the refactor session following the initial modular architecture:
 | 9 | **Output unit alignment (tables & reports)** — backwash/media/economics/mechanical/report/PDF; hydraulic `fmt_bar_mwc`; economics `fmt_si_range` + `co2_kg_per_kwh`; nozzle schedule & saddle catalogue display DFs; DN stays ISO mm in editor | `ui/*.py`, `engine/pdf_report.py`, `engine/economics.py`, `engine/units.py` |
 | 10 | **n_filters design sweep (optimisation MVP)** — Assessment tab expander: band sweep with full `compute_all`; N-scenario LV vs velocity threshold | `ui/tab_assessment.py` |
 | 11 | **Design comparison tab** — Design A vs B, `engine/comparison.py` + `compute_all` for B, session `compare_inputs_b`, CSV export | `engine/comparison.py`, `ui/tab_compare.py`, `app.py` |
-
-## Remaining Enhancement Areas
-
-High-level backlog (not yet implemented end-to-end unless noted):
-
-| # | Area | Notes |
-|---|------|--------|
-| 1 | **Optimisation mode** | Auto-search minimum `n_filters` / `nominal_id` under LV & EBCT limits. *Started:* Assessment **n_filters sweep** (manual band, full `compute_all` per step; does not write sidebar). |
-| 2 | **Multi-case comparison** | Named presets, JSON load, or 3+ trains side-by-side. *Partial:* **⚖️ Compare** = A (sidebar) vs B (session) + CSV. |
-| 3 | **Vendor nozzle catalogue** | Replace / augment estimated nozzle schedule with vendor tables (e.g. Wavin, Aqseptence). |
-| 4 | **Live BW scheduler** | Gantt-style 24 h availability + BW train allocation. |
-| 5 | **Media cost database** | External / configurable media pricing. |
-| 6 | **Fouling index model** | SDI/MFI (or similar) → auto `solid_loading` / risk hints. |
-| 7 | **Collector hydraulics** | Lateral ΔP sizing (today: height / carryover check only). |
-| 8 | **Air scour optimisation** | Auto air-scour rate for target bed expansion. |
-
-### Detail (same backlog, narrative)
-
-1. **Optimisation mode** — given constraints (LV < threshold, EBCT > threshold), find minimum n_filters or minimum nominal_id  
-   - *MVP (started):* Assessment tab — **sweep `n_filters` (per stream)** over a user band; each point runs full `compute_all`; table shows **N-scenario LV** vs velocity threshold (does not auto-write sidebar).
-2. **Multi-train / multi-case comparison** — extend beyond two saved cases (e.g. named presets, JSON load side-by-side); current **⚖️ Compare** covers A vs B in one session.
-3. **Vendor nozzle catalogue** — replace estimated nozzle schedule with lookup from real vendor data (e.g., Wavin, Aqseptence)
-4. **Live BW scheduler** — Gantt-style chart showing filter availability and BW train allocation over 24 h
-5. **Media cost database** — pull current media prices from a configurable data source
-6. **Fouling index model** — incorporate SDI/MFI feed water quality index to auto-adjust `solid_loading`
-7. **Collector hydraulics** — detailed lateral collector ΔP sizing (currently only height check)
-8. **Air scour optimisation** — auto-size air scour rate to achieve target bed expansion
