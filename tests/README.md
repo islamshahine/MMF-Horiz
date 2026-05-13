@@ -16,6 +16,7 @@ tests/
   test_compare.py       engine.compare facade (aliases + severity + summary)
   test_project_db.py     SQLite project_db save/load, snapshots, scenarios
   test_logging.py        engine.logger file output + compute/project_io hooks
+  test_fouling.py        fouling correlations (SDI/TSS/LV monotonicity + warnings)
 ```
 
 ## Running tests
