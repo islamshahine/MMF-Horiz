@@ -2,6 +2,37 @@
 import streamlit as st
 
 
+def fmt(si_val, quantity: str, decimals: int = 2) -> str:
+    """
+    Format SI value in the current unit system.
+    Reads unit_system from st.session_state (defaults to 'metric').
+    Usage: fmt(computed["q_per_filter"], "flow_m3h", 1)
+    """
+    from engine.units import format_value
+    system = st.session_state.get("unit_system", "metric")
+    return format_value(si_val, quantity, system, decimals)
+
+
+def ulbl(quantity: str) -> str:
+    """
+    Return unit label for the current unit system.
+    Usage: ulbl("flow_m3h") → "m³/h" or "gpm"
+    """
+    from engine.units import unit_label
+    system = st.session_state.get("unit_system", "metric")
+    return unit_label(quantity, system)
+
+
+def dv(si_val, quantity: str):
+    """
+    Convert SI value to display value for the current unit system.
+    Usage: dv(1312.5, "flow_m3h")
+    """
+    from engine.units import display_value
+    system = st.session_state.get("unit_system", "metric")
+    return display_value(si_val, quantity, system)
+
+
 def show_alert(level: str, title: str, message: str) -> None:
     """Render a severity-coloured alert box using inline CSS."""
     _styles = {

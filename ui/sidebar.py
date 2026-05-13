@@ -2,6 +2,10 @@
 import streamlit as st
 from engine.water import water_properties, FEED_PRESETS, BW_PRESETS
 from engine.media import get_media_names, get_media, get_lv_range, get_ebct_range, get_gac_note
+from engine.units import (
+    UNIT_SYSTEMS, display_value, si_value,
+    unit_label, convert_inputs,
+)
 
 # ── Constants mirrored from app.py (kept here so sidebar is self-contained) ──
 _DEFAULT_MEDIA_PRESETS = {
@@ -37,6 +41,21 @@ _DEFAULT_MEDIA_PRESETS = {
 
 _GAC_MEDIA_NAMES = {"Medium GAC"}
 
+# Widget keys that hold unit-dependent values — cleared on unit-system change
+_UNIT_DEPENDENT_WIDGET_KEYS = [
+    "total_flow", "f_tmp", "b_tmp", "velocity_threshold",
+    "nominal_id", "total_length", "design_pressure",
+    "nozzle_plate_h", "collector_h", "bw_velocity", "air_scour_rate",
+    "cart_flow",
+]
+
+
+def _on_unit_system_change():
+    """Clear unit-dependent widget state so defaults recompute in new system."""
+    for _k in _UNIT_DEPENDENT_WIDGET_KEYS:
+        if _k in st.session_state:
+            del st.session_state[_k]
+
 
 def _eps0_from_psi(psi: float) -> float:
     return round(0.4 + 0.1 * (1.0 - psi) / max(psi, 0.01), 3)
@@ -61,9 +80,23 @@ def render_sidebar(
     ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS, HOUSING_CAPACITY_OPTIONS,
     DEFAULT_ELEMENTS_PER_HOUSING, SAFETY_FACTOR_CIP, SAFETY_FACTOR_STD,
 ) -> dict:
-    """Render all sidebar input tabs. Returns dict of every input value."""
+    """Render all sidebar input tabs. Returns dict of every input value in SI."""
     _ensure_presets()
     out = {}
+
+    # ── Unit system toggle ─────────────────────────────────────────────────
+    unit_system = st.radio(
+        "Unit system",
+        UNIT_SYSTEMS,
+        index=0,
+        horizontal=True,
+        key="unit_system",
+        on_change=_on_unit_system_change,
+        help="Metric: m³/h, bar, m, kg, °C  |  "
+             "Imperial: gpm, psi, ft, lb, °F\n"
+             "All internal calculations remain in SI.",
+    )
+    st.divider()
 
     proc_tab, vessel_tab, media_tab, bw_tab, econ_tab = st.tabs([
         "⚙️ Process", "🏗️ Vessel", "🧱 Media", "🔄 BW", "💰 Econ"
@@ -79,13 +112,16 @@ def render_sidebar(
         out["engineer"]     = st.text_input("Prepared by", value="Islam Shahine",  key="engineer")
 
         st.markdown("**Filter configuration**")
-        out["total_flow"] = st.number_input("Total plant flow (m³/h)", value=21000.0, step=100.0, key="total_flow")
+        _lbl_flow = f"Total plant flow ({unit_label('flow_m3h', unit_system)})"
+        _def_flow = display_value(21000.0, "flow_m3h", unit_system)
+        _stp_flow = display_value(100.0, "flow_m3h", unit_system)
+        out["total_flow"] = st.number_input(_lbl_flow, value=_def_flow, step=_stp_flow, key="total_flow")
         out["streams"]    = int(st.number_input("Streams", value=1, min_value=1, key="streams"))
         out["n_filters"]  = int(st.number_input("Filters / stream", value=16, min_value=1, key="n_filters"))
         out["redundancy"] = int(st.selectbox("Redundancy (per stream)", [0,1,2,3,4], index=1, key="redundancy"))
         q_n = out["total_flow"] / out["streams"] / out["n_filters"]
         st.caption(
-            f"Flow / filter (N): **{q_n:.1f} m³/h**  \n"
+            f"Flow / filter (N): **{q_n:.1f} {unit_label('flow_m3h', unit_system)}**  \n"
             f"Redundancy = {out['redundancy']} standby filter(s) per stream  \n"
             f"Total active filters (N scenario): **{out['streams'] * out['n_filters']} plant-wide**"
         )
@@ -94,7 +130,9 @@ def render_sidebar(
         feed_preset = st.selectbox("Feed preset", list(FEED_PRESETS.keys()), index=2, key="feed_pre")
         fp = FEED_PRESETS[feed_preset]
         out["feed_sal"]  = st.number_input("Feed salinity (ppt)",    value=fp["salinity_ppt"], step=0.5, key="f_sal")
-        out["feed_temp"] = st.number_input("Feed temp — avg (°C)",   value=fp["temp_c"],        step=1.0, key="f_tmp")
+        _lbl_ft = f"Feed temp — avg ({unit_label('temperature_c', unit_system)})"
+        _def_ft = display_value(fp["temp_c"], "temperature_c", unit_system)
+        out["feed_temp"] = st.number_input(_lbl_ft, value=_def_ft, step=1.0, key="f_tmp")
         out["temp_low"]  = st.number_input("Feed temp — min (°C)",   value=15.0, step=1.0, key="t_low")
         out["temp_high"] = st.number_input("Feed temp — max (°C)",   value=35.0, step=1.0, key="t_high")
         out["tss_low"]   = st.number_input("Feed TSS — low (mg/L)",  value=5.0,  step=1.0, key="tss_low")
@@ -105,15 +143,22 @@ def render_sidebar(
         bw_preset = st.selectbox("BW preset", list(BW_PRESETS.keys()), index=0, key="bw_pre")
         bp = BW_PRESETS[bw_preset] or fp
         out["bw_sal"]  = st.number_input("BW salinity (ppt)", value=bp["salinity_ppt"], step=0.5, key="b_sal")
-        out["bw_temp"] = st.number_input("BW temp (°C)",      value=bp["temp_c"],       step=1.0, key="b_tmp")
+        _lbl_bwt = f"BW temp ({unit_label('temperature_c', unit_system)})"
+        _def_bwt = display_value(bp["temp_c"], "temperature_c", unit_system)
+        out["bw_temp"] = st.number_input(_lbl_bwt, value=_def_bwt, step=1.0, key="b_tmp")
 
         st.markdown("**Performance thresholds**")
-        out["velocity_threshold"] = st.number_input("Max LV (m/h)",   value=12.0, key="velocity_threshold")
+        _lbl_vt = f"Max LV ({unit_label('velocity_m_h', unit_system)})"
+        _def_vt = display_value(12.0, "velocity_m_h", unit_system)
+        out["velocity_threshold"] = st.number_input(_lbl_vt, value=_def_vt, key="velocity_threshold")
         out["ebct_threshold"]     = st.number_input("Min EBCT (min)", value=5.0,  key="ebct_threshold")
 
         st.markdown("**Cartridge filter**")
-        out["cart_flow"]   = st.number_input("Design flow (m³/h)", value=float(out["total_flow"]),
-                                              step=100.0, key="cart_flow")
+        out["cart_flow"]   = st.number_input(
+            f"Design flow ({unit_label('flow_m3h', unit_system)})",
+            value=float(out["total_flow"]),
+            step=_stp_flow, key="cart_flow",
+        )
         out["cart_size"]   = st.selectbox("Element length", ELEMENT_SIZE_LABELS, index=2, key="cart_size")
         out["cart_rating"] = st.selectbox("Rating (μm absolute)", RATING_UM_OPTIONS, index=1, key="cart_rating")
         out["cart_cip"]    = st.toggle("CIP system (SS 316L elements)", value=False, key="cart_cip")
@@ -139,8 +184,13 @@ def render_sidebar(
     # ── Tab 2: Vessel ─────────────────────────────────────────────────────
     with vessel_tab:
         st.markdown("**Vessel geometry**")
-        out["nominal_id"]   = st.number_input("Nominal internal diameter (m)", value=5.5, step=0.1, key="nominal_id")
-        out["total_length"] = st.number_input("Total length T/T (m)", value=24.3, step=0.1, key="total_length")
+        _lbl_id = f"Nominal internal diameter ({unit_label('length_m', unit_system)})"
+        _def_id = display_value(5.5, "length_m", unit_system)
+        _stp_id = display_value(0.1, "length_m", unit_system)
+        out["nominal_id"]   = st.number_input(_lbl_id, value=_def_id, step=_stp_id, key="nominal_id")
+        _lbl_tl = f"Total length T/T ({unit_label('length_m', unit_system)})"
+        _def_tl = display_value(24.3, "length_m", unit_system)
+        out["total_length"] = st.number_input(_lbl_tl, value=_def_tl, step=_stp_id, key="total_length")
         out["end_geometry"] = st.selectbox("End geometry", ["Elliptic 2:1", "Torispherical 10%"], key="end_geometry")
 
         st.markdown("**Mechanical (ASME)**")
@@ -148,7 +198,10 @@ def render_sidebar(
         mat_info               = MATERIALS[out["material_name"]]
         out["mat_info"]        = mat_info
         st.caption(f"*{mat_info['description']}*")
-        out["design_pressure"] = st.number_input("Design pressure (bar)", value=7.0, step=0.5, key="design_pressure")
+        _lbl_dp = f"Design pressure ({unit_label('pressure_bar', unit_system)})"
+        _def_dp = display_value(7.0, "pressure_bar", unit_system)
+        _stp_dp = display_value(0.5, "pressure_bar", unit_system)
+        out["design_pressure"] = st.number_input(_lbl_dp, value=_def_dp, step=_stp_dp, key="design_pressure")
         out["design_temp"]     = st.number_input("Design temperature (°C)", value=50.0, step=5.0, key="design_temp")
         out["corrosion"]       = st.number_input("Corrosion allowance (mm)", value=1.5, step=0.5, key="corrosion")
         st.markdown("*Radiography (ASME UW-11)*")
@@ -218,7 +271,10 @@ def render_sidebar(
     # ── Tab 3: Media ──────────────────────────────────────────────────────
     with media_tab:
         st.markdown("**Nozzle plate**")
-        out["nozzle_plate_h"] = st.number_input("Nozzle plate height (m)", value=1.0, step=0.05, key="nozzle_plate_h")
+        _lbl_nph = f"Nozzle plate height ({unit_label('length_m', unit_system)})"
+        _def_nph = display_value(1.0, "length_m", unit_system)
+        _stp_nph = display_value(0.05, "length_m", unit_system)
+        out["nozzle_plate_h"] = st.number_input(_lbl_nph, value=_def_nph, step=_stp_nph, key="nozzle_plate_h")
         out["np_bore_dia"]    = st.number_input("Bore diameter (mm)", value=50.0,
                                                  step=5.0, min_value=10.0, key="np_bd")
         out["np_density"]     = st.number_input("Nozzle density (/m²)", value=NOZZLE_DENSITY_DEFAULT,
@@ -231,7 +287,9 @@ def render_sidebar(
 
         st.markdown("**Media layers**")
         out["n_layers"] = int(st.selectbox("Layers", [1, 2, 3, 4, 5, 6], index=2, key="n_layers"))
-        _rho_water_sb   = water_properties(out["feed_temp"], out["feed_sal"])["density_kg_m3"]
+        # Convert feed_temp display value back to SI for internal engine call
+        _feed_temp_si   = si_value(out["feed_temp"], "temperature_c", unit_system)
+        _rho_water_sb   = water_properties(_feed_temp_si, out["feed_sal"])["density_kg_m3"]
         layers = []
         default_types = ["Gravel", "Fine sand", "Anthracite"]
         for i in range(out["n_layers"]):
@@ -322,11 +380,19 @@ def render_sidebar(
     # ── Tab 4: BW ─────────────────────────────────────────────────────────
     with bw_tab:
         st.markdown("**BW hydraulics**")
-        out["collector_h"]    = st.number_input("BW outlet collector height (m)", value=4.2, step=0.1, key="collector_h")
+        _lbl_ch = f"BW outlet collector height ({unit_label('length_m', unit_system)})"
+        _def_ch = display_value(4.2, "length_m", unit_system)
+        _stp_ch = display_value(0.1, "length_m", unit_system)
+        out["collector_h"]    = st.number_input(_lbl_ch, value=_def_ch, step=_stp_ch, key="collector_h")
         out["freeboard_mm"]   = st.number_input("Min. freeboard (mm)", value=200, step=50,
                                                   min_value=50, key="fb_mm")
-        out["bw_velocity"]    = st.number_input("Proposed BW velocity (m/h)", value=30.0, step=5.0, key="bw_velocity")
-        out["air_scour_rate"] = st.number_input("Air scour rate (m/h)", value=55.0, step=5.0, key="air_scour_rate")
+        _lbl_bwv = f"Proposed BW velocity ({unit_label('velocity_m_h', unit_system)})"
+        _def_bwv = display_value(30.0, "velocity_m_h", unit_system)
+        _stp_bwv = display_value(5.0, "velocity_m_h", unit_system)
+        out["bw_velocity"]    = st.number_input(_lbl_bwv, value=_def_bwv, step=_stp_bwv, key="bw_velocity")
+        _lbl_asr = f"Air scour rate ({unit_label('velocity_m_h', unit_system)})"
+        _def_asr = display_value(55.0, "velocity_m_h", unit_system)
+        out["air_scour_rate"] = st.number_input(_lbl_asr, value=_def_asr, step=_stp_bwv, key="air_scour_rate")
 
         st.markdown("**BW sequence**")
         out["bw_cycles_day"]  = int(st.number_input("BW cycles / filter / day", value=1, min_value=1, key="bw_cycles_day"))
@@ -458,4 +524,8 @@ def render_sidebar(
             )
         out["media_co2"] = _media_co2
 
+    # ── Convert display-unit inputs back to SI before returning ───────────
+    out = convert_inputs(out, unit_system)
+    out["cart_flow"] = si_value(out["cart_flow"], "flow_m3h", unit_system)
+    out["unit_system"] = unit_system
     return out
