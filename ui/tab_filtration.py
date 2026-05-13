@@ -3,7 +3,7 @@ import pandas as pd
 import streamlit as st
 from engine.process import filter_loading
 from engine.backwash import pressure_drop
-from ui.helpers import show_alert
+from ui.helpers import fmt, ulbl, dv, show_alert
 
 
 def render_tab_filtration(inputs: dict, computed: dict):
@@ -76,18 +76,18 @@ def render_tab_filtration(inputs: dict, computed: dict):
                     else "Approaching limit" if lv <= velocity_threshold * 1.05
                     else "Outside envelope")
         _flow_comp.append({
-            "Scenario":             "N" if x == 0 else f"N-{x}",
-            "Active filters":       a,
-            "Flow / filter (m³/h)": round(q, 2),
-            "LV (m/h)":             round(lv, 2),
-            "Hydraulic status":     _lv_flag,
+            "Scenario":                              "N" if x == 0 else f"N-{x}",
+            "Active filters":                        a,
+            f"Flow / filter ({ulbl('flow_m3h')})":   round(dv(q, 'flow_m3h'), 2),
+            f"LV ({ulbl('velocity_m_h')})":           round(dv(lv, 'velocity_m_h'), 2),
+            "Hydraulic status":                      _lv_flag,
         })
     st.dataframe(pd.DataFrame(_flow_comp), use_container_width=True, hide_index=True)
 
     st.markdown("#### Operating envelope review by scenario")
     for x, a, q in load_data:
         label = "N (normal)" if x == 0 else f"N-{x}"
-        with st.expander(f"Scenario {label} — {q:.1f} m³/h / filter", expanded=(x == 0)):
+        with st.expander(f"Scenario {label} — {fmt(q, 'flow_m3h', 1)} / filter", expanded=(x == 0)):
             rows = []
             _sc_lv_issues, _sc_ebct_issues = [], []
             for b in base:
@@ -105,12 +105,12 @@ def render_tab_filtration(inputs: dict, computed: dict):
                            "Within envelope" if not _eb_sev else
                            "Approaching limit" if _eb_sev == "advisory" else "Outside envelope")
                 rows.append({
-                    "Layer":         b["Type"],
-                    "Area (m²)":     round(b["Area"], 3),
-                    "LV (m/h)":      round(vel, 2),
-                    "LV envelope":   _lv_env,
-                    "EBCT (min)":    round(ebct, 2),
-                    "EBCT envelope": _eb_env,
+                    "Layer":                         b["Type"],
+                    f"Area ({ulbl('area_m2')})":     round(dv(b["Area"], 'area_m2'), 3),
+                    f"LV ({ulbl('velocity_m_h')})":  round(dv(vel, 'velocity_m_h'), 2),
+                    "LV envelope":                   _lv_env,
+                    "EBCT (min)":                    round(ebct, 2),
+                    "EBCT envelope":                 _eb_env,
                 })
                 if _lv_sev: _sc_lv_issues.append((b["Type"], _lv_sev, vel))
                 if _eb_sev: _sc_ebct_issues.append((b["Type"], _eb_sev, ebct))
@@ -118,7 +118,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
             if _sc_lv_issues:
                 with st.expander(f"🟠 Hydraulic Loading — {len(_sc_lv_issues)} layer(s) outside envelope"):
                     for _layer, _sev, _vel in _sc_lv_issues:
-                        show_alert(_sev, f"{_layer}: filtration velocity {_vel:.2f} m/h",
+                        show_alert(_sev, f"{_layer}: filtration velocity {fmt(_vel, 'velocity_m_h', 2)}",
                             "Elevated filtration velocity increases risk of media disturbance "
                             "and localised particulate breakthrough.")
             if _sc_ebct_issues:
@@ -149,13 +149,13 @@ def render_tab_filtration(inputs: dict, computed: dict):
                 alpha_m_kg=alpha_specific, dp_trigger_bar=dp_trigger_bar,
             )
             _dp_summary.append({
-                "Scenario":          sc_label,
-                "LV (m/h)":          sc_dp["u_m_h"],
-                "ΔP clean (bar)":    sc_dp["dp_clean_bar"],
-                "ΔP clean (mWC)":    sc_dp["dp_clean_mwc"],
-                "ΔP moderate (bar)": sc_dp["dp_moderate_bar"],
-                "ΔP dirty (bar)":    sc_dp["dp_dirty_bar"],
-                "ΔP dirty (mWC)":    sc_dp["dp_dirty_mwc"],
+                "Scenario":                              sc_label,
+                f"LV ({ulbl('velocity_m_h')})":          round(dv(sc_dp["u_m_h"], 'velocity_m_h'), 2),
+                f"ΔP clean ({ulbl('pressure_bar')})":    round(dv(sc_dp["dp_clean_bar"], 'pressure_bar'), 5),
+                "ΔP clean (mWC)":                        sc_dp["dp_clean_mwc"],
+                f"ΔP mod. ({ulbl('pressure_bar')})":     round(dv(sc_dp["dp_moderate_bar"], 'pressure_bar'), 5),
+                f"ΔP dirty ({ulbl('pressure_bar')})":    round(dv(sc_dp["dp_dirty_bar"], 'pressure_bar'), 5),
+                "ΔP dirty (mWC)":                        sc_dp["dp_dirty_mwc"],
             })
         st.markdown("**Summary — all scenarios**")
         st.dataframe(pd.DataFrame(_dp_summary), use_container_width=True, hide_index=True)
@@ -180,7 +180,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
             )
             for sc_lbl, sc_temps in cycle_matrix.items():
                 _lv = filt_cycles[sc_lbl]["lv_m_h"]
-                st.markdown(f"**Scenario {sc_lbl} · LV = {_lv:.1f} m/h**")
+                st.markdown(f"**Scenario {sc_lbl} · LV = {fmt(_lv, 'velocity_m_h', 1)}**")
                 mat_rows = []
                 _by_sched = set()   # track which temp columns are M_max-limited
                 for tss_lbl, tss_v in zip(_tss_labels, _tss_vals):
@@ -208,27 +208,28 @@ def render_tab_filtration(inputs: dict, computed: dict):
 
     st.divider()
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric("LV — N scenario",        f"{q_per_filter/avg_area:.2f} m/h")
-    m2.metric("Flow / filter (N)",       f"{q_per_filter:.1f} m³/h")
-    m3.metric("Total filters",           f"{streams * n_filters}")
-    m4.metric("Recommended LV envelope", f"≤ {velocity_threshold:.1f} m/h")
+    m1.metric(f"LV — N scenario ({ulbl('velocity_m_h')})", fmt(q_per_filter / avg_area, 'velocity_m_h', 2))
+    m2.metric(f"Flow / filter, N ({ulbl('flow_m3h')})",   fmt(q_per_filter, 'flow_m3h', 1))
+    m3.metric("Total filters",                             f"{streams * n_filters}")
+    m4.metric(f"LV envelope ({ulbl('velocity_m_h')})",    f"≤ {fmt(velocity_threshold, 'velocity_m_h', 1)}")
 
     with st.expander("🔷 Cartridge (polishing) filter sizing", expanded=False):
         ca1, ca2, ca3, ca4 = st.columns(4)
         ca1.metric("Elements required", str(cart_result["n_elements"]))
         ca2.metric("Housings required", str(cart_result["n_housings"]),
                    delta=f"{cart_result['n_elem_per_housing']} elem./housing", delta_color="off")
-        ca3.metric("Flow / element", f"{cart_result['actual_flow_m3h_element']:.3f} m³/h",
+        ca3.metric(f"Flow / element ({ulbl('flow_m3h')})",
+                   fmt(cart_result['actual_flow_m3h_element'], 'flow_m3h', 3),
                    delta=f"{cart_result['q_lpm_element']:.1f} lpm", delta_color="off")
         ca4.metric("Dirt hold / element", f"{cart_result['dhc_g_element']:.0f} g",
                    delta=f"{cart_result['element_ties']} TIE", delta_color="off")
         st.table(pd.DataFrame([
-            ["Design flow",          f"{cart_result['design_flow_m3h']:,.1f} m³/h"],
+            [f"Design flow ({ulbl('flow_m3h')})", fmt(cart_result['design_flow_m3h'], 'flow_m3h', 1)],
             ["Element size",         cart_result["element_size"]],
             ["Rating",               f"{cart_result['rating_um']} µm absolute"],
             ["Elements required",    str(cart_result["n_elements"])],
             ["Housings required",    str(cart_result["n_housings"])],
-            ["Flow / element",       f"{cart_result['actual_flow_m3h_element']:.3f} m³/h"],
+            [f"Flow / element ({ulbl('flow_m3h')})", fmt(cart_result['actual_flow_m3h_element'], 'flow_m3h', 3)],
             ["ΔP clean (BOL)",       f"{cart_result['dp_clean_bar']*1000:.1f} mbar"],
             ["ΔP EOL",               f"{cart_result['dp_eol_bar']:.2f} bar"],
             ["DHC / element",        f"{cart_result['dhc_g_element']:.0f} g"],

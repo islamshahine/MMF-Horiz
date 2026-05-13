@@ -4,6 +4,7 @@ import pandas as pd
 import streamlit as st
 from engine.drawing import vessel_section_elevation
 from engine.nozzles import DN_SERIES, SCHEDULES, FLANGE_RATINGS
+from ui.helpers import fmt, ulbl, dv
 
 
 def render_tab_mechanical(inputs: dict, computed: dict):
@@ -53,15 +54,15 @@ def render_tab_mechanical(inputs: dict, computed: dict):
 
     with st.expander("1 · Geometry", expanded=True):
         g1, g2, g3, g4, g5 = st.columns(5)
-        g1.metric("Nominal ID",   f"{nominal_id:.3f} m")
-        g2.metric("Lining",       f"{lining_mm:.1f} mm")
-        g3.metric("Real hyd. ID", f"{real_id:.4f} m",
-                  delta=f"−{lining_mm*2:.1f} mm", delta_color="off")
-        g4.metric("Cyl. length",  f"{cyl_len:.3f} m")
-        g5.metric("Dish depth",   f"{h_dish:.3f} m")
+        g1.metric(f"Nominal ID ({ulbl('length_m')})",   fmt(nominal_id, 'length_m', 3))
+        g2.metric(f"Lining ({ulbl('length_mm')})",     fmt(lining_mm, 'length_mm', 1))
+        g3.metric(f"Real hyd. ID ({ulbl('length_m')})", fmt(real_id, 'length_m', 4),
+                  delta=f"−{fmt(lining_mm * 2, 'length_mm', 1)}", delta_color="off")
+        g4.metric(f"Cyl. length ({ulbl('length_m')})", fmt(cyl_len, 'length_m', 3))
+        g5.metric(f"Dish depth ({ulbl('length_m')})",  fmt(h_dish, 'length_m', 3))
         st.caption(
-            f"Real hydraulic ID = {nominal_id:.3f} m − "
-            f"2 × {lining_mm:.1f} mm = **{real_id:.4f} m**. "
+            f"Real hydraulic ID = {fmt(nominal_id, 'length_m', 3)} − "
+            f"2 × {fmt(lining_mm, 'length_mm', 1)} = **{fmt(real_id, 'length_m', 4)}**. "
             "This ID is used in all hydraulic calculations below."
         )
 
@@ -83,7 +84,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                 return f"{t_des} mm{flag}  (t_min={t_min:.2f} mm)"
             st.table(pd.DataFrame([
                 ["Design pressure",
-                 f"{design_pressure:.2f} bar ({mech['p_kgf_cm2']:.3f} kg/cm²)"],
+                 f"{fmt(design_pressure, 'pressure_bar', 2)} ({mech['p_kgf_cm2']:.3f} kg/cm²)"],
                 ["Corrosion allowance",  f"{corrosion:.1f} mm"],
                 ["Shell t_min",          f"{mech['t_shell_min_mm']:.2f} mm"],
                 ["Shell t_design",
@@ -507,7 +508,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
 
     st.divider()
     mm1, mm2, mm3, mm4 = st.columns(4)
-    mm1.metric("Empty weight",     f"{w_total/1000:.3f} t")
-    mm2.metric("Operating weight", f"{wt_oper['w_operating_t']:.3f} t")
-    mm3.metric("OD",               f"{mech['od_m']*1000:.0f} mm")
-    mm4.metric("T/T length",       f"{total_length:.3f} m")
+    mm1.metric(f"Empty weight ({ulbl('mass_kg')})",     fmt(w_total, 'mass_kg', 0))
+    mm2.metric(f"Operating weight ({ulbl('mass_kg')})", fmt(wt_oper['w_operating_kg'], 'mass_kg', 0))
+    mm3.metric(f"OD ({ulbl('length_mm')})",             fmt(mech['od_m'] * 1000, 'length_mm', 0))
+    mm4.metric(f"T/T length ({ulbl('length_m')})",      fmt(total_length, 'length_m', 3))

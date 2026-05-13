@@ -2,7 +2,7 @@
 import pandas as pd
 import streamlit as st
 from engine.backwash import bed_expansion as _bed_exp
-from ui.helpers import show_alert
+from ui.helpers import fmt, ulbl, dv, show_alert
 
 
 def render_tab_backwash(inputs: dict, computed: dict):
@@ -52,16 +52,16 @@ def render_tab_backwash(inputs: dict, computed: dict):
         status_color = "🔴" if bw_col["media_loss_risk"] else ("🟡" if "WARNING" in bw_col["status"] else "🟢")
         st.markdown(f"### {status_color} {bw_col['status']}")
         cc1, cc2, cc3, cc4 = st.columns(4)
-        cc1.metric("Settled bed top",  f"{bw_col['settled_top_m']:.3f} m")
-        cc2.metric("Expanded bed top", f"{bw_col['expanded_top_m']:.3f} m")
-        cc3.metric("Collector height", f"{bw_col['collector_h_m']:.3f} m")
-        cc4.metric("Freeboard", f"{bw_col['freeboard_m']:.3f} m",
+        cc1.metric("Settled bed top",  fmt(bw_col['settled_top_m'],  'length_m', 3))
+        cc2.metric("Expanded bed top", fmt(bw_col['expanded_top_m'], 'length_m', 3))
+        cc3.metric("Collector height", fmt(bw_col['collector_h_m'],  'length_m', 3))
+        cc4.metric("Freeboard",        fmt(bw_col['freeboard_m'],    'length_m', 3),
                    delta=f"{bw_col['freeboard_pct']:.1f}% of bed",
                    delta_color="normal" if bw_col["freeboard_m"] >= bw_col["min_freeboard_m"] else "inverse")
         st.info(
-            f"**Max safe BW velocity: {bw_col['max_safe_bw_m_h']:.1f} m/h** "
+            f"**Max safe BW velocity: {fmt(bw_col['max_safe_bw_m_h'], 'velocity_m_h', 1)}** "
             f"(maintains ≥ {freeboard_mm:.0f} mm freeboard below collector).  "
-            f"Proposed BW: **{bw_col['proposed_bw_m_h']:.1f} m/h**."
+            f"Proposed BW: **{fmt(bw_col['proposed_bw_m_h'], 'velocity_m_h', 1)}**."
         )
         exp_rows = []
         _bw_integrity_alerts = []
@@ -103,21 +103,21 @@ def render_tab_backwash(inputs: dict, computed: dict):
                 for _lvl, _ttl, _msg in _bw_integrity_alerts:
                     show_alert(_lvl, _ttl, _msg)
         ec1, ec2, ec3 = st.columns(3)
-        ec1.metric("Settled bed",  f"{exp_combined['total_settled_m']:.3f} m")
-        ec2.metric("Expanded bed", f"{exp_combined['total_expanded_m']:.3f} m")
+        ec1.metric("Settled bed",  fmt(exp_combined['total_settled_m'],  'length_m', 3))
+        ec2.metric("Expanded bed", fmt(exp_combined['total_expanded_m'], 'length_m', 3))
         ec3.metric("Net expansion",f"{exp_combined['total_expansion_pct']:.1f} %")
         if bw_col["media_loss_risk"]:
             show_alert("critical", "Collector height insufficient — media carryover risk",
-                f"The expanded bed top ({bw_col['expanded_top_m']:.3f} m) reaches or exceeds "
-                f"the BW outlet collector ({bw_col['collector_h_m']:.3f} m). "
-                f"Maximum safe backwash velocity: {bw_col['max_safe_bw_m_h']:.1f} m/h.")
+                f"The expanded bed top ({fmt(bw_col['expanded_top_m'], 'length_m', 3)}) reaches or exceeds "
+                f"the BW outlet collector ({fmt(bw_col['collector_h_m'], 'length_m', 3)}). "
+                f"Maximum safe backwash velocity: {fmt(bw_col['max_safe_bw_m_h'], 'velocity_m_h', 1)}.")
 
     with st.expander("2 · BW pump & air blower capacity", expanded=True):
         bh1, bh2, bh3, bh4 = st.columns(4)
-        bh1.metric("BW flow",        f"{bw_hyd['q_bw_m3h']:,.0f} m³/h", help=bw_hyd["bw_governs"])
-        bh2.metric("BW LV actual",   f"{bw_hyd['bw_lv_actual_m_h']:.1f} m/h")
-        bh3.metric("Air scour flow", f"{bw_hyd['q_air_m3h']:,.0f} m³/h")
-        bh4.metric("Blower est.",    f"{bw_hyd['p_blower_est_kw']:.1f} kW")
+        bh1.metric(f"BW flow ({ulbl('flow_m3h')})",            fmt(bw_hyd['q_bw_m3h'], 'flow_m3h', 0),           help=bw_hyd["bw_governs"])
+        bh2.metric(f"BW LV actual ({ulbl('velocity_m_h')})",  fmt(bw_hyd['bw_lv_actual_m_h'], 'velocity_m_h', 1))
+        bh3.metric(f"Air scour flow ({ulbl('flow_m3h')})",    fmt(bw_hyd['q_air_m3h'], 'flow_m3h', 0))
+        bh4.metric(f"Blower est. ({ulbl('power_kw')})",       fmt(bw_hyd['p_blower_est_kw'], 'power_kw', 1))
         st.table(pd.DataFrame([
             ["Governing BW flow",          f"{bw_hyd['q_bw_m3h']:,.1f} m³/h ({bw_hyd['bw_governs']})"],
             ["BW design capacity (×1.10)", f"{bw_hyd['q_bw_design_m3h']:,.1f} m³/h"],
@@ -177,10 +177,10 @@ def render_tab_backwash(inputs: dict, computed: dict):
     with st.expander("5 · BW system equipment data sheet", expanded=True):
         st.markdown("### BW pump")
         p1, p2, p3, p4 = st.columns(4)
-        p1.metric("Design flow",  f"{bw_sizing['q_bw_design_m3h']:,.0f} m³/h")
-        p2.metric("Total head",   f"{bw_sizing['bw_head_mwc']:.1f} mWC  ({bw_sizing['bw_head_bar']:.2f} bar)")
-        p3.metric("Shaft power",  f"{bw_sizing['p_pump_shaft_kw']:.0f} kW")
-        p4.metric("Motor power",  f"{bw_sizing['p_pump_motor_kw']:.0f} kW")
+        p1.metric(f"Design flow ({ulbl('flow_m3h')})",       fmt(bw_sizing['q_bw_design_m3h'], 'flow_m3h', 0))
+        p2.metric(f"Total head ({ulbl('pressure_mwc')})",   fmt(bw_sizing['bw_head_mwc'], 'pressure_mwc', 1))
+        p3.metric(f"Shaft power ({ulbl('power_kw')})",      fmt(bw_sizing['p_pump_shaft_kw'], 'power_kw', 0))
+        p4.metric(f"Motor power ({ulbl('power_kw')})",      fmt(bw_sizing['p_pump_motor_kw'], 'power_kw', 0))
         st.table(pd.DataFrame([
             ["Design flow (duty)",        f"{bw_sizing['q_bw_design_m3h']:,.1f} m³/h"],
             ["Total dynamic head",        f"{bw_sizing['bw_head_mwc']:.1f} mWC  ({bw_sizing['bw_head_bar']:.3f} bar)"],
@@ -191,10 +191,10 @@ def render_tab_backwash(inputs: dict, computed: dict):
         ], columns=["Parameter", "Value"]))
         st.markdown("### Air blower")
         b1, b2, b3, b4 = st.columns(4)
-        b1.metric("Design flow", f"{bw_sizing['q_air_design_m3h']:,.0f} m³/h  ({bw_sizing['q_air_design_m3min']:.1f} m³/min)")
-        b2.metric("ΔP (total)",  f"{bw_sizing['dp_total_bar']:.3f} bar")
-        b3.metric("Shaft power", f"{bw_sizing['p_blower_shaft_kw']:.0f} kW")
-        b4.metric("Motor power", f"{bw_sizing['p_blower_motor_kw']:.0f} kW")
+        b1.metric(f"Design flow ({ulbl('flow_m3h')})",      fmt(bw_sizing['q_air_design_m3h'], 'flow_m3h', 0))
+        b2.metric(f"ΔP total ({ulbl('pressure_bar')})",    fmt(bw_sizing['dp_total_bar'], 'pressure_bar', 3))
+        b3.metric(f"Shaft power ({ulbl('power_kw')})",     fmt(bw_sizing['p_blower_shaft_kw'], 'power_kw', 0))
+        b4.metric(f"Motor power ({ulbl('power_kw')})",     fmt(bw_sizing['p_blower_motor_kw'], 'power_kw', 0))
         st.table(pd.DataFrame([
             ["Inlet volume flow",          f"{bw_sizing['q_air_design_m3h']:,.1f} m³/h  ({bw_sizing['q_air_design_m3min']:.1f} m³/min)"],
             ["Vessel back-pressure",       f"{vessel_pressure_bar:.2f} bar g"],
@@ -219,7 +219,7 @@ def render_tab_backwash(inputs: dict, computed: dict):
 
     st.divider()
     bm1, bm2, bm3, bm4 = st.columns(4)
-    bm1.metric("BW flow (design)",  f"{bw_hyd['q_bw_design_m3h']:,.0f} m³/h")
-    bm2.metric("Air scour flow",    f"{bw_hyd['q_air_design_m3h']:,.0f} m³/h")
-    bm3.metric("BW duration",       f"{bw_total_min} min")
-    bm4.metric("Plant waste / day", f"{bw_seq['waste_vol_daily_m3']:.0f} m³/d")
+    bm1.metric(f"BW flow, design ({ulbl('flow_m3h')})", fmt(bw_hyd['q_bw_design_m3h'], 'flow_m3h', 0))
+    bm2.metric(f"Air scour flow ({ulbl('flow_m3h')})", fmt(bw_hyd['q_air_design_m3h'], 'flow_m3h', 0))
+    bm3.metric("BW duration",                          f"{bw_total_min} min")
+    bm4.metric("Plant waste / day",                    f"{bw_seq['waste_vol_daily_m3']:.0f} m³/d")
