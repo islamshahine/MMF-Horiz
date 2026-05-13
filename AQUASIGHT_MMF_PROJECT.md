@@ -108,6 +108,7 @@ MMF-Horiz/
 │   ├── media.py              # Media DB (14 types + aliases), get_layer_intelligence()
 │   ├── project_io.py         # JSON save/load: inputs_to_json(), get_widget_state_map()
 │   ├── project_db.py         # SQLite: init_db, save/load project, snapshots, scenarios (stdlib)
+│   ├── optimisation.py       # constraint_check, evaluate_candidate, optimise_design (grid MVP)
 │   ├── fouling.py            # SDI/MFI/TSS/LV → solids loading, run time, severity, BW interval (empirical)
 │   ├── logger.py             # File logging: compute + validation + JSON/DB project events (configure for tests)
 │   ├── sensitivity.py        # OAT tornado analysis: run_sensitivity() — 9 params × 4 outputs

@@ -18,6 +18,7 @@ tests/
   test_logging.py        engine.logger file output + compute/project_io hooks
   test_fouling.py        fouling correlations (SDI/TSS/LV monotonicity + warnings)
   test_api.py            FastAPI /compute + /health + OpenAPI smoke
+  test_optimisation.py   constraint_check + optimise_design grid ranking
 ```
 
 ## Running tests
