@@ -8,6 +8,8 @@ try:
 except ImportError:
     _PLOTLY_OK = False
 
+from ui.helpers import fmt, ulbl, dv
+
 
 def render_tab_economics(inputs: dict, computed: dict):
     econ_capex  = computed["econ_capex"]
@@ -191,7 +193,7 @@ def render_tab_economics(inputs: dict, computed: dict):
              econ_bench["lcow_status"]],
         ], columns=["Metric", "Project", "Benchmark range", "Status"]))
         st.caption(
-            f"Daily capacity: {econ_bench['daily_flow_m3d']:,.0f} m³/d  ·  "
+            f"Daily capacity: {fmt(econ_bench['daily_flow_m3d'], 'flow_m3d', 1)}  ·  "
             f"Annual flow: {econ_bench['annual_flow_m3']/1e6:.2f} Mm³/yr  ·  "
             f"LCOW = (CAPEX × CRF + OPEX) / annual flow  ·  "
             f"CRF = {econ_bench['crf']:.4f}  "

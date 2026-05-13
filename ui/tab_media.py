@@ -4,6 +4,7 @@ import streamlit as st
 from engine.media import get_layer_intelligence
 from engine.process import filter_loading
 from engine.backwash import pressure_drop
+from ui.helpers import fmt, ulbl, dv
 
 
 def render_tab_media(inputs: dict, computed: dict):
@@ -80,13 +81,13 @@ def render_tab_media(inputs: dict, computed: dict):
                 dp_trigger_bar=dp_trigger_bar,
             )
             _dp_summary.append({
-                "Scenario":          sc_label,
-                "LV (m/h)":          sc_dp["u_m_h"],
-                "ΔP clean (bar)":    sc_dp["dp_clean_bar"],
-                "ΔP clean (mWC)":    sc_dp["dp_clean_mwc"],
-                "ΔP moderate (bar)": sc_dp["dp_moderate_bar"],
-                "ΔP dirty (bar)":    sc_dp["dp_dirty_bar"],
-                "ΔP dirty (mWC)":    sc_dp["dp_dirty_mwc"],
+                "Scenario":                              sc_label,
+                f"LV ({ulbl('velocity_m_h')})":          round(dv(sc_dp["u_m_h"], 'velocity_m_h'), 2),
+                f"ΔP clean ({ulbl('pressure_bar')})":    round(dv(sc_dp["dp_clean_bar"], 'pressure_bar'), 5),
+                "ΔP clean (mWC)":                        sc_dp["dp_clean_mwc"],
+                f"ΔP mod. ({ulbl('pressure_bar')})":     round(dv(sc_dp["dp_moderate_bar"], 'pressure_bar'), 5),
+                f"ΔP dirty ({ulbl('pressure_bar')})":    round(dv(sc_dp["dp_dirty_bar"], 'pressure_bar'), 5),
+                "ΔP dirty (mWC)":                        sc_dp["dp_dirty_mwc"],
             })
         st.markdown("**Summary — all scenarios**")
         st.dataframe(pd.DataFrame(_dp_summary),
@@ -95,14 +96,14 @@ def render_tab_media(inputs: dict, computed: dict):
         st.dataframe(pd.DataFrame(bw_dp["layers"]),
                      use_container_width=True, hide_index=True)
         p1, p2, p3 = st.columns(3)
-        p1.metric("ΔP clean (N)",
-                  f"{bw_dp['dp_clean_bar']:.5f} bar",
+        p1.metric(f"ΔP clean (N) ({ulbl('pressure_bar')})",
+                  fmt(bw_dp['dp_clean_bar'], 'pressure_bar', 5),
                   delta=f"{bw_dp['dp_clean_mwc']:.3f} mWC", delta_color="off")
-        p2.metric("ΔP moderate (N)",
-                  f"{bw_dp['dp_moderate_bar']:.5f} bar",
+        p2.metric(f"ΔP moderate (N) ({ulbl('pressure_bar')})",
+                  fmt(bw_dp['dp_moderate_bar'], 'pressure_bar', 5),
                   delta=f"{bw_dp['dp_moderate_mwc']:.3f} mWC", delta_color="off")
-        p3.metric("ΔP dirty → nozzle plate ΔP",
-                  f"{bw_dp['dp_dirty_bar']:.5f} bar",
+        p3.metric(f"ΔP dirty ({ulbl('pressure_bar')})",
+                  fmt(bw_dp['dp_dirty_bar'], 'pressure_bar', 5),
                   delta=f"{bw_dp['dp_dirty_mwc']:.3f} mWC", delta_color="off")
 
     with st.expander("4 · Media inventory", expanded=True):
@@ -116,17 +117,17 @@ def render_tab_media(inputs: dict, computed: dict):
             inv_rows.append({
                 "Media":            b["Type"],
                 "d10/CU":           f"{b['d10']}/{b['cu']}",
-                "Vol/filter (m³)":  round(b["Vol"], 4),
-                "Mass/filter (kg)": round(mf),
-                "Total mass (kg)":  round(mt),
+                f"Vol/filter ({ulbl('volume_m3')})":  round(dv(b["Vol"], 'volume_m3'), 4),
+                f"Mass/filter ({ulbl('mass_kg')})":   round(dv(mf, 'mass_kg')),
+                f"Total mass ({ulbl('mass_kg')})":    round(dv(mt, 'mass_kg')),
             })
         st.dataframe(pd.DataFrame(inv_rows),
                      use_container_width=True, hide_index=True)
         i1, i2, i3 = st.columns(3)
         i1.metric("Total filters", total_vessels)
-        i2.metric("Total media",   f"{total_mass/1000:.2f} t")
-        i3.metric("Per filter",
-                  f"{total_mass/total_vessels/1000:.2f} t"
+        i2.metric(f"Total media ({ulbl('mass_kg')})", fmt(total_mass, 'mass_kg', 0))
+        i3.metric(f"Per filter ({ulbl('mass_kg')})",
+                  fmt(total_mass / total_vessels, 'mass_kg', 0)
                   if total_vessels else "—")
 
     with st.expander("5 · Clogging analysis — N scenario", expanded=True):

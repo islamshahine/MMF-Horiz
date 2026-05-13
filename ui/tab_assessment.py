@@ -3,6 +3,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from engine.sensitivity import run_sensitivity, OUTPUT_DEFS
+from ui.helpers import fmt, ulbl, dv
 
 
 def render_tab_assessment(inputs: dict, computed: dict):
@@ -94,10 +95,12 @@ def render_tab_assessment(inputs: dict, computed: dict):
     with st.expander("Filtration velocity violations",
                      expanded=bool(all_lv_issues)):
         if all_lv_issues:
-            st.dataframe(
-                pd.DataFrame(all_lv_issues,
-                             columns=["Scenario", "Layer", "Severity", "LV (m/h)"]),
-                use_container_width=True, hide_index=True)
+            _lv_df = pd.DataFrame(all_lv_issues,
+                                  columns=["Scenario", "Layer", "Severity", "lv_si"])
+            _lv_df[f"LV ({ulbl('velocity_m_h')})"] = _lv_df["lv_si"].apply(
+                lambda v: round(dv(v, 'velocity_m_h'), 2))
+            st.dataframe(_lv_df.drop(columns=["lv_si"]),
+                         use_container_width=True, hide_index=True)
         else:
             st.success("No filtration velocity violations across any scenario.")
 
@@ -114,40 +117,35 @@ def render_tab_assessment(inputs: dict, computed: dict):
 
     st.markdown("### Key design parameters")
     kp1, kp2, kp3, kp4 = st.columns(4)
-    kp1.metric("Velocity threshold", f"{velocity_threshold:.1f} m/h")
-    kp2.metric("EBCT threshold",     f"{ebct_threshold:.1f} min")
-    kp3.metric("Design pressure",    f"{design_pressure:.2f} bar")
-    kp4.metric("Design temperature", f"{design_temp:.0f} °C")
+    kp1.metric(f"Velocity threshold ({ulbl('velocity_m_h')})", fmt(velocity_threshold, 'velocity_m_h', 1))
+    kp2.metric("EBCT threshold",                               f"{ebct_threshold:.1f} min")
+    kp3.metric(f"Design pressure ({ulbl('pressure_bar')})",    fmt(design_pressure, 'pressure_bar', 2))
+    kp4.metric("Design temperature",                           f"{design_temp:.0f} °C")
 
     st.table(pd.DataFrame([
-        ["Total flow",
-         f"{total_flow:,.1f} m³/h"],
+        [f"Total flow ({ulbl('flow_m3h')})",
+         fmt(total_flow, 'flow_m3h', 1)],
         ["Streams × filters",
          f"{streams} × {n_filters} = {streams*n_filters} vessels"],
-        ["Redundancy",
-         f"N-{redundancy}"],
-        ["Active filters (N)",
-         f"{streams*n_filters - redundancy*streams}"],
-        ["Nominal ID",
-         f"{nominal_id:.3f} m"],
-        ["Filter area (avg)",
-         f"{avg_area:.4f} m²"],
-        ["Velocity threshold",
-         f"{velocity_threshold:.1f} m/h"],
-        ["EBCT threshold",
-         f"{ebct_threshold:.1f} min"],
-        ["Material",
-         material_name],
-        ["Design pressure",
-         f"{design_pressure:.2f} barg"],
-        ["Design temperature",
-         f"{design_temp:.0f} °C"],
-        ["Corrosion allowance",
-         f"{corrosion:.1f} mm"],
-        ["Empty weight",
-         f"{w_total/1000:.3f} t"],
-        ["Operating weight",
-         f"{wt_oper['w_operating_t']:.3f} t"],
+        ["Redundancy",          f"N-{redundancy}"],
+        ["Active filters (N)",  f"{streams*n_filters - redundancy*streams}"],
+        [f"Nominal ID ({ulbl('length_m')})",
+         fmt(nominal_id, 'length_m', 3)],
+        [f"Filter area ({ulbl('area_m2')})",
+         fmt(avg_area, 'area_m2', 4)],
+        [f"Velocity threshold ({ulbl('velocity_m_h')})",
+         fmt(velocity_threshold, 'velocity_m_h', 1)],
+        ["EBCT threshold",      f"{ebct_threshold:.1f} min"],
+        ["Material",            material_name],
+        [f"Design pressure ({ulbl('pressure_bar')})",
+         fmt(design_pressure, 'pressure_bar', 2)],
+        ["Design temperature",  f"{design_temp:.0f} °C"],
+        [f"Corrosion allowance ({ulbl('length_mm')})",
+         fmt(corrosion, 'length_mm', 1)],
+        [f"Empty weight ({ulbl('mass_kg')})",
+         fmt(w_total, 'mass_kg', 0)],
+        [f"Operating weight ({ulbl('mass_kg')})",
+         fmt(wt_oper['w_operating_kg'], 'mass_kg', 0)],
     ], columns=["Parameter", "Value"]))
 
     st.divider()
