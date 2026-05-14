@@ -240,11 +240,13 @@ def bed_expansion(
     bw_velocity_m_h: float,
     water_temp_c: float = 27.0,
     rho_water: float    = _RHO_WATER_DEF,
+    expansion_calibration_scale: float = 1.0,
 ) -> dict:
     """Expand all layers; return per-layer results and totals."""
     results        = []
     total_settled  = 0.0
     total_expanded = 0.0
+    scl = max(0.5, min(1.5, float(expansion_calibration_scale)))
 
     for L in layers:
         r = layer_expansion(
@@ -257,11 +259,18 @@ def bed_expansion(
             water_temp_c=water_temp_c,
             rho_water=rho_water,
         )
+        d0 = float(L.get("Depth", 0.0))
+        d_exp = float(r["depth_expanded_m"])
+        if scl != 1.0 and d0 > 1e-9:
+            inc = d_exp - d0
+            d_adj = d0 + inc * scl
+            r["depth_expanded_m"] = round(d_adj, 3)
+            r["expansion_pct"] = round((d_adj / d0 - 1.0) * 100.0, 1)
         r["media_type"] = L.get("Type", "—")
         r["is_support"] = bool(L.get("is_support", False))
         results.append(r)
-        total_settled  += L.get("Depth", 0.0)
-        total_expanded += r["depth_expanded_m"]
+        total_settled  += d0
+        total_expanded += float(r["depth_expanded_m"])
 
     exp_pct = (total_expanded / total_settled - 1) * 100 if total_settled > 0 else 0.0
     any_warn = any(r["warning"] for r in results)
@@ -397,6 +406,21 @@ def solve_equivalent_velocity_for_target_expansion_pct(
         "bound_hit": "none",
         "note": note,
     }
+
+
+def nm3h_to_actual_m3s_at_pt(q_nm3h: float, P_pa: float, T_K: float, *, R: float = 287.0) -> float:
+    """
+    Convert **normal** m³/h (dry air at **0 °C**, **101 325 Pa**) to **actual** m³/s
+    at blower suction ``P_pa``, ``T_K`` (ideal gas, constant mass flow).
+    """
+    P_n = 101_325.0
+    T_n = 273.15
+    q_n_m3s = max(float(q_nm3h), 0.0) / 3600.0
+    t_k = max(float(T_K), 200.0)
+    p_pa = max(float(P_pa), 1000.0)
+    mdot = P_n * q_n_m3s / (R * T_n)
+    rho1 = p_pa / (R * t_k)
+    return mdot / max(rho1, 1e-12)
 
 
 def actual_m3m2h_to_nm3_m2h(
@@ -660,6 +684,9 @@ def pressure_drop(
     rho_water: float              = _RHO_WATER_DEF,
     alpha_m_kg: float             = 0.0,
     dp_trigger_bar: float         = 1.0,
+    layer_areas_m2: list[float] | None = None,
+    maldistribution_factor: float = 1.0,
+    alpha_calibration_factor: float = 1.0,
 ) -> dict:
     """
     Filtration ΔP: clean (Ergun) / moderate (50% loaded) / dirty (100% loaded).
@@ -670,13 +697,25 @@ def pressure_drop(
     alpha_m_kg = 0 → auto-calibrated so dirty ΔP equals dp_trigger_bar at M_max.
     alpha_m_kg > 0 → user-specified value.
 
+    When ``layer_areas_m2`` is provided with one entry per layer, each layer's Ergun
+    term uses u_i = Q/A_i (chordal slice in a horizontal drum). Cake resistance still
+    uses the reference superficial velocity u_ref = Q/avg_area × maldistribution_factor
+    so M_max [kg/m²] stays on the same basis as the solid-loading input.
+
     Solid capture per layer:
     • is_support=True  → no clogging.
     • capture_frac key → explicit weight (auto-normalised across non-support layers).
     • Neither          → depth-proportional among non-support layers.
     """
-    mu    = _viscosity(water_temp_c)
-    u_m_h = q_filter_m3h / avg_area_m2
+    mu = _viscosity(water_temp_c)
+    _mal = max(1.0, float(maldistribution_factor))
+    _acf = max(0.05, min(3.0, float(alpha_calibration_factor)))
+
+    u_ref_m_h = q_filter_m3h / max(avg_area_m2, 1e-9) * _mal
+    use_local = (
+        layer_areas_m2 is not None
+        and len(layer_areas_m2) == len(layers)
+    )
 
     # ── Resolve & normalise capture fractions ─────────────────────────────
     non_sup_depth = sum(
@@ -703,13 +742,18 @@ def pressure_drop(
     rows = []
     dp_c = 0.0
 
-    for L, frac in zip(layers, fracs):
+    for i, (L, frac) in enumerate(zip(layers, fracs)):
         depth  = L.get("Depth",    0.5)
         eps0   = L.get("epsilon0", 0.42)
         d10    = L.get("d10",      1.0)
         cu     = L.get("cu",       1.5)
         phi    = L.get("psi",      0.85)   # per-layer sphericity
         is_sup = L.get("is_support", False)
+
+        if use_local:
+            u_m_h = q_filter_m3h / max(float(layer_areas_m2[i]), 1e-9) * _mal
+        else:
+            u_m_h = u_ref_m_h
 
         sol     = solid_loading_kg_m2 * frac
         sol_vol = sol / captured_density_kg_m3 if captured_density_kg_m3 > 0 else 0.0
@@ -736,7 +780,7 @@ def pressure_drop(
         })
 
     # ── Cake model: moderate (50% M_max) and dirty (100% M_max) ─────────────
-    lv_ms  = u_m_h / 3600.0
+    lv_ms  = u_ref_m_h / 3600.0
     M_max  = solid_loading_kg_m2
     dp_c_bar = dp_c / 1e5
 
@@ -750,6 +794,8 @@ def pressure_drop(
     else:
         alpha_used = alpha_m_kg
         alpha_src  = "user-specified"
+
+    alpha_used *= _acf
 
     cake_mod_pa  = alpha_used * mu * lv_ms * (0.5 * M_max)   # 50% loaded
     cake_dir_pa  = alpha_used * mu * lv_ms * M_max            # 100% loaded
@@ -768,7 +814,8 @@ def pressure_drop(
     return {
         "layers":                rows,
         "fracs":                 fracs,
-        "u_m_h":                 round(u_m_h,           2),
+        "u_m_h":                 round(u_ref_m_h,     2),
+        "ergun_local_areas":     use_local,
         "solid_loading":         solid_loading_kg_m2,
         "captured_density":      captured_density_kg_m3,
         "alpha_used_m_kg":       alpha_used,
@@ -800,6 +847,10 @@ def filtration_cycle(
     dp_trigger_bar: float         = 1.0,
     alpha_m_kg: float             = 0.0,
     tss_mg_l_list: list           = None,
+    layer_areas_m2: list[float] | None = None,
+    maldistribution_factor: float = 1.0,
+    alpha_calibration_factor: float = 1.0,
+    tss_capture_efficiency: float = 1.0,
 ) -> dict:
     """
     Filtration cycle duration — cake filtration model (Ruth, 1935).
@@ -838,6 +889,9 @@ def filtration_cycle(
     if tss_mg_l_list is None:
         tss_mg_l_list = [5.0, 10.0, 20.0]
 
+    _acf = max(0.05, min(3.0, float(alpha_calibration_factor)))
+    _cap = max(0.0, min(1.0, float(tss_capture_efficiency)))
+
     dp_res   = pressure_drop(
         layers=layers,
         q_filter_m3h=q_filter_m3h,
@@ -846,6 +900,11 @@ def filtration_cycle(
         captured_density_kg_m3=captured_density_kg_m3,
         water_temp_c=water_temp_c,
         rho_water=rho_water,
+        alpha_m_kg=alpha_m_kg,
+        dp_trigger_bar=dp_trigger_bar,
+        layer_areas_m2=layer_areas_m2,
+        maldistribution_factor=maldistribution_factor,
+        alpha_calibration_factor=alpha_calibration_factor,
     )
     dp_clean_bar = dp_res["dp_clean_bar"]
     lv_mh        = dp_res["u_m_h"]
@@ -864,6 +923,8 @@ def filtration_cycle(
     else:
         alpha_used = alpha_m_kg
         alpha_src  = "user-specified"
+
+    alpha_used *= _acf
 
     # ── Analytical M* ─────────────────────────────────────────────────────
     denom_trig = alpha_used * mu * lv_ms
@@ -894,10 +955,12 @@ def filtration_cycle(
     # ── Per-TSS cycle durations ────────────────────────────────────────────
     tss_rows = []
     for tss in tss_mg_l_list:
-        acc_rate   = (tss / 1000.0) * lv_mh    # kg/(m²·h)
+        tss_eff    = tss * _cap
+        acc_rate   = (tss_eff / 1000.0) * lv_mh    # kg/(m²·h)
         duration_h = m_trigger / acc_rate if acc_rate > 0 else float("inf")
         tss_rows.append({
             "TSS (mg/L)":              tss,
+            "TSS deposited (mg/L)":    round(tss_eff, 3),
             "Acc. rate (kg/m²·h)":     round(acc_rate,   4),
             "Load @ trigger (kg/m²)":  round(m_trigger,  3),
             "Cycle duration (h)":      round(duration_h, 2),
@@ -1150,6 +1213,9 @@ def bw_system_sizing(
     n_bw_systems: int,
     tank_sf: float = 1.5,
     rho_bw_kg_m3: float = 1025.0,
+    *,
+    blower_air_delta_p_bar: float = 0.15,
+    q_air_design_nm3h: float | None = None,
 ) -> dict:
     """
     BW pump, air blower, and BW storage tank sizing.
@@ -1161,11 +1227,21 @@ def bw_system_sizing(
 
     Blower (adiabatic compression, gamma = 1.4)
     -------------------------------------------
-        Submergence  ≈ filter_id / 2  (water depth above nozzle plate at BW mid-phase)
-        P2           = P_atm + dp_submergence + vessel_gauge_pressure
+        **Discharge pressure** is *not* the liquid filtration operating gauge on the
+        vessel nameplate. The air scour blower must overcome **hydrostatic head** of
+        the water column above the sparger (≈ ID/2 here) plus **air-side** losses
+        (distribution, piping, sparger) — typically **~0.15–0.35 bar** combined with
+        submergence for MMF; positive-displacement lobes are rarely economical above
+        **~0.9 bar** differential.
+
+        P2_abs       = P_atm + dp_submergence + blower_air_delta_p_bar * 1e5
+        Q1           = mass flow from **Nm³/h** (0 °C, 101 325 Pa) expanded to suction P1, T1
         Ideal power  = gamma/(gamma-1) × P1 × Q1 × [(P2/P1)^((gamma-1)/gamma) − 1]
         P_shaft      = ideal / blower_eta
         P_motor      = P_shaft / motor_eta
+
+        ``vessel_pressure_bar`` is retained for **Nm³/h conversion** elsewhere (in-situ
+        vs normal air volume); it is **not** added to P2 for thermodynamic sizing.
 
     Tank
     ----
@@ -1188,11 +1264,22 @@ def bw_system_sizing(
     T1_K        = blower_inlet_temp_c + 273.15
     h_sub       = filter_id_m / 2.0       # submergence ≈ vessel radius
     dp_sub_pa   = rho_bw_kg_m3 * g * h_sub
-    dp_vessel_pa = vessel_pressure_bar * 1e5
-    P2_pa       = P1_pa + dp_sub_pa + dp_vessel_pa
+    dp_airside_pa = max(0.0, float(blower_air_delta_p_bar)) * 1e5
+    P2_pa       = P1_pa + dp_sub_pa + dp_airside_pa
+    dp_total_bar = (P2_pa - P1_pa) / 1e5
+    blower_dp_warning: str | None = None
+    if dp_total_bar > 0.9 + 1e-6:
+        blower_dp_warning = (
+            f"Total blower ΔP is **{dp_total_bar:.2f} bar** — above a typical lobe PD "
+            "practical envelope (~**0.9 bar**). Confirm technology (multistage centrifugal / turbo) "
+            "or reduce **air-side ΔP** / submergence assumption."
+        )
 
     rho_air_kg_m3 = P1_pa / (287.0 * T1_K)         # ideal gas, dry air
-    q_air_m3s     = q_air_design_m3h / 3600.0
+    if q_air_design_nm3h is not None and float(q_air_design_nm3h) > 0.0:
+        q_air_m3s = nm3h_to_actual_m3s_at_pt(float(q_air_design_nm3h), P1_pa, T1_K)
+    else:
+        q_air_m3s = max(float(q_air_design_m3h), 0.0) / 3600.0
 
     p_ideal_kw  = (
         (gamma / (gamma - 1.0))
@@ -1223,11 +1310,14 @@ def bw_system_sizing(
         "q_air_design_m3min":    round(q_air_design_m3h / 60.0, 2),
         "h_submergence_m":       round(h_sub,               2),
         "dp_sub_bar":            round(dp_sub_pa / 1e5,     3),
+        "blower_air_delta_p_bar": round(max(0.0, float(blower_air_delta_p_bar)), 3),
+        "dp_airside_bar":        round(dp_airside_pa / 1e5, 3),
         "vessel_pressure_bar":   vessel_pressure_bar,
         "P1_pa":                 round(P1_pa,               0),
         "P2_pa":                 round(P2_pa,               0),
         "pressure_ratio":        round(P2_pa / P1_pa,       3),
-        "dp_total_bar":          round((P2_pa - P1_pa) / 1e5, 3),
+        "dp_total_bar":          round(dp_total_bar,        3),
+        "blower_dp_warning":     blower_dp_warning,
         "rho_air_kg_m3":         round(rho_air_kg_m3,       4),
         "p_blower_ideal_kw":     round(p_ideal_kw,          1),
         "p_blower_shaft_kw":     round(p_blower_shaft_kw,   1),

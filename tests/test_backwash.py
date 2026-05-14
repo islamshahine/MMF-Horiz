@@ -38,6 +38,8 @@ from engine.backwash import (
     actual_m3m2h_to_nm3_m2h,
     filter_bw_timeline_24h,
     timeline_plant_operating_hours,
+    bw_system_sizing,
+    nm3h_to_actual_m3s_at_pt,
 )
 
 
@@ -211,6 +213,24 @@ class TestErgunPressureDrop:
         for key in ["dp_clean_bar", "dp_clean_mwc", "dp_clean_kpa",
                     "dp_moderate_bar", "dp_dirty_bar"]:
             assert key in r, f"Missing key: {key}"
+
+    def test_layer_areas_m2_changes_clean_dp_same_u_ref(self, standard_layers):
+        """
+        Per-layer Ergun velocity uses Q/A_i when layer_areas_m2 matches layer count.
+        Unequal slice areas (same mean basis for cake) must change clean ΔP.
+        """
+        areas_equal = [40.0, 40.0, 40.0]
+        areas_split = [40.0, 20.0, 60.0]
+        r_eq = pressure_drop(
+            standard_layers, 1312.5, 120.0, layer_areas_m2=areas_equal,
+        )
+        r_sp = pressure_drop(
+            standard_layers, 1312.5, 120.0, layer_areas_m2=areas_split,
+        )
+        assert r_eq["ergun_local_areas"] is True
+        assert r_sp["ergun_local_areas"] is True
+        assert r_eq["u_m_h"] == pytest.approx(r_sp["u_m_h"])
+        assert r_eq["dp_clean_bar"] != pytest.approx(r_sp["dp_clean_bar"], rel=1e-6)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
@@ -386,3 +406,50 @@ class TestAirScourSolveAndTimeline:
         )
         assert s0["ok"] and s12["ok"]
         assert s12["velocity_m_h"] < s0["velocity_m_h"] - 1e-3
+
+
+def test_nm3h_to_actual_at_reference_inlet_matches_nm3s():
+    q = nm3h_to_actual_m3s_at_pt(3600.0, 101_325.0, 273.15)
+    assert q == pytest.approx(1.0, rel=0.002)
+
+
+def test_bw_system_sizing_p2_uses_airside_dp_not_vessel_gauge():
+    """High vessel operating gauge must not inflate blower discharge P₂."""
+    r = bw_system_sizing(
+        q_bw_design_m3h=100.0,
+        bw_head_mwc=15.0,
+        bw_pump_eta=0.72,
+        motor_eta=0.95,
+        q_air_design_m3h=2000.0,
+        vessel_pressure_bar=4.0,
+        filter_id_m=2.0,
+        blower_inlet_temp_c=25.0,
+        blower_eta=0.70,
+        bw_vol_per_cycle_m3=10.0,
+        n_bw_systems=1,
+        blower_air_delta_p_bar=0.20,
+        q_air_design_nm3h=1800.0,
+    )
+    dp_bar = (float(r["P2_pa"]) - 101_325.0) / 1e5
+    assert dp_bar == pytest.approx(0.301, abs=0.02)
+    assert float(r["pressure_ratio"]) < 1.35
+    assert r.get("blower_dp_warning") is None
+
+
+def test_bw_system_sizing_warns_when_total_dp_exceeds_typical_lobe():
+    r = bw_system_sizing(
+        q_bw_design_m3h=100.0,
+        bw_head_mwc=15.0,
+        bw_pump_eta=0.72,
+        motor_eta=0.95,
+        q_air_design_m3h=500.0,
+        vessel_pressure_bar=0.5,
+        filter_id_m=4.0,
+        blower_inlet_temp_c=25.0,
+        blower_eta=0.70,
+        bw_vol_per_cycle_m3=10.0,
+        n_bw_systems=1,
+        blower_air_delta_p_bar=0.95,
+        q_air_design_nm3h=400.0,
+    )
+    assert r.get("blower_dp_warning") is not None

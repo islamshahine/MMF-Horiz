@@ -19,6 +19,7 @@ horizontal multi-media filter showing:
 from __future__ import annotations
 
 import datetime as _dt_tb
+from collections import Counter
 from typing import Any
 
 import numpy as np
@@ -31,6 +32,8 @@ from matplotlib.gridspec import GridSpec
 # ── Layer colours ──────────────────────────────────────────────────────────
 LAYER_COLORS = {
     "Gravel":            "#d5c9b0",
+    "Gravel (2–3 mm)": "#c4b8a2",
+    "Gravel (2-3 mm)": "#c4b8a2",
     "Coarse sand":       "#ead9a0",
     "Fine sand":         "#f2e6a5",
     "Fine sand (extra)": "#f0d870",
@@ -50,6 +53,8 @@ _DEFAULT_COLOR = "#b8b8b8"
 # ── Dimension label subscripts per media type ──────────────────────────────
 _DIM_SUB = {
     "Gravel":            "gr",
+    "Gravel (2–3 mm)":   "g23",
+    "Gravel (2-3 mm)":   "g23",
     "Coarse sand":       "cs",
     "Fine sand":         "fs",
     "Fine sand (extra)": "sd",
@@ -377,7 +382,7 @@ def _draw_saddle_symbols(
     spacings = list(wt_saddle.get("saddle_spacings_m") or [])
     if not spacings and len(xs) >= 2:
         spacings = [round(xs[i + 1] - xs[i], 4) for i in range(len(xs) - 1)]
-    ly_dim = -drop - R * 0.18
+    ly_dim = -drop - R * 0.26
     for i, gap in enumerate(spacings):
         if i + 1 >= len(xs):
             break
@@ -620,13 +625,10 @@ def vessel_section_elevation(
                     color="#3366bb", linewidth=1.3, linestyle="--",
                     alpha=0.9, zorder=5)
             delta_mm = (total_exp_h - settled_top) * 1000
-            ax.annotate(
+            ax.text(
+                L * 0.02, total_exp_h + 0.07 * R,
                 f"Expansion max  +{delta_mm:.0f} mm",
-                xy=(L * 0.70, total_exp_h),
-                xytext=(L * 0.72, total_exp_h + 0.09 * R),
-                fontsize=7.5, color="#3366bb",
-                arrowprops=dict(arrowstyle="-", color="#3366bb", lw=0.7),
-                zorder=7,
+                ha="left", va="bottom", fontsize=7.2, color="#3366bb", zorder=7,
             )
 
     # ── Collector level — dashed red (ISO hidden line style) ─────────────
@@ -637,36 +639,54 @@ def vessel_section_elevation(
             f"Collector  h={collector_h_m:.2f} m",
             ha="left", va="bottom", fontsize=8, color="#cc0000", zorder=7)
 
-    # ── Dimension lines (left side) ───────────────────────────────────────
-    dx0 = -h_d * 0.35
-    dx1 = -h_d * 0.70
+    # ── Dimension lines (left side) — stagger each stack so thin layers read.
+    _dim_stack: dict[str, int] = {"k": 0}
+    _dx0_base = -h_d * 0.40 - R * 0.08
+    _text_inset = h_d * 0.42 + R * 0.18
+    _stack_step = max(0.05 * ID, h_d * 0.15, 0.075)
 
-    def _dim(y0, y1, subscript):
+    def _dim(y0, y1, subscript: str):
         if abs(y1 - y0) < 1e-4:
             return
         val_mm = abs(y1 - y0) * 1000
         ymid = (y0 + y1) / 2.0
+        k = _dim_stack["k"]
+        _dim_stack["k"] = k + 1
+        x_arrow = _dx0_base - k * _stack_step
+        x_text = x_arrow - _text_inset
+        thick_m = abs(y1 - y0)
+        fs = 6.4 if thick_m < 0.28 else 7.2
+        y_nudge = ((k % 2) * 0.022 * R) if thick_m < 0.22 else 0.0
 
         ax.annotate(
-            "", xy=(dx0, y1), xytext=(dx0, y0),
+            "", xy=(x_arrow, y1), xytext=(x_arrow, y0),
             arrowprops=dict(arrowstyle="<->", color="#1a3a5c",
                             lw=0.9, mutation_scale=7),
             zorder=8,
         )
+        tick = max(0.028, min(0.045, thick_m * 0.22))
         for yy in (y0, y1):
-            ax.plot([dx0 - 0.04, dx0 + 0.04], [yy, yy],
+            ax.plot([x_arrow - tick, x_arrow + tick], [yy, yy],
                     color="#1a3a5c", lw=0.7, zorder=8)
 
-        ax.text(dx1, ymid,
-                f"$H_{{\\rm {subscript}}}$\n{val_mm:.0f} mm",
-                ha="right", va="center", fontsize=7.5,
-                color="#1a3a5c", linespacing=1.35, zorder=8)
+        ax.text(x_text, ymid + y_nudge,
+                f"$H_{{\\mathrm{{{subscript}}}}}$\n{val_mm:.0f} mm",
+                ha="right", va="center", fontsize=fs,
+                color="#1a3a5c", linespacing=1.25, zorder=8)
 
     _dim(0, nozzle_plate_h_m, "NP")
 
+    _sub_counts = Counter(_DIM_SUB.get(lyr["Type"], "m") for lyr in layers)
+    _dup_serial: dict[str, int] = {}
+
     curr_h = nozzle_plate_h_m
     for lyr in layers:
-        sub = _DIM_SUB.get(lyr["Type"], "m")
+        base = _DIM_SUB.get(lyr["Type"], "m")
+        if _sub_counts[base] > 1:
+            _dup_serial[base] = _dup_serial.get(base, 0) + 1
+            sub = f"{base}{_dup_serial[base]}"
+        else:
+            sub = base
         _dim(curr_h, curr_h + lyr["Depth"], sub)
         curr_h += lyr["Depth"]
 
@@ -681,29 +701,30 @@ def vessel_section_elevation(
     _id_note = f"ID\n{vessel_id_m * 1000:.0f} mm"
     if real_id is not None and abs(real_id - vessel_id_m) > 1e-6:
         _id_note += f"\n(real {real_id * 1000:.0f} mm)"
-    ax.text(id_x + 0.06, R,
-            _id_note,
-            ha="left", va="center",
-            fontsize=9, fontweight="bold", color="#1a3a5c", zorder=8)
+    _id_tx = id_x + max(R * 0.11, 0.13)
+    ax.text(_id_tx, ID * 0.82, _id_note,
+            ha="left", va="top",
+            fontsize=8.5, fontweight="bold", color="#1a3a5c", zorder=8)
 
     # ── Right side: distance from crown annotations ───────────────────────
-    ann_x = L * 0.96
+    ann_x = L * 0.93
+    _exp_dim_x = L * 0.805
 
     if ID > collector_h_m:
         dist_c = (ID - collector_h_m) * 1000
         ax.annotate("", xy=(ann_x, ID), xytext=(ann_x, collector_h_m),
                     arrowprops=dict(arrowstyle="<->", color="#777",
                                    lw=0.8, mutation_scale=7), zorder=7)
-        ax.text(ann_x + 0.06, (ID + collector_h_m) / 2,
+        ax.text(ann_x + max(0.055, R * 0.04), (ID + collector_h_m) / 2,
                 f"{dist_c:.0f} mm",
                 ha="left", va="center", fontsize=7, color="#777", zorder=7)
 
     if total_exp_h is not None and ID > total_exp_h:
         dist_e = (ID - total_exp_h) * 1000
-        ax.annotate("", xy=(ann_x - 0.28, ID), xytext=(ann_x - 0.28, total_exp_h),
+        ax.annotate("", xy=(_exp_dim_x, ID), xytext=(_exp_dim_x, total_exp_h),
                     arrowprops=dict(arrowstyle="<->", color="#3366bb",
                                    lw=0.8, mutation_scale=7), zorder=7)
-        ax.text(ann_x - 0.22, (ID + total_exp_h) / 2,
+        ax.text(_exp_dim_x + max(0.055, R * 0.04), (ID + total_exp_h) / 2,
                 f"{dist_e:.0f} mm",
                 ha="left", va="center", fontsize=7, color="#3366bb", zorder=7)
 
@@ -719,7 +740,7 @@ def vessel_section_elevation(
                 arrowprops=_akw, zorder=8)
     for tx in (0, _shell_len):
         ax.plot([tx, tx], [ly1 - R*0.07, ly1 + R*0.07], color=_dc, lw=0.6, zorder=8)
-    ax.text(_shell_len / 2, ly1 - R * 0.10,
+    ax.text(_shell_len * 0.52, ly1 - R * 0.10,
             f"Shell (T/T)  {_shell_len:.2f} m",
             ha="center", va="top", fontsize=8.5, color="#000000", zorder=8)
 
@@ -750,9 +771,10 @@ def vessel_section_elevation(
     _nlkw = dict(fontsize=7.5, color="#000000", zorder=10)
     _nk_tag = dict(fontsize=6.5, color="#1a3a5c", fontweight="bold", zorder=11)
 
+    _xfil = min(_shell_len * 0.36, max(L * 0.28, 0.35))
     _noz_defs = [
         (L / 2,   "top",   "Feed\ninlet",   "Feed inlet"),
-        (L / 2,   "bot",   "Filtrate\noutlet", "Filtrate outlet"),
+        (_xfil,   "bot",   "Filtrate\noutlet", "Filtrate outlet"),
         (0,       "left",  "BW\ninlet",     "Backwash inlet"),
         (L,       "right", "BW\noutlet",    "Backwash outlet"),
         (L * 0.2, "top",   "Vent",          "Vent"),
@@ -773,16 +795,18 @@ def vessel_section_elevation(
             ax.text(_xp, -_sh - R*0.085, _lbl,
                     ha="center", va="top", **_nlkw)
         elif _side == "left":
+            _yleft = R * 0.38
             ax.add_patch(mpatches.Rectangle(
-                (-_sh, R - _sw/2), _sh, _sw, **_nkw))
-            ax.text(-_sh - R*0.02, R, tag, ha="right", va="center", **_nk_tag)
-            ax.text(-_sh - R*0.09, R, _lbl,
+                (-_sh, _yleft - _sw/2), _sh, _sw, **_nkw))
+            ax.text(-_sh - R*0.02, _yleft, tag, ha="right", va="center", **_nk_tag)
+            ax.text(-_sh - R*0.09, _yleft, _lbl,
                     ha="right", va="center", **_nlkw)
         else:
+            _yright = R * 0.38
             ax.add_patch(mpatches.Rectangle(
-                (L, R - _sw/2), _sh, _sw, **_nkw))
-            ax.text(L + _sh + R*0.02, R, tag, ha="left", va="center", **_nk_tag)
-            ax.text(L + _sh + R*0.09, R, _lbl,
+                (L, _yright - _sw/2), _sh, _sw, **_nkw))
+            ax.text(L + _sh + R*0.02, _yright, tag, ha="left", va="center", **_nk_tag)
+            ax.text(L + _sh + R*0.09, _yright, _lbl,
                     ha="left", va="center", **_nlkw)
 
     _draw_manholes_schematic(ax, manhole_layout, shell_len=L, ID=ID, R=R)
@@ -830,7 +854,12 @@ def vessel_section_elevation(
     )
 
     _sl = cyl_len if cyl_len is not None else total_length_m
-    ax.set_xlim(-h_d * 4.0, _sl + h_d * 3.5)
+    _n_left_dims = _dim_stack["k"]
+    _xlim_lo = min(
+        -h_d * 4.2,
+        _dx0_base - (_n_left_dims + 1) * _stack_step - R * 0.12,
+    )
+    ax.set_xlim(_xlim_lo, _sl + h_d * 3.5)
     ax.set_ylim(min(-R * 1.40, _ysad - R * 0.06), ID + R * 0.65)
     ax.set_aspect("equal", adjustable="datalim")
     ax.axis("off")

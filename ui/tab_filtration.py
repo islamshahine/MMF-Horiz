@@ -3,6 +3,7 @@ import pandas as pd
 import streamlit as st
 from engine.process import filter_loading
 from engine.backwash import pressure_drop
+from engine.thresholds import layer_ebct_floor_min, layer_lv_cap_m_h
 from ui.helpers import (
     fmt, ulbl, dv, show_alert, pressure_drop_layers_display_frames,
     cycle_matrix_temp_title, cycle_matrix_tss_row_title, filtration_dp_curve_display_df,
@@ -27,8 +28,26 @@ def render_tab_filtration(inputs: dict, computed: dict):
     _lv_severity       = computed["lv_severity_fn"]
     _ebct_severity     = computed["ebct_severity_fn"]
 
-    velocity_threshold = inputs["velocity_threshold"]
-    ebct_threshold     = inputs["ebct_threshold"]
+    def _scenario_lv_status(q, base_rows, inp):
+        worst_rank = 0
+        rank_map = {"advisory": 1, "warning": 2, "critical": 3}
+        for b in base_rows:
+            if b.get("is_support"):
+                continue
+            ar = float(b.get("Area", 0.0))
+            if ar <= 1e-12:
+                continue
+            vel = q / ar
+            cap = layer_lv_cap_m_h(b, inputs_fallback=inp)
+            sev = _lv_severity(vel, cap)
+            worst_rank = max(worst_rank, rank_map.get(sev or "", 0))
+        if worst_rank >= 3:
+            return "Outside envelope"
+        if worst_rank >= 2:
+            return "Approaching limit"
+        if worst_rank >= 1:
+            return "Approaching limit"
+        return "Within envelope"
     solid_loading      = inputs["solid_loading"]
     captured_solids_density = inputs["captured_solids_density"]
     feed_temp          = inputs["feed_temp"]
@@ -46,7 +65,18 @@ def render_tab_filtration(inputs: dict, computed: dict):
     tss_avg            = inputs["tss_avg"]
     tss_high           = inputs["tss_high"]
 
+    _mal = float(computed.get("maldistribution_factor", 1.0) or 1.0)
+    _sl_eff = float(computed.get("solid_loading_effective_kg_m2", solid_loading))
+    _la_list = computed.get("layer_areas_m2") or []
+    _layer_areas_kw = _la_list if len(_la_list) == len(layers) else None
+
     st.caption("Hydraulic loading, contact times, pressure drop and post-treatment across all redundancy scenarios.")
+    st.caption(
+        "**Model scope:** LV / EBCT use **chordal slice areas** per layer (horizontal cylinder + dishes). "
+        "**Ergun clean ΔP** uses **per-layer** superficial velocity u = Q/Aᵢ; **cake (Ruth)** and **M_max** use "
+        "the reference velocity Q/A_mean × **maldistribution factor** (sidebar) so inventory [kg/m²] stays consistent. "
+        "Radial profile and breakthrough are not resolved — compare to field data where needed."
+    )
 
     with st.expander("🌊 Water properties — feed & backwash", expanded=False):
         w1, w2 = st.columns(2)
@@ -78,10 +108,8 @@ def render_tab_filtration(inputs: dict, computed: dict):
     st.markdown("#### Flow distribution by scenario")
     _flow_comp = []
     for x, a, q in load_data:
-        lv = q / avg_area if avg_area > 0 else 0
-        _lv_flag = ("Within envelope" if lv <= velocity_threshold
-                    else "Approaching limit" if lv <= velocity_threshold * 1.05
-                    else "Outside envelope")
+        lv = (q / avg_area) * _mal if avg_area > 0 else 0.0
+        _lv_flag = _scenario_lv_status(q, base, inputs)
         _flow_comp.append({
             "Scenario":                              "N" if x == 0 else f"N-{x}",
             "Active filters":                        a,
@@ -103,8 +131,10 @@ def render_tab_filtration(inputs: dict, computed: dict):
                 if b.get("is_support"):
                     _lv_sev, _eb_sev = None, None
                 else:
-                    _lv_sev = _lv_severity(vel, velocity_threshold)
-                    _eb_sev = _ebct_severity(ebct, ebct_threshold)
+                    _lv_cap = layer_lv_cap_m_h(b, inputs_fallback=inputs)
+                    _eb_floor = layer_ebct_floor_min(b, inputs_fallback=inputs)
+                    _lv_sev = _lv_severity(vel, _lv_cap)
+                    _eb_sev = _ebct_severity(ebct, _eb_floor)
                 _lv_env = ("N/A" if b.get("is_support") else
                            "Within envelope" if not _lv_sev else
                            "Approaching limit" if _lv_sev == "advisory" else "Outside envelope")
@@ -142,7 +172,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
             f"Clean ΔP: Ergun equation on virgin bed.  "
             f"Moderate = 50 % loaded · Dirty = 100 % loaded — cake model (Ruth).  "
             f"α ({bw_dp['alpha_source']}) = {bw_dp['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg  |  "
-            f"M_max = {fmt(solid_loading, 'loading_kg_m2', 2)}"
+            f"M_max (effective) = {fmt(_sl_eff, 'loading_kg_m2', 2)}"
         )
         _load_data_dp = filter_loading(
             total_flow, streams, n_filters, redundancy, hydraulic_assist,
@@ -152,10 +182,14 @@ def render_tab_filtration(inputs: dict, computed: dict):
             sc_label = "N" if x == 0 else f"N-{x}"
             sc_dp = pressure_drop(
                 layers=layers, q_filter_m3h=q, avg_area_m2=avg_area,
-                solid_loading_kg_m2=solid_loading,
+                solid_loading_kg_m2=_sl_eff,
                 captured_density_kg_m3=captured_solids_density,
                 water_temp_c=feed_temp, rho_water=rho_feed,
                 alpha_m_kg=alpha_specific, dp_trigger_bar=dp_trigger_bar,
+                layer_areas_m2=_layer_areas_kw,
+                maldistribution_factor=_mal,
+                alpha_calibration_factor=float(
+                    computed.get("alpha_calibration_factor", 1.0) or 1.0),
             )
             _dp_summary.append({
                 "Scenario":                              sc_label,
@@ -248,10 +282,10 @@ def render_tab_filtration(inputs: dict, computed: dict):
 
     st.divider()
     m1, m2, m3, m4 = st.columns(4)
-    m1.metric(f"LV — N scenario ({ulbl('velocity_m_h')})", fmt(q_per_filter / avg_area, 'velocity_m_h', 2))
+    m1.metric(f"LV — N scenario ({ulbl('velocity_m_h')})", fmt((q_per_filter / avg_area) * _mal, 'velocity_m_h', 2))
     m2.metric(f"Flow / filter, N ({ulbl('flow_m3h')})",   fmt(q_per_filter, 'flow_m3h', 1))
     m3.metric("Total filters",                             f"{streams * n_filters}")
-    m4.metric(f"LV envelope ({ulbl('velocity_m_h')})",    f"≤ {fmt(velocity_threshold, 'velocity_m_h', 1)}")
+    m4.metric("LV / EBCT setpoints", "Per media layer")
 
     with st.expander("🔷 Cartridge (polishing) filter sizing", expanded=False):
         ca1, ca2, ca3, ca4 = st.columns(4)
@@ -274,6 +308,10 @@ def render_tab_filtration(inputs: dict, computed: dict):
             ["ΔP clean (BOL)",       fmt(cart_result["dp_clean_bar"], "pressure_bar", 4)],
             ["ΔP EOL",               fmt(cart_result["dp_eol_bar"], "pressure_bar", 4)],
             ["DHC / element",        f"{cart_result['dhc_g_element']:.0f} g"],
+            ["DHC basis",            (
+                "Vendor datasheet" if cart_result.get("dhc_basis") == "vendor_override"
+                else "Model (g/TIE × rating)"
+            )],
             ["Replacement interval", f"{cart_result['replacement_freq_days']:.0f} days"],
             ["Annual element cost",  f"USD {cart_result['annual_cost_usd']:,.0f}"],
         ], columns=["Parameter", "Value"]))

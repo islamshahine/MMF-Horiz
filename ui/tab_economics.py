@@ -10,32 +10,115 @@ except ImportError:
     _PLOTLY_OK = False
     _make_subplots = None  # type: ignore[misc, assignment]
 
+from engine.economics import global_benchmark_comparison, npv_lifecycle_cost_profile
+from engine.pump_performance import economics_energy_from_pump_configuration
+
 from ui.helpers import fmt, ulbl, dv, fmt_annual_flow_volume, fmt_si_range
 
 
 def render_tab_economics(inputs: dict, computed: dict):
-    econ_capex  = computed["econ_capex"]
-    econ_opex   = computed["econ_opex"]
-    econ_bench  = computed["econ_bench"]
-    econ_carbon = computed["econ_carbon"]
-    econ_npv    = computed.get("econ_npv") or {}
-    energy      = computed.get("energy") or {}
+    econ_capex = computed["econ_capex"]
+    econ_npv = computed.get("econ_npv") or {}
+    energy = computed.get("energy") or {}
 
-    steel_cost_usd_kg  = inputs["steel_cost_usd_kg"]
-    engineering_pct    = inputs["engineering_pct"]
-    contingency_pct    = inputs["contingency_pct"]
+    steel_cost_usd_kg = inputs["steel_cost_usd_kg"]
+    engineering_pct = inputs["engineering_pct"]
+    contingency_pct = inputs["contingency_pct"]
     media_replace_years = inputs["media_replace_years"]
-    grid_intensity     = inputs["grid_intensity"]
-    steel_carbon_kg    = inputs["steel_carbon_kg"]
+    grid_intensity = inputs["grid_intensity"]
+    steel_carbon_kg = inputs["steel_carbon_kg"]
     concrete_carbon_kg = inputs["concrete_carbon_kg"]
-    discount_rate      = inputs.get("discount_rate", 5.0)
-    design_life_years  = inputs.get("design_life_years", 20)
-    streams            = inputs["streams"]
-    n_filters          = inputs["n_filters"]
-
+    discount_rate = inputs.get("discount_rate", 5.0)
+    design_life_years = inputs.get("design_life_years", 20)
+    streams = inputs["streams"]
+    n_filters = inputs["n_filters"]
     _n_total_vessels = streams * n_filters
+    elec_tariff = float(inputs.get("elec_tariff") or 0.1)
+
+    econ_opex = computed["econ_opex"]
+    econ_carbon = computed["econ_carbon"]
+    econ_bench = computed["econ_bench"]
+
+    use_pp_energy = st.checkbox(
+        "Align **annual electricity** (OPEX energy line, CO₂ operational, benchmarks) with **Pumps & power**",
+        value=False,
+        key="econ_align_pump_tab_energy",
+        help="Uses parallel feed pump count, IE3/IE4 from Pumps tab, DOL vs VFD BW philosophy, blower count & mode.",
+    )
+    if use_pp_energy and computed.get("pump_perf") and computed.get("hyd_prof"):
+        pp = computed["pump_perf"]
+        hyd = computed["hyd_prof"]
+        ek = economics_energy_from_pump_configuration(
+            energy,
+            pp,
+            hyd,
+            total_flow_m3h=float(inputs["total_flow"]),
+            streams=int(inputs["streams"]),
+            n_feed_pumps_parallel_per_stream=int(st.session_state.get("pp_n_feed_parallel", 1)),
+            pump_eta_user=float(inputs.get("pump_eta") or 0.75),
+            motor_eta_feed=(
+                0.955 if st.session_state.get("pp_feed_iec", "IE3") == "IE3" else 0.965
+            ),
+            rho_feed=float(computed.get("rho_feed") or 1025.0),
+            bw_philosophy=str(st.session_state.get("pp_econ_bw_phil", "DOL")),
+            blower_operating_mode=str(st.session_state.get("pp_blower_mode", "single_duty")),
+            n_blowers_running=int(st.session_state.get("pp_n_blowers", 1)),
+        )
+        old_kwh = float(econ_opex.get("energy_kwh_yr") or 0.0)
+        new_kwh = float(ek["energy_kwh_yr"])
+        old_ecost = float(econ_opex.get("energy_cost_usd_yr") or 0.0)
+        new_ecost = new_kwh * elec_tariff
+        d_total = new_ecost - old_ecost
+        annual_flow_m3 = float(econ_opex.get("annual_flow_m3") or 1.0)
+        new_total_opex = float(econ_opex["total_opex_usd_yr"]) + d_total
+        econ_opex = {
+            **econ_opex,
+            "energy_kwh_yr": round(new_kwh),
+            "energy_kwh_filtration_yr": ek["energy_kwh_filtration_yr"],
+            "energy_kwh_bw_pump_yr": ek["energy_kwh_bw_pump_yr"],
+            "energy_kwh_blower_yr": ek["energy_kwh_blower_yr"],
+            "energy_cost_usd_yr": round(new_ecost),
+            "total_opex_usd_yr": round(new_total_opex),
+            "opex_per_m3_usd": round(new_total_opex / max(annual_flow_m3, 1.0), 4),
+        }
+        r_k = new_kwh / max(old_kwh, 1e-9)
+        new_co2_op = float(econ_carbon["co2_operational_kg_yr"]) * r_k
+        dlife = int(design_life_years)
+        afm_c = float(econ_carbon.get("annual_flow_m3") or annual_flow_m3)
+        life_flow = afm_c * max(dlife, 1)
+        new_life = float(econ_carbon["co2_construction_kg"]) + new_co2_op * max(dlife, 1)
+        econ_carbon = {
+            **econ_carbon,
+            "co2_operational_kg_yr": round(new_co2_op),
+            "co2_lifecycle_kg": round(new_life),
+            "co2_per_m3_operational": round(new_co2_op / max(afm_c, 1.0), 4),
+            "co2_per_m3_lifecycle": round(new_life / max(life_flow, 1.0), 4),
+        }
+        econ_bench = global_benchmark_comparison(
+            capex_total_usd=float(econ_capex["total_capex_usd"]),
+            opex_usd_year=float(econ_opex["total_opex_usd_yr"]),
+            total_flow_m3h=float(inputs["total_flow"]),
+            n_filters=int(_n_total_vessels),
+            design_life_years=dlife,
+            co2_per_m3=float(econ_carbon["co2_per_m3_operational"]),
+            electricity_tariff=elec_tariff,
+            operating_hours=float(inputs.get("op_hours_yr") or 8400.0),
+            discount_rate_pct=float(discount_rate),
+        )
+        econ_npv = npv_lifecycle_cost_profile(
+            capex_total_usd=float(econ_capex["total_capex_usd"]),
+            annual_opex_usd=float(econ_opex["total_opex_usd_yr"]),
+            discount_rate_pct=float(discount_rate),
+            design_life_years=dlife,
+        )
 
     st.subheader("Economics — CAPEX · OPEX · Carbon · Benchmarks")
+    st.caption(
+        "**Energy model (default):** central metered-style kWh from **compute**. "
+        "With **Align … Pumps & power** enabled, filtration kWh scales with **parallel feed pumps** "
+        "and motor class, BW pump kWh follows **DOL vs VFD** from the Pumps tab, and blower kWh can use the "
+        "**twin centrifugal** rough mode — OPEX energy, CO₂, benchmarks, and NPV update accordingly."
+    )
 
     em1, em2, em3, em4 = st.columns(4)
     em1.metric("Total CAPEX",

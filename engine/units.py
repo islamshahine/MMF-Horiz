@@ -365,6 +365,7 @@ INPUT_QUANTITY_MAP = {
     "design_pressure":    "pressure_bar",
     "dp_trigger_bar":     "pressure_bar",
     "vessel_pressure_bar": "pressure_bar",
+    "blower_air_delta_p_bar": "pressure_bar",
     "np_slot_dp":         "pressure_bar",
     "p_residual":         "pressure_bar",
     "dp_inlet_pipe":      "pressure_bar",
@@ -452,8 +453,16 @@ def convert_inputs(
     # Media layer depths are entered in display length units (m or ft)
     if "layers" in result and result["layers"]:
         for layer in result["layers"]:
-            if layer is not None and layer.get("Depth") is not None:
+            if layer is None:
+                continue
+            if layer.get("Depth") is not None:
                 layer["Depth"] = si_value(layer["Depth"], "length_m", system)
+            if layer.get("lv_threshold_m_h") is not None:
+                layer["lv_threshold_m_h"] = si_value(
+                    float(layer["lv_threshold_m_h"]), "velocity_m_h", system
+                )
+            if layer.get("ebct_threshold_min") is not None:
+                layer["ebct_threshold_min"] = float(layer["ebct_threshold_min"])
     return result
 
 

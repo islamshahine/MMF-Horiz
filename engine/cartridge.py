@@ -195,6 +195,7 @@ def cartridge_design(
     is_CIP_system: bool      = False,
     cf_inlet_tss_mg_l: float = 2.0,
     cf_outlet_tss_mg_l: float = 0.5,
+    dhc_g_element_override: float | None = None,
 ) -> dict:
     """
     Size a cartridge polishing filter bank.
@@ -209,6 +210,10 @@ def cartridge_design(
     is_CIP_system       : True → SS 316L elements; SF=1.2, higher DHC, SS costs
     cf_inlet_tss_mg_l   : TSS entering the CF (= MMF effluent), mg/L
     cf_outlet_tss_mg_l  : TSS target leaving the CF, mg/L (≤ cf_inlet_tss_mg_l)
+    dhc_g_element_override
+                        : If > 0, total dirt-hold capacity per element [g] from a vendor
+                          datasheet, replacing the built-in g/TIE × rating curve for life
+                          only. ΔP clean/EOL still use the vendor quadratic curves.
 
     Replacement interval
     --------------------
@@ -257,7 +262,14 @@ def cartridge_design(
 
     # 5-point ΔP vs accumulated-mass curve (fraction of DHC)
     dhc_per_tie = DHC_G_PER_TIE_SS316L if is_CIP_system else DHC_G_PER_TIE
-    dhc_g       = dhc_per_tie * ties * _DHC_RATING_MULT[rating_um]
+    dhc_g_model = dhc_per_tie * ties * _DHC_RATING_MULT[rating_um]
+    _ov = float(dhc_g_element_override) if dhc_g_element_override is not None else 0.0
+    if _ov > 1e-9:
+        dhc_g = _ov
+        dhc_basis = "vendor_override"
+    else:
+        dhc_g = dhc_g_model
+        dhc_basis = "model_table"
     dp_curve    = [
         {
             "mass_frac": f,
@@ -323,6 +335,8 @@ def cartridge_design(
         "dp_curve":                 dp_curve,
         # DHC
         "dhc_g_element":            round(dhc_g,               1),
+        "dhc_g_model_element":      round(dhc_g_model,         1),
+        "dhc_basis":                dhc_basis,
         # TSS loading
         "cf_inlet_tss_mg_l":        round(cf_inlet,            2),
         "cf_outlet_tss_mg_l":       round(cf_outlet,           2),

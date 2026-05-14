@@ -48,6 +48,7 @@ def render_tab_backwash(inputs: dict, computed: dict):
     bw_s_fill          = inputs["bw_s_fill"]
     bw_total_min       = inputs["bw_total_min"]
     vessel_pressure_bar = inputs["vessel_pressure_bar"]
+    blower_air_delta_p_bar = float(inputs.get("blower_air_delta_p_bar", 0.15))
     streams             = inputs["streams"]
     n_filters             = inputs["n_filters"]
     hydraulic_assist_bw = int(inputs.get("hydraulic_assist", 0))
@@ -278,20 +279,26 @@ def render_tab_backwash(inputs: dict, computed: dict):
             ["Duty / standby",            f"{_n_bw_systems}D / 1S  (plant-wide)"],
         ], columns=["Parameter", "Value"]))
         st.markdown("### Air blower")
+        if bw_sizing.get("blower_dp_warning"):
+            st.warning(bw_sizing["blower_dp_warning"])
         b1, b2, b3, b4 = st.columns(4)
         b1.metric(f"Design flow ({ulbl('air_flow_nm3h')})", fmt(bw_sizing["q_air_design_nm3h"], "air_flow_nm3h", 0))
         b2.metric(f"ΔP total ({ulbl('pressure_bar')})",    fmt(bw_sizing['dp_total_bar'], 'pressure_bar', 3))
         b3.metric(f"Shaft power ({ulbl('power_kw')})",     fmt(bw_sizing['p_blower_shaft_kw'], 'power_kw', 0))
         b4.metric(f"Motor power ({ulbl('power_kw')})",     fmt(bw_sizing['p_blower_motor_kw'], 'power_kw', 0))
         st.table(pd.DataFrame([
-            ["Inlet volume flow (normal / standard)",
-             fmt(bw_sizing["q_air_design_nm3h"], "air_flow_nm3h", 1)],
-            ["Vessel back-pressure",
-             f"{fmt(vessel_pressure_bar, 'pressure_bar', 2)} g"],
+            ["Inlet volume flow (normal)",
+             fmt(bw_sizing["q_air_design_nm3h"], "air_flow_nm3h", 1) + "  (0 °C, 1 atm dry)"],
+            ["Vessel operating gauge (inputs)",
+             f"{fmt(vessel_pressure_bar, 'pressure_bar', 2)} g — Nm³ conversion only"],
+            ["Air-side ΔP (beyond submergence)",
+             f"{fmt(float(bw_sizing.get('blower_air_delta_p_bar', blower_air_delta_p_bar)), 'pressure_bar', 3)} g"],
             ["Water submergence (≈ ID/2)",
              f"{fmt(bw_sizing['h_submergence_m'], 'length_m', 2)}  →  "
              f"{fmt(bw_sizing['dp_sub_bar'], 'pressure_bar', 3)}"],
-            ["Total ΔP", fmt(bw_sizing["dp_total_bar"], "pressure_bar", 3)],
+            ["P₁ inlet (absolute)", f"{float(bw_sizing['P1_pa']):,.0f} Pa"],
+            ["P₂ discharge (absolute)", f"{float(bw_sizing['P2_pa']):,.0f} Pa"],
+            ["Total ΔP (P₂−P₁)", fmt(bw_sizing["dp_total_bar"], "pressure_bar", 3)],
             ["Shaft power", fmt(bw_sizing["p_blower_shaft_kw"], "power_kw", 1)],
             ["Motor power (absorbed)", fmt(bw_sizing["p_blower_motor_kw"], "power_kw", 1)],
         ], columns=["Parameter", "Value"]))

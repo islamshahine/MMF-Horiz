@@ -27,8 +27,14 @@ from engine.economics  import (
     global_benchmark_comparison, npv_lifecycle_cost_profile,
 )
 from engine.financial_economics import build_econ_financial
+from engine.pump_performance import build_pump_performance_package
 from engine.validators import REFERENCE_FALLBACK_INPUTS, validate_inputs
 from engine.environment_loads import compute_environment_structural
+from engine.thresholds import (
+    ensure_layer_threshold_defaults,
+    layer_ebct_floor_min,
+    layer_lv_cap_m_h,
+)
 
 
 def lv_severity_classify(vel: float, threshold: float):
@@ -108,8 +114,6 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         tss_high        = _work["tss_high"]
         bw_temp         = _work["bw_temp"]
         bw_sal          = _work["bw_sal"]
-        velocity_threshold = _work["velocity_threshold"]
-        ebct_threshold     = _work["ebct_threshold"]
         nominal_id      = _work["nominal_id"]
         total_length    = _work["total_length"]
         end_geometry    = _work["end_geometry"]
@@ -132,7 +136,17 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         collector_h     = _work["collector_h"]
         freeboard_mm    = _work["freeboard_mm"]
         layers          = _work["layers"]
+        ensure_layer_threshold_defaults(_work)
+        velocity_threshold = float(_work["velocity_threshold"])
+        ebct_threshold     = float(_work["ebct_threshold"])
+        layers          = _work["layers"]
         solid_loading   = _work["solid_loading"]
+        _sl_scale = max(0.5, min(1.5, float(_work.get("solid_loading_scale", 1.0) or 1.0)))
+        solid_loading_eff = float(solid_loading) * _sl_scale
+        _mal = max(1.0, float(_work.get("maldistribution_factor", 1.0) or 1.0))
+        _acf = max(0.05, min(3.0, float(_work.get("alpha_calibration_factor", 1.0) or 1.0)))
+        _tss_cap = max(0.0, min(1.0, float(_work.get("tss_capture_efficiency", 1.0) or 1.0)))
+        _exp_scl = max(0.5, min(1.5, float(_work.get("expansion_calibration_scale", 1.0) or 1.0)))
         captured_solids_density = _work["captured_solids_density"]
         alpha_specific  = _work["alpha_specific"]
         dp_trigger_bar  = _work["dp_trigger_bar"]
@@ -151,6 +165,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         bw_s_fill       = _work["bw_s_fill"]
         bw_total_min    = _work["bw_total_min"]
         vessel_pressure_bar  = _work["vessel_pressure_bar"]
+        blower_air_delta_p_bar = float(_work.get("blower_air_delta_p_bar", 0.15))
         blower_eta      = _work["blower_eta"]
         blower_inlet_temp_c  = _work["blower_inlet_temp_c"]
         tank_sf         = _work["tank_sf"]
@@ -190,6 +205,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         cart_cip        = _work["cart_cip"]
         cf_inlet_tss    = _work["cf_inlet_tss"]
         cf_outlet_tss   = _work["cf_outlet_tss"]
+        _cart_dhc_ov = float(_work.get("cart_dhc_override_g", 0.0) or 0.0)
+        cart_dhc_override = _cart_dhc_ov if _cart_dhc_ov > 1e-9 else None
         dp_dist         = _work["dp_dist"]
         dp_inlet_pipe   = _work["dp_inlet_pipe"]
         dp_outlet_pipe  = _work["dp_outlet_pipe"]
@@ -277,6 +294,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             geo_rows.append([L["Type"], L["Depth"], area, v_c, v_e, vol])
             curr_h = h2
         avg_area     = sum(b["Area"] for b in base) / len(base) if base else 1.0
+        _layer_areas = [float(b["Area"]) for b in base] if base else None
         _n_hyd       = max(1, n_filters - hydraulic_assist)
         q_per_filter = (total_flow / streams) / _n_hyd if _n_hyd > 0 else 0.0
 
@@ -285,12 +303,15 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             layers=layers,
             q_filter_m3h=q_per_filter,
             avg_area_m2=avg_area,
-            solid_loading_kg_m2=solid_loading,
+            solid_loading_kg_m2=solid_loading_eff,
             captured_density_kg_m3=captured_solids_density,
             water_temp_c=feed_temp,
             rho_water=rho_feed,
             alpha_m_kg=alpha_specific,
             dp_trigger_bar=dp_trigger_bar,
+            layer_areas_m2=_layer_areas,
+            maldistribution_factor=_mal,
+            alpha_calibration_factor=_acf,
         )
         np_dp_auto = bw_dp["dp_dirty_bar"]
 
@@ -386,6 +407,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             bw_velocity_m_h=bw_velocity,
             water_temp_c=bw_temp,
             rho_water=rho_bw,
+            expansion_calibration_scale=_exp_scl,
         )
         bw_seq = bw_sequence(
             filter_area_m2=avg_area,
@@ -429,13 +451,17 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                 layers=layers,
                 q_filter_m3h=_q,
                 avg_area_m2=avg_area,
-                solid_loading_kg_m2=solid_loading,
+                solid_loading_kg_m2=solid_loading_eff,
                 captured_density_kg_m3=captured_solids_density,
                 water_temp_c=feed_temp,
                 rho_water=rho_feed,
                 dp_trigger_bar=dp_trigger_bar,
                 alpha_m_kg=alpha_specific,
                 tss_mg_l_list=[tss_low, tss_avg, tss_high],
+                layer_areas_m2=_layer_areas,
+                maldistribution_factor=_mal,
+                alpha_calibration_factor=_acf,
+                tss_capture_efficiency=_tss_cap,
             )
 
         # ── Filtration cycle matrix: TSS × temperature ────────────────────────────
@@ -454,13 +480,17 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                     layers=layers,
                     q_filter_m3h=_q,
                     avg_area_m2=avg_area,
-                    solid_loading_kg_m2=solid_loading,
+                    solid_loading_kg_m2=solid_loading_eff,
                     captured_density_kg_m3=captured_solids_density,
                     water_temp_c=_tv,
                     rho_water=rho_feed,
                     dp_trigger_bar=dp_trigger_bar,
                     alpha_m_kg=_alpha_fixed,
                     tss_mg_l_list=tss_vals,
+                    layer_areas_m2=_layer_areas,
+                    maldistribution_factor=_mal,
+                    alpha_calibration_factor=_acf,
+                    tss_capture_efficiency=_tss_cap,
                 )
 
         # ── BW scheduling & feasibility ───────────────────────────────────────────
@@ -558,6 +588,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             is_CIP_system=cart_cip,
             cf_inlet_tss_mg_l=cf_inlet_tss,
             cf_outlet_tss_mg_l=cf_outlet_tss,
+            dhc_g_element_override=cart_dhc_override,
         )
         cart_optim = cartridge_optimise(
             design_flow_m3h=cart_flow,
@@ -631,8 +662,54 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             n_bw_systems        = _n_bw_systems,
             tank_sf             = tank_sf,
             rho_bw_kg_m3        = rho_bw,
+            blower_air_delta_p_bar=blower_air_delta_p_bar,
+            q_air_design_nm3h=float(bw_hyd["q_air_design_nm3h"]),
         )
         bw_sizing = {**bw_sizing, "q_air_design_nm3h": bw_hyd["q_air_design_nm3h"]}
+
+        # Align annual blower kWh with thermodynamic motor kW (legacy energy_summary input
+        # used the 0.5 bar shortcut from backwash_hydraulics).
+        _pbm_sz = float(bw_sizing.get("p_blower_motor_kw") or 0.0)
+        if _pbm_sz > 0.0:
+            _e_b_old = float(energy.get("e_blower_kwh_yr") or 0.0)
+            _e_tot_old = float(energy.get("e_total_kwh_yr") or 0.0)
+            _bw_ev_yr = float(_bw_per_day_design) * 365.0 * float(_n_total_filters)
+            _e_b_new = _pbm_sz * _blower_evt_h * _bw_ev_yr
+            _d_e = _e_b_new - _e_b_old
+            _tfy = float(energy.get("total_flow_m3_yr") or 0.0)
+            _kpm = (_e_tot_old + _d_e) / _tfy if _tfy > 0 else 0.0
+            _tariff = float(elec_tariff)
+            energy = {
+                **energy,
+                "p_blower_elec_kw": round(_pbm_sz, 2),
+                "e_blower_kwh_yr": round(_e_b_new, 0),
+                "e_total_kwh_yr": round(_e_tot_old + _d_e, 0),
+                "kwh_per_m3": round(_kpm, 4),
+                "cost_usd_yr": round((_e_tot_old + _d_e) * _tariff, 0),
+            }
+
+        pump_perf = build_pump_performance_package(
+            inputs=_work,
+            hyd_prof=hyd_prof,
+            energy=energy,
+            bw_hyd=bw_hyd,
+            bw_seq=bw_seq,
+            bw_sizing=bw_sizing,
+            q_per_filter=q_per_filter,
+            avg_area=avg_area,
+            total_flow=total_flow,
+            streams=streams,
+            n_filters=n_filters,
+            hydraulic_assist=hydraulic_assist,
+            rho_feed=rho_feed,
+            rho_bw=rho_bw,
+            pump_eta=pump_eta,
+            motor_eta=motor_eta,
+            bw_pump_eta=bw_pump_eta,
+            bw_head_mwc=bw_head_mwc,
+            bw_velocity=bw_velocity,
+            bw_cycles_day=float(_bw_per_day_design),
+        )
 
         # ── Consolidated weight ───────────────────────────────────────────────────
         nozzle_wt_total = sum(r.get("Total wt (kg)", 0) for r in nozzle_sched)
@@ -853,8 +930,10 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                     continue
                 _vel  = _q / _b["Area"] if _b["Area"] > 0 else 0
                 _ebct = (_b["Vol"] / _q) * 60 if _q > 0 else 0
-                _lv_sev = lv_severity_classify(_vel, velocity_threshold)
-                _eb_sev = ebct_severity_classify(_ebct, ebct_threshold)
+                _lv_cap = layer_lv_cap_m_h(_b, inputs_fallback=_work)
+                _eb_floor = layer_ebct_floor_min(_b, inputs_fallback=_work)
+                _lv_sev = lv_severity_classify(_vel, _lv_cap)
+                _eb_sev = ebct_severity_classify(_ebct, _eb_floor)
                 if _lv_sev:
                     all_lv_issues.append((_sc, _b["Type"], _lv_sev, _vel))
                     if _lv_sev == "critical":   n_criticals  += 1
@@ -887,15 +966,15 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             _worst_lv = max(all_lv_issues, key=lambda t: t[3])
             drivers.append(
                 f"Filtration velocity reaches {_worst_lv[3]:.2f} m/h "
-                f"(recommended envelope upper limit {velocity_threshold:.1f} m/h) "
-                f"in scenario {_worst_lv[0]}, layer {_worst_lv[1]}."
+                f"(layer {_worst_lv[1]} max LV setpoint exceeded vs design) "
+                f"in scenario {_worst_lv[0]}."
             )
         if all_ebct_issues:
             _worst_eb = min(all_ebct_issues, key=lambda t: t[3])
             drivers.append(
                 f"Contact time reduces to {_worst_eb[3]:.2f} min "
-                f"(recommended lower limit {ebct_threshold:.1f} min) "
-                f"in scenario {_worst_eb[0]}, layer {_worst_eb[1]}."
+                f"(below min EBCT setpoint for layer {_worst_eb[1]}) "
+                f"in scenario {_worst_eb[0]}."
             )
         if not drivers:
             drivers.append("All hydraulic parameters remain within the recommended operating envelope across all evaluated scenarios.")
@@ -947,8 +1026,10 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                     continue
                 _v = _q / _b["Area"] if _b["Area"] > 0 else 0
                 _e = (_b["Vol"] / _q) * 60 if _q > 0 else 0
-                _sv = lv_severity_classify(_v, velocity_threshold)
-                _se = ebct_severity_classify(_e, ebct_threshold)
+                _lv_cap = layer_lv_cap_m_h(_b, inputs_fallback=_work)
+                _eb_floor = layer_ebct_floor_min(_b, inputs_fallback=_work)
+                _sv = lv_severity_classify(_v, _lv_cap)
+                _se = ebct_severity_classify(_e, _eb_floor)
                 if _sev_rank.get(_sv, 0) > _sev_rank.get(_worst_lv_sev, 0): _worst_lv_sev = _sv
                 if _sev_rank.get(_se, 0) > _sev_rank.get(_worst_eb_sev, 0): _worst_eb_sev = _se
             _lv_label = _sev_to_label(_worst_lv_sev)
@@ -981,6 +1062,13 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             "mech": mech, "wt_body": wt_body,
             # media
             "geo_rows": geo_rows, "base": base, "avg_area": avg_area,
+            "layer_areas_m2": _layer_areas or [],
+            "solid_loading_effective_kg_m2": solid_loading_eff,
+            "solid_loading_scale": _sl_scale,
+            "maldistribution_factor": _mal,
+            "alpha_calibration_factor": _acf,
+            "tss_capture_efficiency": _tss_cap,
+            "expansion_calibration_scale": _exp_scl,
             "q_per_filter": q_per_filter,
             # pressure drop
             "bw_dp": bw_dp, "np_dp_auto": np_dp_auto,
@@ -1005,7 +1093,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             # cartridge
             "cart_result": cart_result, "cart_optim": cart_optim,
             # hydraulics & energy
-            "hyd_prof": hyd_prof, "energy": energy,
+            "hyd_prof": hyd_prof, "energy": energy, "pump_perf": pump_perf,
             # BW sizing
             "bw_sizing": bw_sizing, "n_bw_systems": _n_bw_systems,
             # weight

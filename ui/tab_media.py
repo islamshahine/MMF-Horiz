@@ -30,6 +30,11 @@ def render_tab_media(inputs: dict, computed: dict):
     hydraulic_assist         = int(inputs.get("hydraulic_assist", 0))
     layers                   = inputs["layers"]
 
+    _sl_eff = float(computed.get("solid_loading_effective_kg_m2", solid_loading))
+    _mal = float(computed.get("maldistribution_factor", 1.0) or 1.0)
+    _la_list = computed.get("layer_areas_m2") or []
+    _layer_areas_kw = _la_list if len(_la_list) == len(layers) else None
+
     _layers_disp_df, _layers_clog_df = pressure_drop_layers_display_frames(bw_dp["layers"])
 
     st.subheader("Media design")
@@ -52,7 +57,7 @@ def render_tab_media(inputs: dict, computed: dict):
             f"ΔP_cake = α × μ × LV × M.  "
             f"α ({bw_dp['alpha_source']}) = "
             f"{bw_dp['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg  |  "
-            f"M_max = {fmt(solid_loading, 'loading_kg_m2', 2)}  |  "
+            f"M_max = {fmt(_sl_eff, 'loading_kg_m2', 2)}  |  "
             f"Feed: ρ={fmt(rho_feed, 'density_kg_m3', 1)}, μ={fmt(mu_feed * 1000.0, 'viscosity_cp', 4)}"
         )
         _load_data_dp = filter_loading(
@@ -65,12 +70,16 @@ def render_tab_media(inputs: dict, computed: dict):
                 layers=layers,
                 q_filter_m3h=q,
                 avg_area_m2=avg_area,
-                solid_loading_kg_m2=solid_loading,
+                solid_loading_kg_m2=_sl_eff,
                 captured_density_kg_m3=captured_solids_density,
                 water_temp_c=feed_temp,
                 rho_water=rho_feed,
                 alpha_m_kg=alpha_specific,
                 dp_trigger_bar=dp_trigger_bar,
+                layer_areas_m2=_layer_areas_kw,
+                maldistribution_factor=_mal,
+                alpha_calibration_factor=float(
+                    computed.get("alpha_calibration_factor", 1.0) or 1.0),
             )
             _dp_summary.append({
                 "Scenario":                              sc_label,
@@ -131,7 +140,8 @@ def render_tab_media(inputs: dict, computed: dict):
         st.dataframe(_layers_clog_df, use_container_width=True, hide_index=True)
         st.caption(
             "Support layers (e.g., Gravel) retain no solids. "
-            "Cake ΔP = α × μ × LV × M, distributed by capture fraction. "
+            "Cake ΔP = α × μ × LV × M, distributed by capture fraction — "
+            "filterable **capture weights should sum to 100%** (see Media tab). "
             "ΔεF shown for reference only — cake model, not voidage reduction, "
             "drives moderate/dirty ΔP."
         )

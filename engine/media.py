@@ -19,6 +19,19 @@ MEDIA_DATABASE = {
         "gac_modes": None,
     },
 
+    "Gravel (2–3 mm)": {
+        "d10": 2.5, "cu": 1.2, "epsilon0": 0.44,
+        "rho_p_eff": 2650, "d60": 3.0, "default_depth": 0.25,
+        "media_category": "support",
+        "density_class": "heavy", "bw_tendency": "low",
+        "bio_compatible": False,
+        "media_function": "Fine gravel support / drainage — 2–3 mm grading",
+        "process_role": "Bed support and uniform flow distribution under sand",
+        "lv_min": None, "lv_max": None,
+        "ebct_min": None, "ebct_max": None,
+        "gac_modes": None,
+    },
+
     "Fine Sand": {
         "d10": 0.8, "cu": 1.3, "epsilon0": 0.42,
         "rho_p_eff": 2650, "d60": 1.04, "default_depth": 0.80,
@@ -217,7 +230,8 @@ MEDIA_DATABASE = {
 
 # Aliases to match sidebar name variants (case differences + Unicode subscript)
 for _k, _v in [("Fine Sand", "Fine sand"), ("Fine Sand (Extra)", "Fine sand (extra)"),
-                ("Coarse Sand", "Coarse sand"), ("MnO2", "MnO₂")]:
+                ("Coarse Sand", "Coarse sand"), ("MnO2", "MnO₂"),
+                ("Gravel (2–3 mm)", "Gravel (2-3 mm)")]:
     MEDIA_DATABASE[_v] = MEDIA_DATABASE[_k]
 
 

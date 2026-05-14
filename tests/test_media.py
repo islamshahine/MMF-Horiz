@@ -61,6 +61,15 @@ class TestDatabaseIntegrity:
         """Garnet must be in the database (was missing in earlier versions)."""
         assert "Garnet" in get_media_names()
 
+    def test_gravel_2_3_mm_support_entry(self):
+        """Fine gravel 2–3 mm support — typical MMF underdrain / sand support."""
+        e = get_media("Gravel (2–3 mm)")
+        assert e["media_category"] == "support"
+        assert e["d10"] == pytest.approx(2.5, rel=0.01)
+        assert e["d60"] >= e["d10"]
+        assert e["lv_min"] is None and e["ebct_min"] is None
+        assert get_media("Gravel (2-3 mm)")["d10"] == pytest.approx(2.5, rel=0.01)
+
     @pytest.mark.parametrize("name", CORE_MEDIA)
     def test_required_fields_present(self, name):
         """Every core media entry must contain all required fields."""

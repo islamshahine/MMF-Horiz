@@ -14,6 +14,7 @@ import copy
 from typing import Any, Dict, List, Optional
 
 from engine.compute import compute_all
+from engine.thresholds import layer_ebct_floor_min, layer_lv_cap_m_h
 
 _REL = 1e-6
 
@@ -26,11 +27,8 @@ def _merge(base: dict, patch: dict) -> dict:
 
 def _merged_constraints(inputs: dict, constraints: Optional[dict]) -> Dict[str, Any]:
     """Resolve limits. ``max_dp_dirty_bar`` = ``None`` ⇒ skip ΔP check (cake model can exceed trigger)."""
-    ebct_thr = float(inputs.get("ebct_threshold", 5.0))
     c: Dict[str, Any] = {
-        "lv_max_m_h": float(inputs.get("velocity_threshold", 12.0)),
-        # Soft EBCT floor (80 % of guideline) for coarse grid MVP — pass ``ebct_min_min`` to tighten.
-        "ebct_min_min": ebct_thr * 0.80,
+        # Per-layer LV / EBCT checks use ``inputs`` + ``computed["base"]`` in ``constraint_check``.
         "max_dp_dirty_bar": None,
         "max_bw_flow_m3h": 1.0e7,
         "min_freeboard_m": 0.05,
@@ -95,15 +93,42 @@ def constraint_check(
     details["lv_n_m_h"] = lv
     if not (lv == lv):  # NaN
         violations.append("lv_missing")
-    elif lv > mc["lv_max_m_h"] + _REL:
-        violations.append("lv_exceeds_threshold")
+    else:
+        base = computed.get("base") or []
+        for b in base:
+            if b.get("is_support"):
+                continue
+            area = float(b.get("Area", 0.0))
+            if area <= 1e-12:
+                continue
+            v_layer = lv * (float(computed.get("avg_area", 0.0) or 0.0) / area) if area > 0 else float("nan")
+            cap = layer_lv_cap_m_h(b, inputs_fallback=inputs)
+            if v_layer > cap + _REL:
+                violations.append("lv_exceeds_threshold")
+                break
 
     eb = _min_ebct_minutes_n(computed)
     details["min_ebct_min"] = eb
     if not (eb == eb):
         violations.append("ebct_missing")
-    elif eb < mc["ebct_min_min"] - _REL:
-        violations.append("ebct_below_threshold")
+    else:
+        base = computed.get("base") or []
+        load_data = computed.get("load_data") or []
+        q_n = None
+        for x, _nact, q in load_data:
+            if x == 0:
+                q_n = float(q)
+                break
+        if q_n is not None and q_n > 0:
+            for b in base:
+                if b.get("is_support"):
+                    continue
+                vol = float(b.get("Vol", 0.0))
+                eb_layer = (vol / q_n) * 60.0
+                floor = layer_ebct_floor_min(b, inputs_fallback=inputs) * 0.80
+                if eb_layer < floor - _REL:
+                    violations.append("ebct_below_threshold")
+                    break
 
     dp_cap = mc.get("max_dp_dirty_bar")
     if isinstance(dp_cap, (int, float)):

@@ -495,6 +495,9 @@ def render_tab_report(inputs: dict, computed: dict):
                 ("ΔP BOL / EOL",
                  f"{fmt(cart_result['dp_clean_bar'], 'pressure_bar', 4)} / "
                  f"{fmt(cart_result['dp_eol_bar'], 'pressure_bar', 4)}"),
+                ("DHC basis",
+                 "Vendor datasheet" if cart_result.get("dhc_basis") == "vendor_override"
+                 else "Model (g/TIE × rating)"),
                 ("Annual element cost",
                  f"USD {cart_result['annual_cost_usd']:,.0f}"),
             ])
@@ -777,6 +780,7 @@ def render_tab_report(inputs: dict, computed: dict):
 | Elements / Housings | {cart_result['n_elements']} / {cart_result['n_housings']} |
 | Flow / element | {fmt(cart_result['actual_flow_m3h_element'], 'flow_m3h', 3)} ({fmt(cart_result['q_lpm_element'], 'flow_l_min', 1)}) |
 | ΔP BOL / EOL | {fmt(cart_result['dp_clean_bar'], 'pressure_bar', 4)} / {fmt(cart_result['dp_eol_bar'], 'pressure_bar', 4)} |
+| DHC basis | {"Vendor datasheet" if cart_result.get("dhc_basis") == "vendor_override" else "Model (g/TIE × rating)"} |
 | Annual element cost | USD {cart_result['annual_cost_usd']:,.0f} |
 """)
 

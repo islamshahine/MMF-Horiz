@@ -46,7 +46,8 @@ WIDGET_KEY_MAP: dict[str, str] = {
     "freeboard_mm": "fb_mm",   "dp_trigger_bar": "dp_trig", "support_type": "sup_t",
     "bw_s_drain": "bws1",      "bw_s_air": "bws2",    "bw_s_airw": "bws3",
     "bw_s_hw": "bws4",         "bw_s_settle": "bws5", "bw_s_fill": "bws6",
-    "vessel_pressure_bar": "ves_press", "blower_eta": "blower_eta",
+    "vessel_pressure_bar": "ves_press", "blower_air_delta_p_bar": "blower_air_dp",
+    "blower_eta": "blower_eta",
     "blower_inlet_temp_c": "blower_t",  "tank_sf": "tank_sf", "bw_head_mwc": "bw_hd",
     "air_header_dn": "ah_dn",
     "saddle_h": "sad_h",
@@ -70,6 +71,12 @@ WIDGET_KEY_MAP: dict[str, str] = {
     # Econ — carbon
     "grid_intensity": "grid_co2",    "steel_carbon_kg": "st_co2",
     "concrete_carbon_kg": "con_co2",
+    # Media — pilot calibration (explicit map for project reload / tooling)
+    "solid_loading_scale": "solid_loading_scale",
+    "maldistribution_factor": "maldistribution_factor",
+    "alpha_calibration_factor": "alpha_calibration_factor",
+    "tss_capture_efficiency": "tss_capture_efficiency",
+    "expansion_calibration_scale": "expansion_calibration_scale",
 }
 
 
@@ -116,6 +123,9 @@ def get_widget_state_map(inputs: dict) -> dict:
         result[f"cap_{i}"] = round(layer.get("capture_frac", 0.0) * 100, 1)
         if layer.get("gac_mode") is not None:
             result[f"gac_mode_{i}"] = layer["gac_mode"]
+    _cdo = float(inputs.get("cart_dhc_override_g", 0.0) or 0.0)
+    if _cdo > 1e-9:
+        result["cart_dhc_vendor"] = True
     return result
 
 

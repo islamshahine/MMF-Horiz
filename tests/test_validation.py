@@ -53,6 +53,66 @@ class TestValidateLayers:
         )
         assert not any("d10" in e for e in err)
 
+    def test_capture_weights_explicit_sum_not_100_warns(self):
+        err, warn = [], []
+        layers = [
+            {
+                "Type": "Gravel", "Depth": 0.2, "epsilon0": 0.46, "d10": 6.0,
+                "is_support": True,
+            },
+            {
+                "Type": "Fine sand", "Depth": 0.5, "epsilon0": 0.42, "d10": 0.8,
+                "is_support": False, "capture_frac": 0.4,
+            },
+            {
+                "Type": "Anthracite", "Depth": 0.5, "epsilon0": 0.48, "d10": 1.3,
+                "is_support": False, "capture_frac": 0.35,
+            },
+        ]
+        validate_layers(layers, err, warn)
+        assert not err
+        assert any("75.0%" in w for w in warn)
+
+    def test_capture_weights_explicit_sum_100_no_sum_warning(self):
+        err, warn = [], []
+        layers = [
+            {
+                "Type": "Gravel", "Depth": 0.2, "epsilon0": 0.46, "d10": 6.0,
+                "is_support": True,
+            },
+            {
+                "Type": "Fine sand", "Depth": 0.5, "epsilon0": 0.42, "d10": 0.8,
+                "is_support": False, "capture_frac": 0.5,
+            },
+            {
+                "Type": "Anthracite", "Depth": 0.5, "epsilon0": 0.48, "d10": 1.3,
+                "is_support": False, "capture_frac": 0.5,
+            },
+        ]
+        validate_layers(layers, err, warn)
+        assert not err
+        assert not any("sum to **" in w for w in warn)
+
+    def test_capture_weight_on_some_filterable_only_warns_mixed_mode(self):
+        err, warn = [], []
+        layers = [
+            {
+                "Type": "Gravel", "Depth": 0.2, "epsilon0": 0.46, "d10": 6.0,
+                "is_support": True,
+            },
+            {
+                "Type": "Fine sand", "Depth": 0.5, "epsilon0": 0.42, "d10": 0.8,
+                "is_support": False, "capture_frac": 0.5,
+            },
+            {
+                "Type": "Anthracite", "Depth": 0.5, "epsilon0": 0.48, "d10": 1.3,
+                "is_support": False,
+            },
+        ]
+        validate_layers(layers, err, warn)
+        assert not err
+        assert any("some but not all" in w for w in warn)
+
 
 class TestValidateInputs:
     def test_valid_reference_inputs(self):

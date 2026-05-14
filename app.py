@@ -37,6 +37,7 @@ from ui.tab_filtration  import render_tab_filtration
 from ui.tab_backwash    import render_tab_backwash
 from ui.tab_mechanical  import render_tab_mechanical
 from ui.tab_media       import render_tab_media
+from ui.tab_pump_costing import render_tab_pump_costing
 from ui.tab_economics   import render_tab_economics
 from ui.tab_assessment  import render_tab_assessment
 from ui.tab_report      import render_tab_report
@@ -173,9 +174,9 @@ with ctx:
 
 with main:
     (tab_filtration, tab_backwash, tab_mechanical,
-     tab_media, tab_economics, tab_assessment, tab_report, tab_compare) = st.tabs([
+     tab_media, tab_pumps, tab_economics, tab_assessment, tab_report, tab_compare) = st.tabs([
         "💧 Filtration", "🔄 Backwash", "⚙️ Mechanical",
-        "🧱 Media", "💰 Economics", "🎯 Assessment", "📄 Report",
+        "🧱 Media", "⚡ Pumps & power", "💰 Economics", "🎯 Assessment", "📄 Report",
         "⚖️ Compare",
     ])
 
@@ -190,6 +191,9 @@ with main:
 
     with tab_media:
         render_tab_media(inputs, computed)
+
+    with tab_pumps:
+        render_tab_pump_costing(inputs, computed)
 
     with tab_economics:
         render_tab_economics(inputs, computed)

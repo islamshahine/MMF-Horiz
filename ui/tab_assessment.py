@@ -7,6 +7,7 @@ import streamlit as st
 
 from engine.compute import compute_all
 from engine.sensitivity import OUTPUT_DEFS, run_sensitivity, tornado_narrative
+from engine.thresholds import layer_ebct_floor_min, layer_lv_cap_m_h
 from ui.helpers import dv, fmt, ulbl
 
 
@@ -30,8 +31,6 @@ def render_tab_assessment(inputs: dict, computed: dict):
     w_total         = computed["w_total"]
     wt_oper         = computed["wt_oper"]
 
-    velocity_threshold = inputs["velocity_threshold"]
-    ebct_threshold     = inputs["ebct_threshold"]
     design_pressure    = inputs["design_pressure"]
     design_temp        = inputs["design_temp"]
     total_flow         = inputs["total_flow"]
@@ -42,6 +41,15 @@ def render_tab_assessment(inputs: dict, computed: dict):
     corrosion          = inputs["corrosion"]
 
     st.subheader("Process assessment")
+
+    with st.expander("Process model scope — effluent, RTD, breakthrough", expanded=False):
+        st.markdown(
+            "This release focuses on **hydraulic envelope** (LV, EBCT), **scalar cake / solid loading** "
+            "(M_max, α), and **mass-based** cartridge life. It does **not** predict effluent TSS, "
+            "axial residence-time distribution (RTD), or breakthrough curves. "
+            "For consent-linked solids or polish quality, cross-check with pilot data, vendor norms, "
+            "or dedicated filtration models."
+        )
 
     st.markdown(
         f"""<div style="
@@ -121,11 +129,26 @@ def render_tab_assessment(inputs: dict, computed: dict):
     st.divider()
 
     st.markdown("### Key design parameters")
-    kp1, kp2, kp3, kp4 = st.columns(4)
-    kp1.metric(f"Velocity threshold ({ulbl('velocity_m_h')})", fmt(velocity_threshold, 'velocity_m_h', 1))
-    kp2.metric("EBCT threshold",                               f"{ebct_threshold:.1f} min")
-    kp3.metric(f"Design pressure ({ulbl('pressure_bar')})",    fmt(design_pressure, 'pressure_bar', 2))
-    kp4.metric("Design temperature", fmt(design_temp, "temperature_c", 0))
+    _thr_rows = []
+    for L in inputs.get("layers") or []:
+        if not isinstance(L, dict):
+            continue
+        if L.get("is_support"):
+            _thr_rows.append({
+                "Layer": L.get("Type", ""),
+                "Max LV": "— (support)",
+                "Min EBCT": "— (support)",
+            })
+        else:
+            _thr_rows.append({
+                "Layer": L.get("Type", ""),
+                "Max LV": fmt(layer_lv_cap_m_h(L, inputs_fallback=inputs), "velocity_m_h", 2),
+                "Min EBCT": f"{layer_ebct_floor_min(L, inputs_fallback=inputs):.1f} min",
+            })
+    st.markdown("**Per-layer LV / EBCT setpoints**")
+    st.dataframe(pd.DataFrame(_thr_rows), use_container_width=True, hide_index=True)
+
+    kp3, kp4 = st.columns(2)
 
     st.table(pd.DataFrame([
         [f"Total flow ({ulbl('flow_m3h')})",
@@ -141,9 +164,7 @@ def render_tab_assessment(inputs: dict, computed: dict):
          fmt(nominal_id, 'length_m', 3)],
         [f"Filter area ({ulbl('area_m2')})",
          fmt(avg_area, 'area_m2', 4)],
-        [f"Velocity threshold ({ulbl('velocity_m_h')})",
-         fmt(velocity_threshold, 'velocity_m_h', 1)],
-        ["EBCT threshold",      f"{ebct_threshold:.1f} min"],
+        ["LV / EBCT setpoints", "Per media layer (see table above)"],
         ["Material",            material_name],
         [f"Design pressure ({ulbl('pressure_bar')})",
          fmt(design_pressure, 'pressure_bar', 2)],

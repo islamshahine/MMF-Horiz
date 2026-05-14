@@ -16,11 +16,14 @@ from typing import Any, List, Sequence
 _MAT = {"ASTM A516-70": {"S_kgf_cm2": 1200, "T_max_c": 350, "rho": 7850}}
 _REF_LAYERS = [
     {"Type": "Gravel", "Depth": 0.20, "epsilon0": 0.46, "d10": 6.0, "cu": 1.0,
-     "rho_p_eff": 2600, "psi": 0.90, "is_porous": False, "is_support": True},
+     "rho_p_eff": 2600, "psi": 0.90, "is_porous": False, "is_support": True,
+     "lv_threshold_m_h": None, "ebct_threshold_min": None},
     {"Type": "Fine sand", "Depth": 0.80, "epsilon0": 0.42, "d10": 0.8, "cu": 1.3,
-     "rho_p_eff": 2650, "psi": 0.80, "is_porous": False, "is_support": False},
+     "rho_p_eff": 2650, "psi": 0.80, "is_porous": False, "is_support": False,
+     "lv_threshold_m_h": 12.0, "ebct_threshold_min": 4.0},
     {"Type": "Anthracite", "Depth": 0.80, "epsilon0": 0.48, "d10": 1.3, "cu": 1.5,
-     "rho_p_eff": 1450, "psi": 0.70, "is_porous": False, "is_support": False},
+     "rho_p_eff": 1450, "psi": 0.70, "is_porous": False, "is_support": False,
+     "lv_threshold_m_h": 15.0, "ebct_threshold_min": 2.0},
 ]
 REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
     "total_flow": 21000.0, "streams": 1, "n_filters": 16,
@@ -41,6 +44,9 @@ REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
     "collector_h": 4.2, "freeboard_mm": 200,
     "layers": copy.deepcopy(_REF_LAYERS),
     "solid_loading": 1.5, "captured_solids_density": 1020.0,
+    "solid_loading_scale": 1.0, "maldistribution_factor": 1.0,
+    "alpha_calibration_factor": 1.0, "tss_capture_efficiency": 1.0,
+    "expansion_calibration_scale": 1.0,
     "alpha_specific": 1e12, "dp_trigger_bar": 1.0,
     "bw_velocity": 30.0, "air_scour_rate": 55.0,
     "air_scour_mode": "manual", "air_scour_target_expansion_pct": 20.0,
@@ -49,7 +55,7 @@ REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
     "bw_cycles_day": 1,
     "bw_s_drain": 10, "bw_s_air": 1, "bw_s_airw": 5,
     "bw_s_hw": 10, "bw_s_settle": 2, "bw_s_fill": 10, "bw_total_min": 38,
-    "vessel_pressure_bar": 4.0, "blower_eta": 0.70, "blower_inlet_temp_c": 30.0,
+    "vessel_pressure_bar": 4.0, "blower_air_delta_p_bar": 0.15, "blower_eta": 0.70, "blower_inlet_temp_c": 30.0,
     "tank_sf": 1.5, "bw_head_mwc": 15.0,
     "default_rating": "150#", "nozzle_stub_len": 350, "strainer_mat": "SS 316L",
     "air_header_dn": 200, "manhole_dn": 600, "n_manholes": 1,
@@ -71,6 +77,8 @@ REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
     "ceramic_coats": 2, "ceramic_cost_m2": 0.0, "ceramic_labor_m2": 0.0,
     "cart_flow": 21000.0, "cart_size": '40"', "cart_rating": 10,
     "cart_housing": 40, "cart_cip": False,
+    "cart_dhc_override_g": 0.0,
+    "cf_sync_feed_tss": False, "cf_sync_tss_band": "avg",
     "cf_inlet_tss": 10.0, "cf_outlet_tss": 1.5,
     "dp_dist": 0.02, "dp_inlet_pipe": 0.30, "dp_outlet_pipe": 0.20,
     "p_residual": 0.5, "static_head": 0.0,
@@ -185,8 +193,59 @@ def validate_layers(layers: Any, errors: List[str], warnings: List[str]) -> None
                     f"Media layer {i + 1}: epsilon0 must be strictly between 0 and 1 (got {ev:g})."
                 )
 
+        if not layer.get("is_support"):
+            lvt = layer.get("lv_threshold_m_h")
+            if lvt is not None:
+                try:
+                    if float(lvt) <= 0.0:
+                        errors.append(
+                            f"Media layer {i + 1}: lv_threshold_m_h must be > 0 when set."
+                        )
+                except (TypeError, ValueError):
+                    errors.append(
+                        f"Media layer {i + 1}: lv_threshold_m_h must be numeric when set."
+                    )
+            ebt = layer.get("ebct_threshold_min")
+            if ebt is not None:
+                try:
+                    if float(ebt) <= 0.0:
+                        errors.append(
+                            f"Media layer {i + 1}: ebct_threshold_min must be > 0 when set."
+                        )
+                except (TypeError, ValueError):
+                    errors.append(
+                        f"Media layer {i + 1}: ebct_threshold_min must be numeric when set."
+                    )
 
-def validate_inputs(inputs: dict) -> dict:
+    # Capture weights (% of filterable solids) — explicit mode requires Σ = 100 %.
+    _non_sup = [L for L in layers if isinstance(L, dict) and not L.get("is_support")]
+    if _non_sup:
+        _has_cap = [L.get("capture_frac") is not None for L in _non_sup]
+        if any(_has_cap) and not all(_has_cap):
+            warnings.append(
+                "Media: capture weight is set on some but not all filterable layers — "
+                "layers without a weight use a **depth-proportional** share. "
+                "For an explicit **percentage split**, set capture weight on **every** filterable layer "
+                "so they sum to **100%**."
+            )
+        if _non_sup and all(L.get("capture_frac") is not None for L in _non_sup):
+            try:
+                sum_pct = sum(float(L["capture_frac"]) * 100.0 for L in _non_sup)
+            except (TypeError, ValueError):
+                warnings.append(
+                    "Media: capture_frac on filterable layers must be numeric when set."
+                )
+            else:
+                if abs(sum_pct - 100.0) > 0.5:
+                    warnings.append(
+                        f"Media: capture weights on filterable layers sum to **{sum_pct:.1f}%** "
+                        f"(target **100%** for a literal percentage cake split). "
+                        f"The engine still **normalises** relative weights in ΔP/cake — "
+                        f"adjust values or use **Normalize to 100%** in the sidebar."
+                    )
+
+
+def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     """
     Cross-check key engineering inputs (SI magnitudes, same contract as ``compute_all``).
 

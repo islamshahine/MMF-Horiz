@@ -88,6 +88,13 @@ def _rho_eff_porous(rho_dry: float, eps_p: float, rho_water: float = 1025.0) -> 
     return rho_dry + rho_water * eps_p
 
 
+def _apply_fouling_suggested_solid_loading() -> None:
+    """Runs before the rest of the script on button click — safe to set solid_loading."""
+    v = st.session_state.get("_fouling_last_sugg_disp")
+    if v is not None:
+        st.session_state["solid_loading"] = float(v)
+
+
 def _ensure_presets():
     if ("media_presets" not in st.session_state or
             set(st.session_state.media_presets.keys()) != set(_DEFAULT_MEDIA_PRESETS.keys())):
@@ -223,12 +230,10 @@ def render_sidebar(
         out["bw_temp"] = st.number_input(_lbl_bwt, value=_def_bwt, step=1.0, key="b_tmp")
 
         st.markdown("**Performance thresholds**")
-        _lbl_vt = f"Max LV ({unit_label('velocity_m_h', unit_system)})"
-        _def_vt = display_value(12.0, "velocity_m_h", unit_system)
-        out["velocity_threshold"] = st.number_input(_lbl_vt, value=_def_vt, key="velocity_threshold")
-        out["ebct_threshold"]     = st.number_input("Min EBCT (min)", value=5.0,  key="ebct_threshold")
-
-        st.markdown("**Cartridge filter**")
+        st.caption(
+            "**Max LV** and **min EBCT** setpoints are defined **per media layer** "
+            "in the **Media** tab (with each layer). Support layers show read-only N/A."
+        )
         out["cart_flow"]   = st.number_input(
             f"Design flow ({unit_label('flow_m3h', unit_system)})",
             value=float(out["total_flow"]),
@@ -245,16 +250,96 @@ def render_sidebar(
                                                    min_value=1, max_value=500, value=100, step=1, key="cart_hsg_custom")
         else:
             out["cart_housing"] = int(cart_hsg_sel)
-        _cf_inlet_max  = float(out["tss_avg"])
-        _cf_outlet_max = round(0.15 * out["tss_avg"], 2)
-        out["cf_inlet_tss"]  = st.number_input("CF inlet TSS (mg/L)", min_value=0.0,
-                                                max_value=_cf_inlet_max,
-                                                value=min(2.0, _cf_inlet_max), step=0.1,
-                                                format="%.2f", key="cf_inlet_tss")
-        out["cf_outlet_tss"] = st.number_input("CF outlet TSS — target (mg/L)", min_value=0.0,
-                                                max_value=_cf_outlet_max,
-                                                value=min(0.5, _cf_outlet_max), step=0.05,
-                                                format="%.2f", key="cf_outlet_tss")
+        _use_vendor_dhc = st.toggle(
+            "Vendor DHC override (g/element)",
+            value=False,
+            key="cart_dhc_vendor",
+            help=(
+                "By default, element life uses the built-in **g/TIE × rating** curve. "
+                "Enable to enter **total dirt-hold per element** from a supplier datasheet; "
+                "clean/EOL ΔP still follows the vendor quadratic flow curves."
+            ),
+        )
+        if _use_vendor_dhc:
+            out["cart_dhc_override_g"] = float(st.number_input(
+                "DHC per element (g)",
+                min_value=1.0, max_value=8000.0, value=180.0, step=5.0, format="%.0f",
+                key="cart_dhc_override_g",
+            ))
+        else:
+            out["cart_dhc_override_g"] = 0.0
+        _tss_lo = float(out["tss_low"])
+        _tss_md = float(out["tss_avg"])
+        _tss_hi = max(_tss_lo, _tss_md, float(out["tss_high"]))
+        out["cf_sync_feed_tss"] = st.toggle(
+            "Sync CF inlet TSS from MMF feed scenario",
+            value=False,
+            key="cf_sync_feed_tss",
+            help=(
+                "When enabled, CF inlet (MMF effluent basis for cartridge loading) follows the "
+                "same **low / average / high** feed TSS band as the BW solids scenarios. "
+                "Turn off to enter CF inlet manually (still capped at the highest feed TSS)."
+            ),
+        )
+        _band_opts = ("low", "avg", "high")
+        _band_fmt = {"low": "Low", "avg": "Average", "high": "High"}
+        if out["cf_sync_feed_tss"]:
+            _sb0 = str(st.session_state.get("cf_sync_tss_band", "avg"))
+            if _sb0 not in _band_opts:
+                _sb0 = "avg"
+            out["cf_sync_tss_band"] = st.radio(
+                "CF inlet matches feed TSS",
+                options=_band_opts,
+                format_func=lambda k: _band_fmt[str(k)],
+                index=_band_opts.index(_sb0),
+                horizontal=True,
+                key="cf_sync_tss_band",
+            )
+            _bind = float(out[f"tss_{out['cf_sync_tss_band']}"])
+            out["cf_inlet_tss"] = _bind
+            _cf_inlet_max = _bind
+            _cf_outlet_max = round(0.15 * _bind, 4)
+            st.caption(
+                f"CF inlet = **{_bind:.2f} mg/L** (feed {_band_fmt[out['cf_sync_tss_band']].lower()}). "
+                f"Outlet target ≤ **{_cf_outlet_max:.2f} mg/L** (15 % of that inlet)."
+            )
+            if "cf_outlet_tss" in st.session_state:
+                st.session_state["cf_outlet_tss"] = min(
+                    float(st.session_state["cf_outlet_tss"]), float(_cf_outlet_max),
+                )
+            out["cf_outlet_tss"] = st.number_input(
+                "CF outlet TSS — target (mg/L)", min_value=0.0,
+                max_value=float(_cf_outlet_max),
+                value=min(0.5, float(_cf_outlet_max)), step=0.05,
+                format="%.2f", key="cf_outlet_tss",
+            )
+        else:
+            out["cf_sync_tss_band"] = str(st.session_state.get("cf_sync_tss_band", "avg"))
+            if out["cf_sync_tss_band"] not in _band_opts:
+                out["cf_sync_tss_band"] = "avg"
+            _cf_inlet_max = _tss_hi
+            _cf_outlet_max = round(0.15 * _cf_inlet_max, 4)
+            if "cf_inlet_tss" in st.session_state:
+                st.session_state["cf_inlet_tss"] = min(
+                    float(st.session_state["cf_inlet_tss"]), float(_cf_inlet_max),
+                )
+            if "cf_outlet_tss" in st.session_state:
+                st.session_state["cf_outlet_tss"] = min(
+                    float(st.session_state["cf_outlet_tss"]), float(_cf_outlet_max),
+                )
+            out["cf_inlet_tss"] = st.number_input(
+                "CF inlet TSS (mg/L)", min_value=0.0,
+                max_value=float(_cf_inlet_max),
+                value=min(2.0, float(_cf_inlet_max)), step=0.1,
+                format="%.2f", key="cf_inlet_tss",
+                help="MMF effluent basis — capped at the **highest** of low / avg / high feed TSS.",
+            )
+            out["cf_outlet_tss"] = st.number_input(
+                "CF outlet TSS — target (mg/L)", min_value=0.0,
+                max_value=float(_cf_outlet_max),
+                value=min(0.5, float(_cf_outlet_max)), step=0.05,
+                format="%.2f", key="cf_outlet_tss",
+            )
 
     # ── Tab 2: Vessel ─────────────────────────────────────────────────────
     with vessel_tab:
@@ -462,6 +547,24 @@ def render_sidebar(
 
         st.markdown("**Media layers**")
         out["n_layers"] = int(st.selectbox("Layers", [1, 2, 3, 4, 5, 6], index=2, key="n_layers"))
+        # Normalize capture weights on the *next* run only, and only before cap_* widgets
+        # exist — Streamlit forbids assigning session_state keys that are already bound to
+        # widgets instantiated earlier in the same script run.
+        if st.session_state.pop("_pending_normalize_cap_weights", False):
+            _nl = out["n_layers"]
+
+            def _layer_is_support_sb(idx: int) -> bool:
+                if f"sup_{idx}" in st.session_state:
+                    return bool(st.session_state[f"sup_{idx}"])
+                return str(st.session_state.get(f"lt_{idx}", "")).strip() == "Gravel"
+
+            _idx_ns = [i for i in range(_nl) if not _layer_is_support_sb(i)]
+            _raw = [float(st.session_state.get(f"cap_{i}", 0.0)) for i in _idx_ns]
+            _tot = sum(_raw) or 1.0
+            for i, v in zip(_idx_ns, _raw):
+                st.session_state[f"cap_{i}"] = round(
+                    max(0.0, min(100.0, v / _tot * 100.0)), 2
+                )
         # Convert feed_temp display value back to SI for internal engine call
         _feed_temp_si   = si_value(out["feed_temp"], "temperature_c", unit_system)
         _rho_water_sb   = water_properties(_feed_temp_si, out["feed_sal"])["density_kg_m3"]
@@ -483,8 +586,13 @@ def render_sidebar(
             is_sup = st.checkbox("Support media (no clogging)",
                                  value=(m_type == "Gravel"), key=f"sup_{i}")
             if not is_sup:
-                cap_raw  = st.number_input("Capture weight", value=round(_depth_si * 100, 0),
-                                           step=5.0, min_value=0.0, key=f"cap_{i}")
+                cap_raw  = st.number_input(
+                    "Capture weight (% of filterable total)",
+                    value=round(_depth_si * 100, 0),
+                    step=5.0, min_value=0.0, max_value=100.0, key=f"cap_{i}",
+                    help="Share of **filterable** (non-support) cake load for this layer. "
+                         "All filterable layers should sum to **100%**.",
+                )
                 cap_frac = cap_raw / 100.0
             else:
                 cap_frac = 0.0
@@ -510,6 +618,48 @@ def render_sidebar(
                         f"Envelope — LV: {_lv_lo}–{_lv_hi} m/h · "
                         f"EBCT: {_eb_lo}–{_eb_hi} min"
                     )
+                _thr_c1, _thr_c2 = st.columns(2)
+                _def_lv_thr = float(_lv_hi) if _lv_hi is not None else 12.0
+                _def_eb_thr = float(_eb_lo) if _eb_lo is not None else 5.0
+                _lbl_lv_thr = f"Max LV setpoint ({unit_label('velocity_m_h', unit_system)})"
+                _lbl_eb_thr = "Min EBCT setpoint (min)"
+                _stp_lv_thr = display_value(0.5, "velocity_m_h", unit_system)
+                with _thr_c1:
+                    _lv_thr_disp = st.number_input(
+                        _lbl_lv_thr,
+                        value=display_value(_def_lv_thr, "velocity_m_h", unit_system),
+                        step=float(_stp_lv_thr),
+                        min_value=0.0,
+                        key=f"lv_thr_{i}",
+                        help="Upper limit for superficial velocity in this layer (envelope check).",
+                    )
+                with _thr_c2:
+                    _eb_thr_disp = st.number_input(
+                        _lbl_eb_thr,
+                        value=_def_eb_thr,
+                        step=0.25,
+                        min_value=0.0,
+                        key=f"ebct_thr_{i}",
+                        help="Lower limit for EBCT in this layer (minutes).",
+                    )
+                _lv_thr_val, _eb_thr_val = _lv_thr_disp, _eb_thr_disp
+            else:
+                _thr_c1, _thr_c2 = st.columns(2)
+                with _thr_c1:
+                    st.text_input(
+                        f"Max LV setpoint ({unit_label('velocity_m_h', unit_system)})",
+                        value="— support layer (N/A)",
+                        disabled=True,
+                        key=f"lv_thr_sup_{i}",
+                    )
+                with _thr_c2:
+                    st.text_input(
+                        "Min EBCT setpoint (min)",
+                        value="— support layer (N/A)",
+                        disabled=True,
+                        key=f"ebct_thr_sup_{i}",
+                    )
+                _lv_thr_val, _eb_thr_val = None, None
 
             data = preset.copy()
             if m_type == "Custom":
@@ -545,14 +695,68 @@ def render_sidebar(
                 data["rho_p_eff"] = round(_rho_eff, 1)
             layers.append({**data, "Type": m_type, "Depth": depth,
                            "is_support": is_sup, "capture_frac": cap_frac,
-                           "gac_mode": gac_mode})
+                           "gac_mode": gac_mode,
+                           "lv_threshold_m_h": _lv_thr_val,
+                           "ebct_threshold_min": _eb_thr_val})
         out["layers"] = layers
+
+        _cap_sum_pct = sum(
+            float(l.get("capture_frac", 0.0) or 0.0) * 100.0
+            for l in layers if not l.get("is_support")
+        )
+        if any(not l.get("is_support") for l in layers):
+            st.caption(
+                f"**Filterable capture weights Σ = {_cap_sum_pct:.1f}%** — target **100%** "
+                "for a literal percentage split on cake ΔP distribution."
+            )
+            if abs(_cap_sum_pct - 100.0) > 0.51:
+                st.warning(
+                    f"Capture weights sum to **{_cap_sum_pct:.1f}%**, not 100%. "
+                    "The engine **normalises** to relative weights for ΔP/cake. "
+                    "Use **Normalize to 100%** to scale filterable entries proportionally."
+                )
+            if st.button("Normalize capture weights to 100%", type="secondary", key="norm_cap_weights"):
+                st.session_state["_pending_normalize_cap_weights"] = True
+                st.rerun()
 
         st.markdown("**Filtration performance**")
         _lbl_sl = f"Solid loading before BW ({unit_label('loading_kg_m2', unit_system)})"
         _def_sl = display_value(1.5, "loading_kg_m2", unit_system)
         _stp_sl = display_value(0.1, "loading_kg_m2", unit_system)
         out["solid_loading"]          = st.number_input(_lbl_sl, value=_def_sl, step=_stp_sl, key="solid_loading")
+
+        with st.expander("Advanced — pilot / field calibration factors", expanded=False):
+            st.caption(
+                "**M_max scale** scales the solids inventory used in ΔP dirty and BW trigger math "
+                "(not the label value above). **Maldistribution (≥1)** inflates superficial velocity for "
+                "Ergun + cake (distributor / wall effects). **α factor** scales cake resistance after "
+                "auto or user α. **TSS capture** is the fraction of feed TSS assumed to deposit for cycle-time "
+                "estimates. **Expansion scale** adjusts R–Z expanded bed height increment (pilot vs correlation)."
+            )
+            _c1a, _c2a = st.columns(2)
+            with _c1a:
+                out["solid_loading_scale"] = st.number_input(
+                    "M_max scale (−)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
+                    key="solid_loading_scale",
+                )
+                out["maldistribution_factor"] = st.number_input(
+                    "Maldistribution factor (≥1)", value=1.0, min_value=1.0, max_value=2.0, step=0.05,
+                    key="maldistribution_factor",
+                )
+            with _c2a:
+                out["alpha_calibration_factor"] = st.number_input(
+                    "α calibration factor (−)", value=1.0, min_value=0.3, max_value=3.0, step=0.05,
+                    key="alpha_calibration_factor",
+                )
+                out["tss_capture_efficiency"] = st.number_input(
+                    "TSS capture efficiency (0–1)", value=1.0, min_value=0.0, max_value=1.0, step=0.05,
+                    key="tss_capture_efficiency",
+                )
+            out["expansion_calibration_scale"] = st.number_input(
+                "BW expansion increment scale (0.5–1.5)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
+                key="expansion_calibration_scale",
+                help="Scales only the **expanded height increment** above settled depth per layer (1 = model).",
+            )
 
         with st.expander("Fouling assistant — SDI / MFI → suggested **M_max**", expanded=False):
             st.caption(
@@ -609,6 +813,7 @@ def render_sidebar(
             )
             _sugg_si = float(_esl["solid_loading_kg_m2"])
             _sugg_disp = display_value(_sugg_si, "loading_kg_m2", unit_system)
+            st.session_state["_fouling_last_sugg_disp"] = round(float(_sugg_disp), 5)
             st.markdown(
                 f"**Suggested M_max:** {_sugg_disp:.3f} {unit_label('loading_kg_m2', unit_system)}  ·  "
                 f"**Fouling score:** {_sev['score']:.0f}/100 — {_sev['severity']}"
@@ -628,9 +833,11 @@ def render_sidebar(
                 if _w and _w not in _seen_fw:
                     _seen_fw.add(_w)
                     st.warning(_w)
-            if st.button("Apply suggested solid loading", key="fouling_apply_mmax"):
-                st.session_state["solid_loading"] = round(_sugg_disp, 5)
-                st.rerun()
+            st.button(
+                "Apply suggested solid loading",
+                key="fouling_apply_mmax",
+                on_click=_apply_fouling_suggested_solid_loading,
+            )
 
         _lbl_csd = f"Captured solids density ({unit_label('density_kg_m3', unit_system)})"
         _def_csd = display_value(1020.0, "density_kg_m3", unit_system)
@@ -753,6 +960,22 @@ def render_sidebar(
             f"Vessel operating pressure ({unit_label('pressure_bar', unit_system)} g)",
             value=2.0, step=float(display_value(0.5, "pressure_bar", unit_system)),
             min_value=0.0, key="ves_press")
+        st.caption(
+            "Used for **Nm³/h ↔ in-situ air volume** conversion only — **not** blower discharge pressure."
+        )
+        out["blower_air_delta_p_bar"] = st.number_input(
+            f"Air scour blower ΔP — air side ({unit_label('pressure_bar', unit_system)} g)",
+            value=float(display_value(0.15, "pressure_bar", unit_system)),
+            step=float(display_value(0.02, "pressure_bar", unit_system)),
+            min_value=0.0,
+            max_value=float(display_value(1.2, "pressure_bar", unit_system)),
+            key="blower_air_dp",
+            help=(
+                "**Beyond** the hydrostatic column (submergence). Covers sparger, distribution, "
+                "and piping losses — **not** the liquid filtration operating gauge. "
+                "Typical MMF air scour: **~0.1–0.25 bar**; lobe PD blowers rarely exceed **~0.9 bar** total ΔP."
+            ),
+        )
         out["blower_eta"]           = st.number_input("Blower isentropic efficiency", value=0.70,
                                                         step=0.01, min_value=0.30, max_value=0.95, key="blower_eta")
         _lbl_blowt = f"Blower inlet air temperature ({unit_label('temperature_c', unit_system)})"
@@ -912,11 +1135,30 @@ def render_sidebar(
         )
 
         st.markdown("**Carbon footprint**")
+        st.caption(
+            "**Operational CO₂** = grid intensity (below) × annual electrical energy from the **Energy** "
+            "model (filtration + backwash + auxiliaries in scope). **Construction CO₂** = factors × "
+            "steel, concrete, and media masses. Use a project-specific grid factor (PEF / residual mix / "
+            "PPA) where available — quick presets are indicative only."
+        )
+        _gp1, _gp2, _gp3, _gp4 = st.columns(4)
+        with _gp1:
+            if st.button("Grid 0.20", key="grid_preset_020", help="Indicative low-carbon / high-renewables"):
+                st.session_state["grid_co2"] = 0.20
+        with _gp2:
+            if st.button("Grid 0.45", key="grid_preset_045", help="Indicative global average order-of-magnitude"):
+                st.session_state["grid_co2"] = 0.45
+        with _gp3:
+            if st.button("Grid 0.70", key="grid_preset_070", help="Indicative fossil-intensive grid"):
+                st.session_state["grid_co2"] = 0.70
+        with _gp4:
+            st.caption("Presets set the field →")
         out["grid_intensity"]       = st.number_input("Grid intensity (kgCO₂/kWh)", value=0.45, step=0.01, key="grid_co2")
         out["steel_carbon_kg"]      = st.number_input("Steel embodied carbon (kgCO₂/kg)", value=1.85, step=0.05, key="st_co2")
         out["concrete_carbon_kg"]   = st.number_input("Concrete embodied carbon (kgCO₂/kg)", value=0.13, step=0.01, key="con_co2")
         _CARBON_DEFAULTS = {
-            "Gravel": 0.004, "Fine sand": 0.006, "Fine sand (extra)": 0.006,
+            "Gravel": 0.004, "Gravel (2–3 mm)": 0.004, "Gravel (2-3 mm)": 0.004,
+            "Fine sand": 0.006, "Fine sand (extra)": 0.006,
             "Coarse sand": 0.006, "Anthracite": 0.150, "Garnet": 0.010,
             "MnO₂": 0.080, "MnO2": 0.080, "Limestone": 0.020,
             "Medium GAC": 2.500, "Biodagene": 0.020, "Schist": 0.010,
