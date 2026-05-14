@@ -2,6 +2,7 @@
 import streamlit as st
 from engine.water import water_properties, FEED_PRESETS, BW_PRESETS
 from engine.media import get_media_names, get_media, get_lv_range, get_ebct_range, get_gac_note
+from engine.fouling import estimate_fouling_severity, estimate_run_time, estimate_solids_loading
 from engine.units import (
     UNIT_SYSTEMS, display_value, si_value,
     unit_label, convert_inputs,
@@ -552,6 +553,85 @@ def render_sidebar(
         _def_sl = display_value(1.5, "loading_kg_m2", unit_system)
         _stp_sl = display_value(0.1, "loading_kg_m2", unit_system)
         out["solid_loading"]          = st.number_input(_lbl_sl, value=_def_sl, step=_stp_sl, key="solid_loading")
+
+        with st.expander("Fouling assistant — SDI / MFI → suggested **M_max**", expanded=False):
+            st.caption(
+                "Empirical correlation from `engine/fouling.py` (order-of-magnitude). "
+                "MFI is a **0–10+ severity index** from your lab protocol — not raw s/L²."
+            )
+            _vth_disp = float(out.get("velocity_threshold") or 12.0)
+            _vth_si = si_value(_vth_disp, "velocity_m_h", unit_system)
+            _def_lv_si = max(4.0, min(float(_vth_si) * 0.88, 14.0))
+            _lbl_flv = f"Filtration LV for correlation ({unit_label('velocity_m_h', unit_system)})"
+            _def_flv = display_value(_def_lv_si, "velocity_m_h", unit_system)
+            _stp_flv = display_value(0.5, "velocity_m_h", unit_system)
+            _f_lv_disp = st.number_input(
+                _lbl_flv,
+                value=_def_flv,
+                step=float(_stp_flv),
+                min_value=0.0,
+                key="fouling_lv_mh",
+                help="Typical superficial velocity at the media (N scenario). Defaults below your max LV threshold.",
+            )
+            _c1f, _c2f = st.columns(2)
+            with _c1f:
+                _f_sdi = st.number_input(
+                    "SDI₁₅ (−)",
+                    value=3.0,
+                    min_value=0.0,
+                    max_value=15.0,
+                    step=0.1,
+                    key="fouling_sdi",
+                )
+            with _c2f:
+                _f_mfi = st.number_input(
+                    "MFI index (−)",
+                    value=2.0,
+                    min_value=0.0,
+                    max_value=15.0,
+                    step=0.1,
+                    key="fouling_mfi",
+                )
+            _lv_si = si_value(float(_f_lv_disp), "velocity_m_h", unit_system)
+            _lv_si = max(0.1, float(_lv_si))
+            _tss_use = max(0.05, float(out.get("tss_avg", 10.0)))
+            _esl = estimate_solids_loading(
+                tss_mg_l=_tss_use,
+                lv_m_h=_lv_si,
+                sdi15=float(_f_sdi),
+                mfi_index=float(_f_mfi),
+            )
+            _sev = estimate_fouling_severity(
+                sdi15=float(_f_sdi),
+                mfi_index=float(_f_mfi),
+                tss_mg_l=_tss_use,
+                lv_m_h=_lv_si,
+            )
+            _sugg_si = float(_esl["solid_loading_kg_m2"])
+            _sugg_disp = display_value(_sugg_si, "loading_kg_m2", unit_system)
+            st.markdown(
+                f"**Suggested M_max:** {_sugg_disp:.3f} {unit_label('loading_kg_m2', unit_system)}  ·  "
+                f"**Fouling score:** {_sev['score']:.0f}/100 — {_sev['severity']}"
+            )
+            _rt = estimate_run_time(
+                sdi15=float(_f_sdi),
+                mfi_index=float(_f_mfi),
+                tss_mg_l=_tss_use,
+                lv_m_h=_lv_si,
+            )
+            st.caption(
+                f"Indicative filter run time (same fouling model): **~{_rt['run_time_h']:.1f} h** "
+                f"between backwashes — advisory only; set BW cycles / day separately."
+            )
+            _seen_fw = set()
+            for _w in _esl.get("warnings", ()) + _sev.get("warnings", ()) + _rt.get("warnings", ()):
+                if _w and _w not in _seen_fw:
+                    _seen_fw.add(_w)
+                    st.warning(_w)
+            if st.button("Apply suggested solid loading", key="fouling_apply_mmax"):
+                st.session_state["solid_loading"] = round(_sugg_disp, 5)
+                st.rerun()
+
         _lbl_csd = f"Captured solids density ({unit_label('density_kg_m3', unit_system)})"
         _def_csd = display_value(1020.0, "density_kg_m3", unit_system)
         _stp_csd = display_value(10.0, "density_kg_m3", unit_system)

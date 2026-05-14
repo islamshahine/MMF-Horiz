@@ -22,8 +22,10 @@ Sizing basis
     a_N = a_40 × k²,  b_N = b_40 × k,  c_N = c_40
   Direct vendor override: 60" @ 5 µm  (a=0.0002, b=0.1025, c=−6.3865).
 • Dirt holding capacity (DHC):
-    Polymer (standard) : 30 g/TIE per element (Table 10)
+    Polymer (standard) : 30 g/TIE per element (Table 10, reference @ 5 µm)
     SS 316L (CIP)      : 45 g/TIE per element (metal media holds more solids)
+    Rating multiplier  : finer absolute ratings → lower effective DHC (tighter media),
+      so replacement interval does not invert vs coarser ratings when flow/element drops.
 • End-of-life trigger: ΔP ≥ 1.0 bar (vendor range 0.69–1.0 bar).
 • Optimisation: iterate all standard element lengths; map n_elements to nearest
   MARKET_ROUND ≥ n_elements; fewest housings = recommended configuration.
@@ -81,8 +83,17 @@ _DP_OVERRIDE: dict = {
 DP_REPLACEMENT_BAR = 1.00   # EOL ΔP trigger (vendor range 0.69–1.00 bar)
 
 # ── Dirt holding capacity ─────────────────────────────────────────────────────
-DHC_G_PER_TIE        = 30.0   # g/TIE — polymer (standard) — Table 10
+DHC_G_PER_TIE        = 30.0   # g/TIE — polymer (standard) — Table 10 (reference @ 5 µm)
 DHC_G_PER_TIE_SS316L = 45.0   # g/TIE — SS 316L metal media (higher void volume)
+
+# Finer absolute ratings hold less mass before the same ΔP trip (tighter pleat / less void).
+# Without this, sizing gives **more** elements @ 1 µm → **less** flow/element → **longer** life than 10 µm,
+# which reverses physical expectation. Multiplier applies to DHC only (same TSS mass balance).
+_DHC_RATING_MULT: dict[int, float] = {
+    1:  0.52,   # ~tighter media vs 5 µm reference
+    5:  1.00,
+    10: 1.22,   # coarser → higher DHC; tuned with BASE_FLOW_TIE so life increases 1→5→10 µm
+}
 
 # ── Fallback replacement interval when TSS loading is zero (days) ─────────────
 # Used only by cartridge_optimise() which has no TSS inputs.
@@ -204,6 +215,7 @@ def cartridge_design(
     Derived from mass balance:
         loading [g/h/element] = (cf_inlet − cf_outlet) [g/m³] × q [m³/h/element]
         interval [h]          = DHC [g] / loading [g/h]
+    DHC [g]                 = (g/TIE × ties) × rating multiplier (finer → lower DHC).
     Capped at _MAX_INTERVAL_DAYS. Falls back to rating-based table when loading = 0.
 
     ΔP profile
@@ -245,7 +257,7 @@ def cartridge_design(
 
     # 5-point ΔP vs accumulated-mass curve (fraction of DHC)
     dhc_per_tie = DHC_G_PER_TIE_SS316L if is_CIP_system else DHC_G_PER_TIE
-    dhc_g       = dhc_per_tie * ties
+    dhc_g       = dhc_per_tie * ties * _DHC_RATING_MULT[rating_um]
     dp_curve    = [
         {
             "mass_frac": f,
@@ -365,7 +377,7 @@ def cartridge_optimise(
         dp_clean_mbar = _dp_mbar(q_lpm, size_label, rating_um)
         dp_eol_mbar   = DP_REPLACEMENT_BAR * 1000.0   # EOL = replacement trigger
         fill_pct      = 100.0 * n_elem / (n_housings * best_round)
-        dhc_g         = dhc_per_tie * ties
+        dhc_g         = dhc_per_tie * ties * _DHC_RATING_MULT[rating_um]
 
         rows.append({
             "size":           size_label,

@@ -131,6 +131,11 @@ with ctx:
 
 computed = compute_all_cached(inputs)
 _iv = computed.get("input_validation") or {}
+if computed.get("compute_used_reference_fallback"):
+    st.error(
+        "**Reference baseline run** — inputs failed validation. All tabs show **built-in SI reference** "
+        "results, not your sidebar values, until the errors below are fixed."
+    )
 for _msg in _iv.get("errors", ()):
     st.error(_msg)
 for _msg in _iv.get("warnings", ()):
@@ -138,11 +143,6 @@ for _msg in _iv.get("warnings", ()):
 if _iv.get("errors"):
     st.caption(
         "Validation uses **SI** internally (same as the engine), regardless of the unit toggle."
-    )
-if _iv.get("errors") and computed.get("compute_used_reference_fallback"):
-    st.info(
-        "Engineering inputs failed validation — showing **reference baseline** results "
-        "(SI) until inputs are corrected."
     )
 
 # ── Status badges (context column, below sidebar tabs) ────────────────────────
