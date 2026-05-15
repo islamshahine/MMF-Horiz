@@ -217,7 +217,7 @@ L_expanded  = L₀ × (1 − ε₀) / (1 − ε_fluidised)
 - `u_mf` — Wen & Yu (1966) for fluidisation onset.
 - `n` — Richardson–Zaki exponent from Re_mf.
 
-**Air scour:** user rate or **auto-solve** equivalent velocity for target expansion % (`air_scour_mode`).
+**Air scour:** manual rate, or **auto** (`air_scour_mode` = `auto_expansion`) — bisection to find **minimum** air-equivalent superficial velocity for target net bed expansion (Richardson–Zaki stack). After `bw_system_sizing`, `air_scour_solve` carries **`p_blower_motor_kw` / `p_blower_shaft_kw`** (thermo screening on fixed ΔP and η); Compare **B** mirrors sidebar controls.
 
 **Collector check:** expanded bed top vs `collector_h`; freeboard vs `freeboard_mm` (via `collector_ext`).
 
@@ -531,7 +531,7 @@ Use these prompts with AI or workshops. Each axis is independent — mix and mat
 | Direction | Description |
 |-----------|-------------|
 | **Design library** | SQLite UI for projects, snapshots, named scenarios (engine exists). |
-| **Multi-case workspace** | 3–10 designs on one canvas; not only A vs B. |
+| **Multi-case workspace** | **MVP (≤4 cases):** `engine/compare_workspace.py` + Compare tab canvas; richer 3–10-case UI still aspirational. |
 | **Requirements traceability** | Link each input to P&ID tag / DBR line item. |
 | **Collaboration** | Comment threads on assessment drivers; revision diff on JSON. |
 | **API-first clients** | ERP / estimating tools POST designs; return PDF + metrics only. |
@@ -545,9 +545,9 @@ Use these prompts with AI or workshops. Each axis is independent — mix and mat
 | **2D / 1D collector model** | Lateral ΔP, orifice discharge → maldistribution factor from physics. |
 | **Biofouling module** | Algae/bacterial layer growth tied to temperature, chlorine, run time. |
 | **GAC adsorption** | Breakthrough curves for DOC/TOC proxy; mode-dependent EBCT. |
-| **Air scour optimiser** | Solve `air_scour_rate` for target expansion + minimum blower kW. |
+| **Air scour optimiser** | **MVP delivered:** min air-equivalent rate for target expansion; thermo blower kW on `air_scour_solve`. **Still open:** VFD law, real blower maps, multi-objective vs water scour. |
 | **Dynamic BW scheduler** | MILP: minimise peak concurrent BW given train rules. |
-| **CFD export** | **Delivered (MVP)** — `collector_cfd_export.py` JSON + orifice CSV from 1B+ model. |
+| **CFD export** | **Delivered (MVP)** — `collector_cfd_export.py` JSON + orifice CSV; `normalize_cfd_export_format()` maps legacy UI labels (e.g. display strings) to internal keys. |
 | **Vertical vessel path** | Second geometry kernel (major fork — high effort). |
 
 ### 8.3 Content / UX ideas
@@ -692,7 +692,7 @@ Statements the platform should *not* overclaim:
 | **Basis** | Design basis & traceability export | **Done** — `design_basis_report.py`, PDF/Word section, `build_design_basis()` |
 | **1B+** | Dual-end feed + orifice network + CFD BC export | **Done (MVP)** — `collector_manifold.py`, `collector_cfd_export.py`; in-app CFD backlog |
 | **Bench** | Collector hand-calc regression suite | **Done** — `engine/collector_benchmarks.py` (8 cases); Backwash expander |
-| **Cmp+** | Multi-case compare (3+ designs) | **Next (P2)** — after benchmarks |
+| **Cmp+** | Multi-case compare (≤4 designs) | **Done (MVP)** — `engine/compare_workspace.py`, Compare tab; CSV-friendly still A/B-centric in places |
 | **Sched** | Dynamic BW scheduler | **Done (MVP)** — multi-day horizon + `optimized_trains`; MILP/DCS out of scope |
 
 #### Phase 3 — Platform scale (10+ weeks)
@@ -770,7 +770,7 @@ Steps 1–4 from external prompt are good; map to **existing** sidebar keys:
 | Optimisation UI + Pareto rank | High | Medium | **P1** (with Phase 1) |
 | Design basis / traceability | High (enterprise) | Medium | **P1–2** |
 | Dynamic BW scheduler | High | High | **P2–3** |
-| Multi-design (>2) | Medium | Medium | **P2** (`project_db` exists) |
+| Multi-design (>2) | Medium | Medium | **P2** — **MVP delivered** (`compare_workspace`, ≤4); full named library UI backlog |
 | Uncertainty → economics | Medium | Medium | **P3** |
 | Media ageing curves | Medium | High | **P3** |
 

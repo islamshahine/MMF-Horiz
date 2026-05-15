@@ -409,7 +409,7 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | **Optimisation (grid MVP)** | `engine/optimisation.py` — `constraint_check`, `evaluate_candidate`, `optimise_design` (merge patches, rank by `capex` / `opex` / `steel` / `carbon`); **`pareto_capex_opex`** (non-dominated feasible subset on CAPEX vs annual OPEX). Uses **`compute_all` only**. Default EBCT rule: **min layer EBCT ≥ 0.8 × `ebct_threshold`** (documented soft band); optional **`max_dp_dirty_bar`**, steel cap, etc. | `tests/test_optimisation.py`, `tests/test_optimisation_pareto.py` |
 | **Media fill budget (indicative)** | `engine/media_pricing.py` — plant-wide media inventory USD from layer volumes + economics keys + region factor; Media tab expander. | `tests/test_media_pricing.py` |
 
-**requirements.txt** (API): `fastapi`, `uvicorn[standard]`, `httpx`. **`.gitignore`:** `aquasight.db`, `logs/`.
+**requirements.txt** (API): `fastapi`, `uvicorn[standard]`, `httpx`. **`.gitignore`:** `aquasight.db`, `logs/`, `__pycache__/`, `.pytest_cache/`, `.coverage`, `htmlcov/` (bytecode and coverage not tracked in git).
 
 ---
 
@@ -426,7 +426,7 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 
 | Item | Done | Missing / next |
 |------|------|----------------|
-| **Collector 1B+** | Dual-end header screening, per-hole network table, CFD BC export (JSON/CSV) | In-app CFD solve, 3D tee FEA, nozzle-plate network |
+| **Collector 1B+** | Dual-end header screening, per-hole network table, CFD BC export (JSON/CSV; `normalize_cfd_export_format` tolerates legacy UI labels) | In-app CFD solve, 3D tee FEA, nozzle-plate network |
 | **Global optimiser** | Grid ranker + Assessment apply; **Pareto CAPEX vs annual OPEX** (non-dominated feasible) in Assessment expander | MILP / gradient search; richer multi-objective UI |
 
 ---
@@ -436,18 +436,18 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | # | Topic | Notes |
 |---|--------|--------|
 | 1 | **Global / automatic optimiser** | No MILP or gradient search; grid ranker + apply-to-sidebar; **2-objective Pareto (CAPEX vs annual OPEX)** on feasible grid rows only. |
-| 2 | **Multi-case comparison** | Compare tab = **A vs B** + CSV; no 3+ cases, no named library. |
+| 2 | **Multi-case comparison** | **Done (MVP)** — Compare workspace (≤4 cases), `engine/compare_workspace.py`; primary UI remains **A vs B** + CSV export. |
 | 3 | **Vendor nozzle catalogue** | **Done (MVP)** — `engine/nozzle_plate_catalogue.py`, Media sidebar + tab reference table. |
 | 4 | **Live BW scheduler** | **24 h schematic** Gantt + stagger exists; no multi-day optimiser / ops Gantt tied to plant DCS. |
 | 5 | **External media pricing** | **MVP:** user USD/m³ + region factor in `media_pricing.py` + Media tab; no vendor database or API feed. |
 | 6 | **Collector CFD / full manifold** | **1B+ MVP delivered** — dual-end feed, orifice network, external CFD BC export; in-app CFD / 3D still backlog. |
-| 7 | **Air scour auto-tune** | **Done (MVP):** Sidebar **Air scour sizing** → **Auto — target net bed expansion (%)** (`air_scour_mode`=`auto_expansion`); `engine/backwash.py` `solve_equivalent_velocity_for_target_expansion_pct`; `compute_all` → `air_scour_solve`; Backwash tab readout; `tests/test_backwash.py` + `test_integration.py`. *(Extended optimiser: min blower kW — backlog.)* |
+| 7 | **Air scour auto-tune** | **Done (MVP):** `auto_expansion` solves **minimum** air-equivalent superficial velocity for target net expansion (bisection on R–Z stack); `air_scour_solve` includes `objective`, thermo **`p_blower_motor_kw` / `p_blower_shaft_kw`** (after `bw_system_sizing`); Backwash + sidebar copy; Design **B** on Compare tab has same manual/auto controls. `tests/test_backwash.py`, `test_integration.py`. *(Further: VFD/blower-map multi-objective — backlog.)* |
 | 8 | **Test depth** | **Smoke:** `tests/test_report_drawing_smoke.py`; **Sensitivity:** `tests/test_sensitivity.py` (`run_sensitivity`). **Media / coating:** `tests/test_media.py` (labels + `get_layer_intelligence`); **`tests/test_coating.py`** (areas + lining branches). |
 | 9 | **Uncertainty → economics** | **Done:** `cycle_economics` LCOW band (BW energy scaled from cycle envelope). |
 | 10 | **Monte Carlo lite** | Deferred — envelope (2A) preferred for Streamlit UX. |
 
 **Narrative (updated 2026-05)**  
-Platform hardening (project library, hydrate, imperial validation, design basis, 1A/1B collector, 2A uncertainty + LCOW band, fouling workflow, optimisation UX, **media fill budget**, **optimiser Pareto preview**) is **in repo**. Remaining leverage: MILP/gradient optimiser, vendor price feeds, in-app CFD, deeper sensitivity tests.
+Platform hardening (project library, hydrate, imperial validation, design basis, 1A/1B collector + **plan/elevation schematics** (dimensions moved below vessel where noted), 2A uncertainty + LCOW band, fouling workflow, optimisation UX + **Pareto**, **media fill budget**, **multi-case compare workspace**, **CFD export** robustness, **auto air-scour** with screening blower kW readout) is **in repo**. Git tracks **source only** (no `__pycache__` in index). Remaining leverage: MILP/gradient optimiser, vendor price feeds, in-app CFD, optional CI, deeper branch tests.
 
 ---
 
@@ -479,3 +479,5 @@ Rows **1–11** match **Section A** (original v2). Rows **12–13** are recent h
 | 20 | **Project library + unified hydrate** — SQLite panel (search, snapshots, export); deferred load before widgets | `ui/project_library.py`, `ui/project_session.py`, `engine/project_db.py` |
 | 21 | **Design basis in reports** — assumptions, traceability, collector block in PDF/Word | `engine/design_basis.py`, `engine/design_basis_report.py`, `ui/tab_report.py` |
 | 22 | **Imperial validation + Compare unit sync** — display-aligned validator messages; Compare B widgets on toggle | `engine/validators.py`, `ui/compare_units.py`, `tests/test_compare_units.py` |
+| 23 | **Auto air scour + screening blower kW** — `air_scour_solve` enrichment; Backwash expander; Compare B air mode | `engine/compute.py`, `engine/backwash.py`, `ui/tab_backwash.py`, `ui/tab_compare.py`, `ui/sidebar.py` |
+| 24 | **Multi-case compare workspace (≤4)** + **CFD export aliases** — `compare_workspace`; `normalize_cfd_export_format` in `build_cfd_export_bytes` | `engine/compare_workspace.py`, `engine/collector_cfd_export.py`, `ui/tab_compare.py`, `tests/test_compare_workspace.py`, `tests/test_collector_manifold.py` |
