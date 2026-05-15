@@ -18,8 +18,9 @@
 8. [Enhancement compass](#8-enhancement-compass-for-outside-the-box-thinking)
 9. [Epistemic limits & honesty](#9-epistemic-limits--honesty)
 10. [Quick reference — correlations](#10-quick-reference--correlations)
+11. [Development priorities — reconciled view](#11-development-priorities--reconciled-view-vs-external-roadmap) *(end of §11: **Shipped deltas (2026-05)**)*
 
----
+**Also in §3:** multi-case compare workspace (**§3.15**), CFD BC export contract (**§3.16**), collector schematic UI (**§3.17**).
 
 ## 1. Platform philosophy
 
@@ -69,6 +70,7 @@ validate_inputs → (fallback REFERENCE_FALLBACK_INPUTS if invalid)
     → cartridge (parallel path)
     → energy (hydraulic budget + annual kWh from metered BW duty)
     → BW equipment sizing (pump/blower/tank)
+    → merge thermo blower screening into ``air_scour_solve`` (motor/shaft kW, objective — after sizing)
     → pump performance package
     → weights, lining, operating weight, saddle design
     → economics + lifecycle financials
@@ -88,7 +90,7 @@ validate_inputs → (fallback REFERENCE_FALLBACK_INPUTS if invalid)
 
 - `engine/validators.py` — structural checks on required keys, positive flows, layer sanity.
 - Invalid inputs → compute still runs on **reference fallback** so UI does not blank; banners show errors.
-- Validation messages quote **SI** magnitudes (known UX gap for imperial users).
+- **Display units in errors:** Many geometry and duty checks format magnitudes in **metric or imperial** when `unit_system` is available (`format_value` path). Compare **B** stays consistent on unit toggle via `ui/compare_units.py`. **Residual gap:** not every validation branch is imperial-aware; engine math remains SI.
 
 ---
 
@@ -339,6 +341,49 @@ Outputs: peak LV, min EBCT, CAPEX, dirty ΔP → tornado chart + narrative.
 
 ---
 
+### 3.15 Multi-case compare workspace (`engine/compare_workspace.py`)
+
+Pure-Python matrix on top of existing `compute_all` outputs — no second physics path.
+
+| Function / rule | Role |
+|------------------|------|
+| `MAX_COMPARE_CASES` (= 4) | `compare_many_designs` raises if `< 2` or `> 4` cases. |
+| `snapshot_case_inputs(inputs, label)` | Serializable `{ "label", "inputs" }` for session / library pins. |
+| `compare_many_designs(cases)` | `cases` = `list[tuple[str, dict]]` of `(label, computed)` in display order. Builds rows from the same **`COMPARISON_METRICS`** tuple as A vs B (`engine/comparison.py`): each row has `metric`, `unit_quantity`, `decimals`, one key per case label with the scalar value, and optional **`spread_pct`** `(max − min) / \|first\| × 100` when ≥2 numeric values exist. |
+
+**UI:** Compare tab keeps the **Design A vs Design B** strip (incremental Δ, `diff_value`, NPV narrative). The **workspace** adds 2–4 pinned cases, each from a full `compute_all`, in one metric table. **CSV** export for the multi-case grid is tab-owned; financial “B minus A” semantics stay on the primary pair.
+
+---
+
+### 3.16 CFD boundary-condition export (`engine/collector_cfd_export.py`)
+
+**Not** an in-app CFD solve — exports **1D / 1B+ screening** boundary data for external mesh tools (OpenFOAM, Fluent, etc.).
+
+| Artifact | Contents |
+|----------|----------|
+| `build_collector_cfd_bundle(inputs, computed)` | Dict with `schema_version` (`aquasight.collector_cfd.v1`), `export_timestamp_utc`, **`disclaimer`** (screening-only), **`project`**, **`fluid`** (`rho_kg_m3`, `mu_pa_s` from BW properties in `computed`, temperature, phase label), **`geometry_si`** (vessel length/ID, header ID, lateral DN/length/orifice pitch counts, `header_feed_mode`). |
+| `hydraulics_screening` | `q_bw_m3h`, `maldistribution_factor`, `flow_imbalance_pct`, header/orifice velocity caps, distribution residual, optional dual-end comparison blob. |
+| `boundaries` | Screening velocity inlet(s) on header(s); per-hole **`mass_flow_outlet`** entries built from `orifice_network` (**first 500** holes also listed here for patch-style BCs; full list remains under `orifice_network`). |
+| `lateral_profile`, `orifice_network` | Copies from `computed["collector_hyd"]`. |
+| `openfoam_hints`, `ansys_fluent_hints` | Non-executable workflow notes. |
+
+**Serialisation:**
+
+- `bundle_to_json(bundle)` — pretty-printed UTF-8 JSON.
+- `orifice_network_to_csv(rows)` — header `lateral_index,hole_index,station_m,y_along_lateral_m,flow_m3h,velocity_m_s,orifice_d_mm` then one row per hole.
+
+**Format selection (UI-safe):** `normalize_cfd_export_format(fmt)` maps arbitrary session strings to **`json`** or **`csv_orifices`** (heuristic: substring `csv` + `orifice` → CSV; `json` → JSON; default **json**). `build_cfd_export_bytes(bundle, fmt)` **always** normalises before encoding and returns `(bytes, filename, mime)`.
+
+---
+
+### 3.17 Collector hydraulics schematic (UI)
+
+- **Module:** `ui/collector_hyd_schematic.py` — Matplotlib **plan** and **elevation** from `inputs` + `computed["collector_hyd"]`.
+- **Layout:** Longitudinal dimensions and figure captions are placed **below** the vessel outline to free the drawing window; legend and label positions tuned to reduce overlap with internals.
+- **Scope:** Engineering communication and QA of the 1A/1B model — **not** a fabrication drawing.
+
+---
+
 ## 4. Assessment & decision logic
 
 ### 4.1 Per-layer severity (`compute.py`)
@@ -375,7 +420,7 @@ Stored as `rob_rows` with **SI** `lv_m_h` (not pre-formatted strings).
 
 ### 4.4 Design comparison (`engine/comparison.py`)
 
-13 metrics with % difference and 5% (or metric-specific) significance threshold:
+**14** rows in `COMPARISON_METRICS` — per-metric % difference and 5% (or metric-specific) significance threshold:
 
 - Hydraulics, ΔP, BW, weight, CAPEX, OPEX.
 - `favours` A or B when difference exceeds threshold and direction matches `higher_is_better`.
@@ -474,7 +519,7 @@ These let experienced users tune models without forking code:
 - No wizard / design basis document import (JSON only).
 - Limited reverse-solve (“I need LCOW < X → suggest N”).
 - Layer threshold widgets not fully round-tripped in project JSON.
-- Imperial validation messages use `format_value` when `unit_system=imperial` (geometry errors); Compare B widgets transpose on unit toggle (`ui/compare_units.py`).
+- **Imperial:** many validators use `format_value` when `unit_system=imperial`; Compare B uses `ui/compare_units.py` on toggle. Some rare branches may still report SI-only strings — see §2.3.
 
 ---
 
@@ -492,7 +537,7 @@ These let experienced users tune models without forking code:
 | 💰 Economics | “What does it cost and emit? Lifecycle cash?” |
 | 🎯 Assessment | “Is it safe? What if we lose a filter? What moves NPV?” |
 | 📄 Report | “Give me a file for the client.” |
-| ⚖️ Compare | “Is B better than A on 13 metrics + incremental NPV?” |
+| ⚖️ Compare | “Is **B vs A** better on **14** `COMPARISON_METRICS` + incremental NPV? Optional **workspace**: **2–4** full `compute_all` cases, same metric rows + spread.” |
 
 ### 7.2 Display rules
 
@@ -519,6 +564,10 @@ These let experienced users tune models without forking code:
 | **Media life narrative** | Link cycle duration → replacement interval → OPEX |
 | **Client mode** | Hide calibration knobs; show only outcomes |
 | **Engineer mode** | Expose α, mal-distribution, raw SI in tooltips |
+
+### 7.5 Collector schematic presentation
+
+Plan/elevation figures live on **Backwash** (collector hydraulics). Layout and annotation rules are in **§3.17** — bottom-heavy dimensions and caption placement for readability.
 
 ---
 
@@ -796,5 +845,19 @@ assumptions, limits, runtime (ms per compute_all call).
 
 ---
 
-*Document version: 2026-05 — includes §11 reconciled development priorities.*
+### Shipped deltas (2026-05)
+
+Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.15–§3.17, §7.1, §7.5, and §8:
+
+| Topic | Summary |
+|-------|---------|
+| **Air scour** | `auto_expansion` finds **minimum** air-equivalent superficial velocity for target net expansion; after `bw_system_sizing`, **`air_scour_solve`** includes motor/shaft blower kW and objective; Compare **B** mirrors sidebar air-scour mode widgets. |
+| **Multi-case compare** | `compare_workspace` (**≤4** cases), shared **`COMPARISON_METRICS`** with A/B; CSV/workspace on Compare tab. |
+| **CFD export** | Full BC **JSON** bundle + **orifice CSV**; **`normalize_cfd_export_format`** maps legacy UI labels to `json` / `csv_orifices`. |
+| **Schematic** | `collector_hyd_schematic` — dimensions below vessel, cleaner legend/captions (§3.17). |
+| **Tests (indicative)** | e.g. `tests/test_compare_workspace.py`, `tests/test_collector_manifold.py` (normalize), `tests/test_integration.py` (air scour auto), `tests/test_backwash.py`. |
+
+---
+
+*Document version: 2026-05 — includes §11 reconciled development priorities, §3.15–§3.17, and shipped deltas.*
 
