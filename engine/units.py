@@ -62,6 +62,12 @@ QUANTITIES = {
         1.0 / 1.699,
         1.699,
     ),
+    # Volumetric air flux per filter area (STP normal m³); imperial ≈ SCFM/ft².
+    "air_flux_nm3_m2h": (
+        "Nm³/m²·h", "SCFM/ft²",
+        1.0 / (1.699 * 10.7639),
+        1.699 * 10.7639,
+    ),
     "flow_m3_min": (
         "m³/min", "ft³/min",
         35.3147,
@@ -164,6 +170,11 @@ QUANTITIES = {
         "kg CO₂/kWh", "lb CO₂/kWh",
         2.20462,
         0.453592,
+    ),
+    # Embodied / material factors (mass ratio — value unchanged; label only)
+    "co2_per_kg_material": (
+        "kg CO₂/kg", "lb CO₂/lb",
+        1.0, 1.0,
     ),
     # Areal loading (cake / solids on media)
     "loading_kg_m2": (
@@ -356,6 +367,11 @@ INPUT_QUANTITY_MAP = {
     "total_length":       "length_m",
     "nozzle_plate_h":     "length_m",
     "collector_h":        "length_m",
+    "collector_header_id_m": "length_m",
+    "lateral_spacing_m":  "length_m",
+    "lateral_length_m":   "length_m",
+    "lateral_dn_mm":      "length_mm",
+    "lateral_orifice_d_mm": "length_mm",
     "feed_temp":          "temperature_c",
     "bw_temp":            "temperature_c",
     "temp_low":           "temperature_c",
@@ -392,6 +408,11 @@ INPUT_QUANTITY_MAP = {
     "solid_loading":      "loading_kg_m2",
     "captured_solids_density": "density_kg_m3",
     "steel_density":      "density_kg_m3",
+    "steel_cost_usd_kg":      "cost_usd_per_kg",
+    "erection_usd_per_kg_steel": "cost_usd_per_kg",
+    "labor_usd_per_kg_steel": "cost_usd_per_kg",
+    "civil_usd_per_kg_working": "cost_usd_per_kg",
+    "chemical_cost_m3":       "cost_usd_per_m3",
     "bw_head_mwc":        "pressure_mwc",
     "static_head":        "pressure_mwc",
     "basic_wind_ms":      "velocity_m_s",

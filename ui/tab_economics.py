@@ -11,17 +11,32 @@ except ImportError:
     _make_subplots = None  # type: ignore[misc, assignment]
 
 from engine.economics import global_benchmark_comparison, npv_lifecycle_cost_profile
+from engine.financial_economics import build_econ_financial
 from engine.pump_performance import economics_energy_from_pump_configuration
 
 from ui.helpers import fmt, ulbl, dv, fmt_annual_flow_volume, fmt_si_range
+from engine.units import display_value as _display_value
+from ui.scroll_markers import inject_anchor
+
+
+def _migrate_pump_econ_align_key() -> None:
+    """One-time: legacy checkbox lived on Economics; canonical key is on Pumps tab."""
+    if "pp_align_econ_energy" not in st.session_state and "econ_align_pump_tab_energy" in st.session_state:
+        st.session_state["pp_align_econ_energy"] = bool(
+            st.session_state["econ_align_pump_tab_energy"]
+        )
 
 
 def render_tab_economics(inputs: dict, computed: dict):
+    inject_anchor("mmf-anchor-main-economics")
     econ_capex = computed["econ_capex"]
     econ_npv = computed.get("econ_npv") or {}
     energy = computed.get("energy") or {}
 
     steel_cost_usd_kg = inputs["steel_cost_usd_kg"]
+    erection_usd_per_kg_steel = float(inputs.get("erection_usd_per_kg_steel", 0.625))
+    labor_usd_per_kg_steel = float(inputs.get("labor_usd_per_kg_steel", 0.25))
+    civil_usd_per_kg_working = float(inputs.get("civil_usd_per_kg_working", 0.10))
     engineering_pct = inputs["engineering_pct"]
     contingency_pct = inputs["contingency_pct"]
     media_replace_years = inputs["media_replace_years"]
@@ -38,14 +53,11 @@ def render_tab_economics(inputs: dict, computed: dict):
     econ_opex = computed["econ_opex"]
     econ_carbon = computed["econ_carbon"]
     econ_bench = computed["econ_bench"]
+    econ_financial = computed.get("econ_financial") or {}
 
-    use_pp_energy = st.checkbox(
-        "Align **annual electricity** (OPEX energy line, CO₂ operational, benchmarks) with **Pumps & power**",
-        value=False,
-        key="econ_align_pump_tab_energy",
-        help="Uses parallel feed pump count, IE3/IE4 from Pumps tab, DOL vs VFD BW philosophy, blower count & mode.",
-    )
-    if use_pp_energy and computed.get("pump_perf") and computed.get("hyd_prof"):
+    _migrate_pump_econ_align_key()
+    align_econ = bool(st.session_state.get("pp_align_econ_energy", False))
+    if align_econ and computed.get("pump_perf") and computed.get("hyd_prof"):
         pp = computed["pump_perf"]
         hyd = computed["hyd_prof"]
         ek = economics_energy_from_pump_configuration(
@@ -56,9 +68,7 @@ def render_tab_economics(inputs: dict, computed: dict):
             streams=int(inputs["streams"]),
             n_feed_pumps_parallel_per_stream=int(st.session_state.get("pp_n_feed_parallel", 1)),
             pump_eta_user=float(inputs.get("pump_eta") or 0.75),
-            motor_eta_feed=(
-                0.955 if st.session_state.get("pp_feed_iec", "IE3") == "IE3" else 0.965
-            ),
+            motor_eta_feed=float(inputs.get("motor_eta") or 0.955),
             rho_feed=float(computed.get("rho_feed") or 1025.0),
             bw_philosophy=str(st.session_state.get("pp_econ_bw_phil", "DOL")),
             blower_operating_mode=str(st.session_state.get("pp_blower_mode", "single_duty")),
@@ -111,14 +121,30 @@ def render_tab_economics(inputs: dict, computed: dict):
             discount_rate_pct=float(discount_rate),
             design_life_years=dlife,
         )
+        econ_financial = build_econ_financial(
+            inputs=inputs,
+            econ_capex=econ_capex,
+            econ_opex=econ_opex,
+            econ_carbon=econ_carbon,
+            econ_bench=econ_bench,
+            lining_result=computed.get("lining_result") or {},
+            n_vessels=int(_n_total_vessels),
+        )
 
     st.subheader("Economics — CAPEX · OPEX · Carbon · Benchmarks")
     st.caption(
         "**Energy model (default):** central metered-style kWh from **compute**. "
-        "With **Align … Pumps & power** enabled, filtration kWh scales with **parallel feed pumps** "
-        "and motor class, BW pump kWh follows **DOL vs VFD** from the Pumps tab, and blower kWh can use the "
-        "**twin centrifugal** rough mode — OPEX energy, CO₂, benchmarks, and NPV update accordingly."
+        "Enable **Link Economics electricity to pump model** on the **Pumps & power** tab to rescale "
+        "filtration kWh (parallel feed pumps, **motor efficiency class**), BW pump kWh (DOL vs VFD philosophy), and "
+        "blower kWh (operating mode) — then OPEX energy, CO₂ operational, benchmarks, and NPV follow that scenario."
     )
+    if st.session_state.get("pp_align_econ_energy"):
+        st.info(
+            "**Pump-model linkage is active** (configured on **Pumps & power** → **Power & Economics linkage**). "
+            "Metrics below use that tab’s parallel feed count, **motor efficiency class** (IE3/IE4), BW philosophy, and blower mode "
+            "when **compute** includes pump hydraulics. **Lifecycle financial (expander 6)** is rebuilt from the same linked "
+            "OPEX so NPV / IRR / cash flows match headline energy."
+        )
 
     em1, em2, em3, em4 = st.columns(4)
     em1.metric("Total CAPEX",
@@ -129,19 +155,55 @@ def render_tab_economics(inputs: dict, computed: dict):
                f"USD {econ_opex['total_opex_usd_yr']:,.0f}/yr",
                delta=f"{fmt(econ_bench['opex_per_m3'], 'cost_usd_per_m3', 4)}  {econ_bench['opex_status']}",
                delta_color="off")
-    em3.metric("LCOW",
+    em3.metric(f"LCOW ({ulbl('cost_usd_per_m3')})",
                fmt(econ_bench["lcow"], "cost_usd_per_m3", 4),
                delta=econ_bench["lcow_status"],
                delta_color="off")
-    em4.metric("CO₂ operational",
+    em4.metric(f"CO₂ operational ({ulbl('co2_intensity_kg_m3')})",
                fmt(econ_carbon["co2_per_m3_operational"], "co2_intensity_kg_m3", 4),
                delta=econ_bench["carbon_status"],
                delta_color="off")
+
+    _cycle_econ = computed.get("cycle_economics") or {}
+    if _cycle_econ:
+        with st.expander(
+            "LCOW band — cycle uncertainty (optimistic / expected / conservative)",
+            expanded=False,
+        ):
+            st.caption(_cycle_econ.get("note", ""))
+            lc1, lc2, lc3, lc4 = st.columns(4)
+            lc1.metric(
+                f"LCOW optimistic ({ulbl('cost_usd_per_m3')})",
+                fmt(_cycle_econ["lcow_optimistic_usd_m3"], "cost_usd_per_m3", 4),
+                help="Longer run time between backwashes — lower BW energy OPEX.",
+            )
+            lc2.metric(
+                f"LCOW expected ({ulbl('cost_usd_per_m3')})",
+                fmt(_cycle_econ["lcow_expected_usd_m3"], "cost_usd_per_m3", 4),
+            )
+            lc3.metric(
+                f"LCOW conservative ({ulbl('cost_usd_per_m3')})",
+                fmt(_cycle_econ["lcow_conservative_usd_m3"], "cost_usd_per_m3", 4),
+                help="Shorter run time — more backwashes — higher BW energy OPEX.",
+            )
+            lc4.metric(
+                "LCOW spread",
+                f"{_cycle_econ.get('lcow_spread_pct', 0):.1f} %",
+            )
+            st.caption(
+                f"Headline LCOW metric uses the base OPEX case "
+                f"({fmt(econ_bench['lcow'], 'cost_usd_per_m3', 4)}). "
+                f"Band scales **BW pump + blower** energy only "
+                f"(×{_cycle_econ.get('bw_energy_scale_optimistic', 1):.3f} optimistic · "
+                f"×{_cycle_econ.get('bw_energy_scale_conservative', 1):.3f} conservative vs expected cycle). "
+                f"See **Filtration → cycle uncertainty** for run-time hours."
+            )
 
     with st.expander("1 · CAPEX breakdown", expanded=True):
         _capex_items = {
             "Steel (structure)": econ_capex["steel_cost_usd"],
             "Erection":          econ_capex["erection_usd"],
+            "Field labor (steel)": econ_capex["labor_usd"],
             "Piping":            econ_capex["piping_usd"],
             "Instrumentation":   econ_capex["instrumentation_usd"],
             "Civil works":       econ_capex["civil_usd"],
@@ -151,15 +213,25 @@ def render_tab_economics(inputs: dict, computed: dict):
         c_left, c_right = st.columns([1, 1])
         with c_left:
             _total = max(econ_capex["total_capex_usd"], 1)
-            st.table(pd.DataFrame(
-                [[k, f"USD {v:,.0f}", f"{v/_total*100:.1f} %"]
-                 for k, v in _capex_items.items()]
-                + [["**TOTAL**",
-                    f"**USD {econ_capex['total_capex_usd']:,.0f}**",
-                    "**100 %**"]],
-                columns=["Item", "Cost (USD)", "Share"]))
+            st.dataframe(
+                pd.DataFrame(
+                    [[k, f"USD {v:,.0f}", f"{v/_total*100:.1f} %"]
+                     for k, v in _capex_items.items()]
+                    + [["**TOTAL**",
+                        f"**USD {econ_capex['total_capex_usd']:,.0f}**",
+                        "**100 %**"]],
+                    columns=["Item", "Cost (USD)", "Share"],
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
             st.caption(
-                f"{_n_total_vessels} vessels · steel {fmt(steel_cost_usd_kg, 'cost_usd_per_kg', 2)} · "
+                f"{_n_total_vessels} vessels · installed steel **{fmt(float(computed.get('w_total') or 0), 'mass_kg', 0)}** / vessel · "
+                f"operating weight **{fmt(float((computed.get('wt_oper') or {}).get('w_operating_kg') or 0), 'mass_kg', 0)}** / vessel · "
+                f"steel **{fmt(steel_cost_usd_kg, 'cost_usd_per_kg', 2)}** · "
+                f"erection **{fmt(erection_usd_per_kg_steel, 'cost_usd_per_kg', 2)}** · "
+                f"labor **{fmt(labor_usd_per_kg_steel, 'cost_usd_per_kg', 2)}** · "
+                f"civil **{fmt(civil_usd_per_kg_working, 'cost_usd_per_kg', 2)}** / op. kg · "
                 f"engineering {engineering_pct:.0f} % · contingency {contingency_pct:.0f} %"
             )
         with c_right:
@@ -190,34 +262,35 @@ def render_tab_economics(inputs: dict, computed: dict):
         o_left, o_right = st.columns([1, 1])
         with o_left:
             _total_op = max(econ_opex["total_opex_usd_yr"], 1)
-            st.table(pd.DataFrame(
-                [[k, f"USD {v:,.0f}/yr", f"{v/_total_op*100:.1f} %"]
-                 for k, v in _opex_items.items()]
-                + [["**TOTAL**",
-                    f"**USD {econ_opex['total_opex_usd_yr']:,.0f}/yr**",
-                    "**100 %**"]],
-                columns=["Item", "Cost (USD/yr)", "Share"]))
+            st.dataframe(
+                pd.DataFrame(
+                    [[k, f"USD {v:,.0f}/yr", f"{v/_total_op*100:.1f} %"]
+                     for k, v in _opex_items.items()]
+                    + [["**TOTAL**",
+                        f"**USD {econ_opex['total_opex_usd_yr']:,.0f}/yr**",
+                        "**100 %**"]],
+                    columns=["Item", "Cost (USD/yr)", "Share"],
+                ),
+                use_container_width=True,
+                hide_index=True,
+            )
             st.caption(
                 f"Specific OPEX: **{fmt(econ_opex['opex_per_m3_usd'], 'cost_usd_per_m3', 4)}**  ·  "
                 f"Annual flow: {fmt_annual_flow_volume(econ_opex['annual_flow_m3'])}  ·  "
-                f"Media interval: {media_replace_years:.0f} yr"
-            )
-            _hpd = float(energy.get("h_bw_pump_plant_day", 0) or 0)
-            _had = float(energy.get("h_blower_plant_day", 0) or 0)
-            st.info(
-                "**BW electricity duty (plant-wide, design case)** — hours per day summed over all "
-                "filters at rated power: **BW water pump** ≈ "
-                f"**{_hpd:.2f}** h/day · **air scour blower** ≈ **{_had:.2f}** h/day "
-                "(from BW step durations × feasibility **N** cycles/filter/day). "
-                "Annual energy and operational CO₂ use **kWh = kW × these hours** for BW loads, "
-                "not 24/7 pump power."
+                f"Media interval: {media_replace_years:.0f} yr  ·  "
+                "BW duty hours and optional pump-model linkage: **Pumps & power** tab."
             )
             if econ_opex.get("energy_kwh_filtration_yr") is not None:
+                _ef = float(econ_opex["energy_kwh_filtration_yr"])
+                _ebw = float(econ_opex["energy_kwh_bw_pump_yr"])
+                _ebl = float(econ_opex["energy_kwh_blower_yr"])
+                _kwh_tot = float(econ_opex.get("energy_kwh_yr") or (_ef + _ebw + _ebl))
+                _ec_usd = float(econ_opex["energy_cost_usd_yr"])
                 st.caption(
-                    f"Annual electricity (metered-style): filtration "
-                    f"**{econ_opex['energy_kwh_filtration_yr']:,.0f}** kWh/yr · BW pump "
-                    f"**{econ_opex['energy_kwh_bw_pump_yr']:,.0f}** · blower "
-                    f"**{econ_opex['energy_kwh_blower_yr']:,.0f}**."
+                    f"**Annual electricity (metered-style):** filtration **{_ef:,.0f}** · "
+                    f"BW pump **{_ebw:,.0f}** · blower **{_ebl:,.0f}** kWh/yr → **total {_kwh_tot:,.0f}** kWh/yr. "
+                    f"The **Energy** row above is **{_kwh_tot:,.0f}** kWh/yr × **{elec_tariff:g}** USD/kWh ≈ **USD {_ec_usd:,.0f}/yr** "
+                    f"(**Pumps & power** shows the same kWh total as **linked model** when pump-model linkage is on)."
                 )
         with o_right:
             if _PLOTLY_OK:
@@ -236,41 +309,45 @@ def render_tab_economics(inputs: dict, computed: dict):
 
     with st.expander("3 · Carbon footprint", expanded=True):
         cf1, cf2, cf3, cf4 = st.columns(4)
-        cf1.metric("Operational CO₂/yr",
+        cf1.metric(f"Operational CO₂ ({ulbl('mass_kg')}/yr)",
                    fmt(econ_carbon["co2_operational_kg_yr"], "mass_kg", 0) + "/yr")
-        cf2.metric("Construction CO₂",
+        cf2.metric(f"Construction CO₂ ({ulbl('mass_t')})",
                    fmt(econ_carbon["co2_construction_kg"] / 1000.0, "mass_t", 1))
-        cf3.metric("Lifecycle CO₂",
+        cf3.metric(f"Lifecycle CO₂ ({ulbl('mass_t')})",
                    fmt(econ_carbon["co2_lifecycle_kg"] / 1000.0, "mass_t", 1),
                    delta=f"over {econ_carbon['design_life_years']} yr",
                    delta_color="off")
-        cf4.metric("Specific operational",
+        cf4.metric(f"Specific operational ({ulbl('co2_intensity_kg_m3')})",
                    fmt(econ_carbon["co2_per_m3_operational"], "co2_intensity_kg_m3", 4),
                    delta=econ_bench["carbon_status"], delta_color="off")
-        st.table(pd.DataFrame([
-            ["Operational CO₂ / year",
-             fmt(econ_carbon["co2_operational_kg_yr"], "mass_kg", 0) + "/yr",
-             f"Grid: {fmt(grid_intensity, 'co2_kg_per_kwh', 3)}"],
-            ["Construction — steel",
-             fmt(econ_carbon["co2_steel_kg"], "mass_kg", 0),
-             f"{steel_carbon_kg:.2f} kgCO₂/kg steel"],
-            ["Construction — media",
-             fmt(econ_carbon["co2_media_kg"], "mass_kg", 0),
-             "Weighted by mass"],
-            ["Construction — concrete",
-             fmt(econ_carbon["co2_concrete_kg"], "mass_kg", 0),
-             f"{concrete_carbon_kg:.2f} kgCO₂/kg"],
-            ["Lifecycle total",
-             fmt(econ_carbon["co2_lifecycle_kg"], "mass_kg", 0),
-             f"= {fmt(econ_carbon['co2_lifecycle_kg'] / 1000.0, 'mass_t', 1)} "
-             f"over {econ_carbon['design_life_years']} yr"],
-            ["Specific — operational",
-             fmt(econ_carbon["co2_per_m3_operational"], "co2_intensity_kg_m3", 4),
-             econ_bench["carbon_status"]],
-            ["Specific — lifecycle",
-             fmt(econ_carbon["co2_per_m3_lifecycle"], "co2_intensity_kg_m3", 4),
-             "Incl. construction, amortised"],
-        ], columns=["Item", "Value", "Basis"]))
+        st.dataframe(
+            pd.DataFrame([
+                ["Operational CO₂ / year",
+                 fmt(econ_carbon["co2_operational_kg_yr"], "mass_kg", 0) + "/yr",
+                 f"Grid: {fmt(grid_intensity, 'co2_kg_per_kwh', 3)}"],
+                ["Construction — steel",
+                 fmt(econ_carbon["co2_steel_kg"], "mass_kg", 0),
+                 f"{fmt(steel_carbon_kg, 'co2_per_kg_material', 2)} steel"],
+                ["Construction — media",
+                 fmt(econ_carbon["co2_media_kg"], "mass_kg", 0),
+                 "Weighted by mass"],
+                ["Construction — concrete",
+                 fmt(econ_carbon["co2_concrete_kg"], "mass_kg", 0),
+                 fmt(concrete_carbon_kg, "co2_per_kg_material", 2)],
+                ["Lifecycle total",
+                 fmt(econ_carbon["co2_lifecycle_kg"], "mass_kg", 0),
+                 f"= {fmt(econ_carbon['co2_lifecycle_kg'] / 1000.0, 'mass_t', 1)} "
+                 f"over {econ_carbon['design_life_years']} yr"],
+                ["Specific — operational",
+                 fmt(econ_carbon["co2_per_m3_operational"], "co2_intensity_kg_m3", 4),
+                 econ_bench["carbon_status"]],
+                ["Specific — lifecycle",
+                 fmt(econ_carbon["co2_per_m3_lifecycle"], "co2_intensity_kg_m3", 4),
+                 "Incl. construction, amortised"],
+            ], columns=["Item", "Value", "Basis"]),
+            use_container_width=True,
+            hide_index=True,
+        )
 
     with st.expander("4 · Global benchmark comparison", expanded=True):
         st.caption(
@@ -278,28 +355,32 @@ def render_tab_economics(inputs: dict, computed: dict):
             "(Middle East / Mediterranean, 2024 basis). "
             "🟢 = within range · 🟡 = borderline · 🔴 = outside range."
         )
-        st.table(pd.DataFrame([
-            ["CAPEX",
-             fmt(econ_bench["capex_per_m3d"], "cost_usd_per_m3d", 2),
-             fmt_si_range(econ_bench["capex_bench_si"][0], econ_bench["capex_bench_si"][1],
-                          "cost_usd_per_m3d", 0, 0),
-             econ_bench["capex_status"]],
-            ["OPEX",
-             fmt(econ_bench["opex_per_m3"], "cost_usd_per_m3", 4),
-             fmt_si_range(econ_bench["opex_bench_si"][0], econ_bench["opex_bench_si"][1],
-                          "cost_usd_per_m3", 3, 3),
-             econ_bench["opex_status"]],
-            ["Operational carbon",
-             fmt(econ_bench["co2_per_m3"], "co2_intensity_kg_m3", 4),
-             fmt_si_range(econ_bench["co2_bench_si"][0], econ_bench["co2_bench_si"][1],
-                          "co2_intensity_kg_m3", 3, 3),
-             econ_bench["carbon_status"]],
-            ["LCOW",
-             fmt(econ_bench["lcow"], "cost_usd_per_m3", 4),
-             fmt_si_range(econ_bench["lcow_bench_si"][0], econ_bench["lcow_bench_si"][1],
-                          "cost_usd_per_m3", 2, 2),
-             econ_bench["lcow_status"]],
-        ], columns=["Metric", "Project", "Benchmark range", "Status"]))
+        st.dataframe(
+            pd.DataFrame([
+                ["CAPEX",
+                 fmt(econ_bench["capex_per_m3d"], "cost_usd_per_m3d", 2),
+                 fmt_si_range(econ_bench["capex_bench_si"][0], econ_bench["capex_bench_si"][1],
+                              "cost_usd_per_m3d", 0, 0),
+                 econ_bench["capex_status"]],
+                ["OPEX",
+                 fmt(econ_bench["opex_per_m3"], "cost_usd_per_m3", 4),
+                 fmt_si_range(econ_bench["opex_bench_si"][0], econ_bench["opex_bench_si"][1],
+                              "cost_usd_per_m3", 3, 3),
+                 econ_bench["opex_status"]],
+                ["Operational carbon",
+                 fmt(econ_bench["co2_per_m3"], "co2_intensity_kg_m3", 4),
+                 fmt_si_range(econ_bench["co2_bench_si"][0], econ_bench["co2_bench_si"][1],
+                              "co2_intensity_kg_m3", 3, 3),
+                 econ_bench["carbon_status"]],
+                ["LCOW",
+                 fmt(econ_bench["lcow"], "cost_usd_per_m3", 4),
+                 fmt_si_range(econ_bench["lcow_bench_si"][0], econ_bench["lcow_bench_si"][1],
+                              "cost_usd_per_m3", 2, 2),
+                 econ_bench["lcow_status"]],
+            ], columns=["Metric", "Project", "Benchmark range", "Status"]),
+            use_container_width=True,
+            hide_index=True,
+        )
         st.caption(
             f"Daily capacity: {fmt(econ_bench['daily_flow_m3d'], 'flow_m3d', 1)}  ·  "
             f"Annual flow: {fmt_annual_flow_volume(econ_bench['annual_flow_m3'])}  ·  "
@@ -309,6 +390,11 @@ def render_tab_economics(inputs: dict, computed: dict):
         )
 
     with st.expander("5 · NPV — lifecycle cost (discounted)", expanded=False):
+        st.caption(
+            "**Simplified cost PV:** one line per year = total engineering **OPEX** (same mix as the OPEX table) "
+            f"discounted at **{discount_rate:.1f} %/yr** over **{design_life_years} yr** (design life). "
+            "Use **expander 6** for full cash flows (replacements, escalation, tax, IRR)."
+        )
         _npv = float(econ_npv.get("npv_total_usd") or 0.0)
         _yrs = econ_npv.get("years") or []
         _cum = econ_npv.get("cumulative_pv_usd") or []
@@ -379,14 +465,17 @@ def render_tab_economics(inputs: dict, computed: dict):
         else:
             st.warning("NPV series unavailable for this result.")
 
-    _ef = computed.get("econ_financial") or {}
+    _ef = econ_financial
     if _ef:
         with st.expander("6 · Lifecycle financial (cash flow · NPV · IRR)", expanded=False):
             st.caption(
-                "Techno-economic view: cash flows use **engineering OPEX splits** (energy, chemicals, "
-                "labour), **scheduled maintenance** (% CAPEX/yr), **discrete replacement** events "
-                "(media / nozzles / lining), **escalation**, optional **annual benefit** for IRR, and "
-                "**salvage** at end of project life."
+                "**Full techno-economic model** (vs **expander 5** simple PV of total OPEX): cash flows use "
+                "**engineering OPEX splits** (energy, chemicals, labour), **scheduled maintenance** (% CAPEX/yr), "
+                "**discrete replacement** events (media / nozzles / lining), **escalation**, optional **annual benefit** "
+                "for IRR, **tax**, **depreciation**, and **salvage**. Horizon **"
+                f"{int(inputs.get('project_life_years') or design_life_years)} yr** project life "
+                f"(expander 5 uses **{design_life_years} yr** design life). "
+                "When **pump-model linkage** is on, **energy** matches the linked OPEX row above."
             )
             f1, f2, f3, f4 = st.columns(4)
             f1.metric("NPV (net CF)", f"USD {_ef.get('npv', 0):,.0f}")
@@ -526,15 +615,19 @@ def render_tab_economics(inputs: dict, computed: dict):
 
                 _sc = _ef.get("co2_vs_cost_scatter") or []
                 if len(_sc) > 1:
+                    _us = str(inputs.get("unit_system") or "metric")
                     _fig4 = _go.Figure(_go.Scatter(
-                        x=[p["co2_kg_cumulative"] / 1000.0 for p in _sc],
+                        x=[
+                            _display_value(float(p["co2_kg_cumulative"]) / 1000.0, "mass_t", _us)
+                            for p in _sc
+                        ],
                         y=[p["undiscounted_cost_usd"] / 1e6 for p in _sc],
                         mode="lines+markers",
                         name="Path",
                     ))
                     _fig4.update_layout(
-                        title="Cumulative CO₂ vs cumulative cost (t CO₂ · MUSD)",
-                        xaxis_title="Cumulative operational + construction CO₂ (t)",
+                        title=f"Cumulative CO₂ vs cumulative cost ({ulbl('mass_t')} · MUSD)",
+                        xaxis_title=f"Cumulative operational + construction CO₂ ({ulbl('mass_t')})",
                         yaxis_title="Cumulative cost (MUSD)",
                         height=360,
                     )

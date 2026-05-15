@@ -106,6 +106,7 @@ def save_project(
     notes: str = "",
     version_tag: Optional[str] = None,
     overwrite: bool = True,
+    ui_session_overrides: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """
     Insert or update a project row keyed by ``project_name`` + ``doc_number`` slug.
@@ -118,7 +119,7 @@ def save_project(
     display = str(inputs.get("project_name") or "project")
     doc_number = str(inputs.get("doc_number") or "")
     schema_version = version_tag if version_tag is not None else _pio.SCHEMA_VERSION
-    inputs_json = _pio.inputs_to_json(inputs)
+    inputs_json = _pio.inputs_to_json(inputs, ui_session_overrides=ui_session_overrides)
     computed_json = _serialize_computed(computed)
     now = _utc_now()
 
@@ -159,6 +160,57 @@ def save_project(
         conn.close()
 
 
+def update_project_by_id(
+    db_path: str,
+    project_id: int,
+    inputs: dict,
+    computed: Optional[dict] = None,
+    *,
+    notes: Optional[str] = None,
+    ui_session_overrides: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Overwrite an existing library row by primary key (not project_key slug alone)."""
+    init_db(db_path)
+    key = _project_key(inputs)
+    display = str(inputs.get("project_name") or "project")
+    doc_number = str(inputs.get("doc_number") or "")
+    schema_version = _pio.SCHEMA_VERSION
+    inputs_json = _pio.inputs_to_json(inputs, ui_session_overrides=ui_session_overrides)
+    computed_json = _serialize_computed(computed)
+    now = _utc_now()
+
+    conn = _connect(db_path)
+    try:
+        row = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if row is None:
+            raise KeyError("project not found")
+        clash = conn.execute(
+            "SELECT id FROM projects WHERE project_key = ? AND id != ?",
+            (key, project_id),
+        ).fetchone()
+        if clash is not None:
+            raise ValueError(f"Another project already uses key {key!r}")
+
+        if notes is None:
+            conn.execute(
+                """UPDATE projects SET project_key=?, display_name=?, doc_number=?,
+                   schema_version=?, inputs_json=?, computed_json=?, updated_at=?
+                   WHERE id=?""",
+                (key, display, doc_number, schema_version, inputs_json, computed_json, now, project_id),
+            )
+        else:
+            conn.execute(
+                """UPDATE projects SET project_key=?, display_name=?, doc_number=?, notes=?,
+                   schema_version=?, inputs_json=?, computed_json=?, updated_at=?
+                   WHERE id=?""",
+                (key, display, doc_number, notes, schema_version, inputs_json, computed_json, now, project_id),
+            )
+        conn.commit()
+        return {"id": project_id, "project_key": key, "created": False, "updated_at": now}
+    finally:
+        conn.close()
+
+
 def load_project(
     db_path: str,
     *,
@@ -183,7 +235,8 @@ def load_project(
             _log.log_db_project_load(str(row["project_key"]))
         except Exception:
             pass
-        inputs = _pio.json_to_inputs(row["inputs_json"])
+        document = _pio.json_to_inputs(row["inputs_json"])
+        inputs = _pio.engine_inputs_dict(document)
         computed = None
         if row["computed_json"]:
             computed = json.loads(row["computed_json"])
@@ -196,6 +249,7 @@ def load_project(
             "schema_version": row["schema_version"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
+            "document": document,
             "inputs": inputs,
             "computed": computed,
         }
@@ -219,6 +273,35 @@ def list_projects(db_path: str, *, limit: int = 200) -> list[dict[str, Any]]:
         conn.close()
 
 
+def delete_project(db_path: str, project_id: int) -> None:
+    """Delete a project and its snapshots/scenarios (FK cascade)."""
+    init_db(db_path)
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute("DELETE FROM projects WHERE id = ?", (project_id,))
+        conn.commit()
+        if cur.rowcount == 0:
+            raise KeyError("project not found")
+    finally:
+        conn.close()
+
+
+def update_project_notes(db_path: str, project_id: int, notes: str) -> None:
+    init_db(db_path)
+    now = _utc_now()
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute(
+            "UPDATE projects SET notes = ?, updated_at = ? WHERE id = ?",
+            (notes, now, project_id),
+        )
+        conn.commit()
+        if cur.rowcount == 0:
+            raise KeyError("project not found")
+    finally:
+        conn.close()
+
+
 def save_snapshot(
     db_path: str,
     project_id: int,
@@ -227,11 +310,16 @@ def save_snapshot(
     *,
     label: str = "",
     notes: str = "",
+    ui_session_overrides: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
     """Append a history snapshot for a project (inputs/computed JSON optional each)."""
     init_db(db_path)
     now = _utc_now()
-    inputs_json = _pio.inputs_to_json(inputs) if inputs is not None else None
+    inputs_json = (
+        _pio.inputs_to_json(inputs, ui_session_overrides=ui_session_overrides)
+        if inputs is not None
+        else None
+    )
     computed_json = _serialize_computed(computed)
     conn = _connect(db_path)
     try:
@@ -294,7 +382,9 @@ def load_snapshot(db_path: str, snapshot_id: int) -> dict[str, Any]:
             "computed": None,
         }
         if r["inputs_json"]:
-            out["inputs"] = _pio.json_to_inputs(r["inputs_json"])
+            document = _pio.json_to_inputs(r["inputs_json"])
+            out["document"] = document
+            out["inputs"] = _pio.engine_inputs_dict(document)
         if r["computed_json"]:
             out["computed"] = json.loads(r["computed_json"])
         return out
@@ -344,8 +434,11 @@ def list_scenarios(db_path: str, project_id: int) -> list[dict[str, Any]]:
 __all__ = [
     "init_db",
     "save_project",
+    "update_project_by_id",
     "load_project",
     "list_projects",
+    "delete_project",
+    "update_project_notes",
     "save_snapshot",
     "project_history",
     "load_snapshot",

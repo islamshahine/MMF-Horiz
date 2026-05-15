@@ -6,12 +6,16 @@ from engine.drawing import vessel_section_elevation
 from engine.nozzles import DN_SERIES, SCHEDULES, FLANGE_RATINGS
 from ui.helpers import (
     fmt, ulbl, dv, operating_media_rows_display_df,
-    nozzle_schedule_display_df, nozzle_schedule_total_weight_kg,
+    nozzle_schedule_display_df, nozzle_schedule_si_from_editor_df,
+    nozzle_schedule_total_weight_kg,
     saddle_catalogue_display_df, saddle_alternatives_display_df,
+    ST_DATAFRAME_KW,
 )
+from ui.scroll_markers import inject_anchor
 
 
 def render_tab_mechanical(inputs: dict, computed: dict):
+    inject_anchor("mmf-anchor-main-mechanical")
     nominal_id     = computed["nominal_id"]
     lining_mm      = computed["lining_mm"]
     real_id        = computed["real_id"]
@@ -60,6 +64,10 @@ def render_tab_mechanical(inputs: dict, computed: dict):
     _ext_coating_drawing = (_ec + (" | " + _iso if _iso else ""))[:140]
 
     st.subheader("Vessel geometry & mechanical")
+    st.caption(
+        "**Mechanical** (main tab) — **results** from **🏗️ Vessel** (geometry, ASME, lining) + **🧱 Media** (nozzle plate height) "
+        "+ **🔄 BW** (collector height / supports where applicable). **Nozzle schedule** edits: sidebar **🧱 Media**."
+    )
 
     with st.expander("1 · Geometry", expanded=True):
         g1, g2, g3, g4, g5 = st.columns(5)
@@ -79,13 +87,13 @@ def render_tab_mechanical(inputs: dict, computed: dict):
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Material & radiography**")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Material",             material_name],
                 ["Standard",             mat_info["standard"]],
                 ["Allowable stress (S)", fmt(float(mech["allowable_stress"]), "stress_kgf_cm2", 2)],
                 ["Shell radiography",    f"{shell_radio}  →  E={mech['shell_E']:.2f}"],
                 ["Head radiography",     f"{head_radio}  →  E={mech['head_E']:.2f}"],
-            ], columns=["Parameter", "Value"]))
+            ], columns=["Parameter", "Value"]), **ST_DATAFRAME_KW)
         with c2:
             st.markdown("**Thickness results**")
             def fmt_t(t_min, t_des, overridden):
@@ -94,7 +102,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                     f"{fmt(float(t_des), 'length_mm', 0)}{flag}  "
                     f"(t_min={fmt(float(t_min), 'length_mm', 2)})"
                 )
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Design pressure",
                  f"{fmt(design_pressure, 'pressure_bar', 2)} "
                  f"({fmt(mech['p_kgf_cm2'], 'stress_kgf_cm2', 3)})"],
@@ -110,7 +118,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                 ["Nominal ID",           fmt(mech["nominal_id_m"], "length_m", 4)],
                 ["Real hydraulic ID",    fmt(real_id, "length_m", 4)],
                 ["Outside diameter",     fmt(mech["od_m"], "length_m", 4)],
-            ], columns=["Parameter", "Value"]))
+            ], columns=["Parameter", "Value"]), **ST_DATAFRAME_KW)
 
     with st.expander("3 · Nozzle plate design", expanded=True):
         st.info(f"Design ΔP auto-wired from Ergun dirty-bed result: "
@@ -123,7 +131,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
         c1, c2 = st.columns(2)
         with c1:
             st.markdown("**Geometry & bore layout**")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Plate height",     fmt(wt_np["h_plate_m"], "length_m", 3)],
                 ["Chord at plate",   fmt(wt_np["chord_m"], "length_m", 4)],
                 ["Angle θ",         f"{wt_np['theta_deg']:.2f}°"],
@@ -134,10 +142,10 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                 ["Bore diameter",    fmt(wt_np["bore_diameter_mm"], "length_mm", 0)],
                 ["Nozzle density",   f"{dv(wt_np['actual_density_per_m2'], 'quantity_per_m2'):.1f} {ulbl('quantity_per_m2')}"],
                 ["Open area ratio",  f"{wt_np['open_ratio_pct']:.1f} %"],
-            ], columns=["Parameter", "Value"]))
+            ], columns=["Parameter", "Value"]), **ST_DATAFRAME_KW)
         with c2:
             st.markdown("**Thickness & support beams**")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Beam spacing",     fmt(wt_np["beam_spacing_mm"], "length_mm", 0)],
                 ["t_min (Roark)",    fmt(float(wt_np["t_min_mm"]), "length_mm", 2)],
                 ["t_design",        fmt(float(wt_np["t_design_mm"]), "length_mm", 0)],
@@ -149,14 +157,21 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                 ["Plate weight",     fmt(wt_np["weight_plate_kg"], "mass_kg", 1)],
                 ["Beams weight",     fmt(wt_np["weight_beams_kg"], "mass_kg", 1)],
                 ["Total plate assy.", fmt(wt_np["weight_total_kg"], "mass_kg", 1)],
-            ], columns=["Parameter", "Value"]))
+            ], columns=["Parameter", "Value"]), **ST_DATAFRAME_KW)
 
     with st.expander("4 · Nozzle schedule", expanded=True):
         df_nozzle, _nk = nozzle_schedule_display_df(nozzle_sched)
         _k = _nk
+        st.session_state["_mmf_nozzle_sched_base"] = list(nozzle_sched)
+        st.session_state["_mmf_nozzle_sched_keys"] = _k
+        st.session_state["_mmf_nozzle_editor_df"] = df_nozzle.copy()
+        from ui.nozzle_header_sync import persist_nozzle_editor_to_session
+
         nozzle_wt_edited_df = st.data_editor(
             df_nozzle, use_container_width=True,
             hide_index=True, num_rows="dynamic",
+            key="mmf_nozzle_editor",
+            on_change=persist_nozzle_editor_to_session,
             column_config={
                 _k["service"]:     st.column_config.TextColumn(width=160),
                 _k["flow"]:        st.column_config.NumberColumn(
@@ -183,6 +198,13 @@ def render_tab_mechanical(inputs: dict, computed: dict):
             nozzle_wt_edited_df, _k["wt_tot"])
         if nozzle_wt_edited <= 0.0:
             nozzle_wt_edited = w_noz
+        _sched_si = nozzle_schedule_si_from_editor_df(
+            nozzle_wt_edited_df, _k, nozzle_sched, editor_base_df=df_nozzle,
+        )
+        st.session_state["mmf_nozzle_sched_user"] = _sched_si
+        from ui.nozzle_header_sync import sync_linked_collector_header_session
+
+        sync_linked_collector_header_session()
         st.caption(
             "**DN** stays **integer mm** (ISO pipe tables / schedules). "
             "Flow, velocity, stub length and wall thickness follow the unit system but are "
@@ -193,28 +215,28 @@ def render_tab_mechanical(inputs: dict, computed: dict):
         wa, wb = st.columns(2)
         with wa:
             st.markdown("**Cylindrical shell**")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Mean diameter",  fmt(wt_body["d_mean_shell_m"], "length_m", 4)],
                 ["Wall thickness", fmt(float(mech["t_shell_design_mm"]), "length_mm", 1)],
                 ["Surface area",   fmt(wt_body["area_shell_m2"], "area_m2", 3)],
                 ["Metal volume",   fmt(wt_body["vol_shell_m3"], "volume_m3", 4)],
                 ["Shell weight",   fmt(wt_body["weight_shell_kg"], "mass_kg", 1)],
-            ], columns=["Item", "Value"]))
+            ], columns=["Item", "Value"]), **ST_DATAFRAME_KW)
         with wb:
             st.markdown(f"**Dish ends × 2  ({end_geometry})**")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Mean diameter",      fmt(wt_body["d_mean_head_m"], "length_m", 4)],
                 ["Wall thickness",     fmt(float(mech["t_head_design_mm"]), "length_mm", 1)],
                 ["Surface area (one)", fmt(wt_body["area_one_head_m2"], "area_m2", 3)],
                 ["Both heads weight",  fmt(wt_body["weight_two_heads_kg"], "mass_kg", 1)],
-            ], columns=["Item", "Value"]))
+            ], columns=["Item", "Value"]), **ST_DATAFRAME_KW)
 
     with st.expander("6 · Consolidated empty weight", expanded=True):
         w_total_final = (wt_body["weight_body_kg"] + nozzle_wt_edited
                          + wt_np["weight_total_kg"]
                          + wt_sup["weight_all_supports_kg"]
                          + wt_int["weight_internals_kg"])
-        st.table(pd.DataFrame([
+        st.dataframe(pd.DataFrame([
             ["Shell (cylindrical)",
              f"{fmt(wt_body['weight_shell_kg'], 'mass_kg', 1):>18}"],
             ["2 × Dish ends",
@@ -235,7 +257,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
             ["TOTAL EMPTY WEIGHT",
              f"{fmt(w_total_final, 'mass_kg', 1):>18}"],
             ["", f"= {fmt(w_total_final / 1000.0, 'mass_t', 3)}"],
-        ], columns=["Component", "Weight"]))
+        ], columns=["Component", "Weight"]), **ST_DATAFRAME_KW)
         e1, e2, e3, e4, e5, e6 = st.columns(6)
         e1.metric("Shell+heads", fmt(wt_body["weight_body_kg"], "mass_kg", 0))
         e2.metric("Nozzles",     fmt(nozzle_wt_edited, "mass_kg", 0))
@@ -260,7 +282,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
         lining_label_op = (f"Internal {lining_result['protection_type'].lower()}"
                            if lining_result['protection_type'] != "None"
                            else "Internal lining / coating")
-        st.table(pd.DataFrame([
+        st.dataframe(pd.DataFrame([
             ["Empty vessel (steel structure)",
              f"{fmt(wt_oper['w_empty_kg'], 'mass_kg', 1):>18}"],
             [lining_label_op,
@@ -273,9 +295,9 @@ def render_tab_mechanical(inputs: dict, computed: dict):
             ["OPERATING WEIGHT",
              f"{fmt(wt_oper['w_operating_kg'], 'mass_kg', 1)}  =  "
              f"{fmt(wt_oper['w_operating_t'], 'mass_t', 3)}"],
-        ], columns=["Component", "Weight"]))
+        ], columns=["Component", "Weight"]), **ST_DATAFRAME_KW)
         st.markdown("**Internal volume breakdown**")
-        st.table(pd.DataFrame([
+        st.dataframe(pd.DataFrame([
             ["Cylindrical shell (internal)",
              fmt(wt_oper["v_cylinder_m3"], "volume_m3", 3)],
             ["Two dish ends (internal)",
@@ -286,10 +308,9 @@ def render_tab_mechanical(inputs: dict, computed: dict):
              fmt(wt_oper["v_solid_media_m3"], "volume_m3", 4)],
             ["Water volume  (total − solid media)",
              fmt(wt_oper["v_water_m3"], "volume_m3", 3)],
-        ], columns=["Item", "Value"]))
+        ], columns=["Item", "Value"]), **ST_DATAFRAME_KW)
         st.markdown("**Media layer detail**")
-        st.dataframe(operating_media_rows_display_df(wt_oper["media_rows"]),
-                     use_container_width=True, hide_index=True)
+        st.dataframe(operating_media_rows_display_df(wt_oper["media_rows"]), **ST_DATAFRAME_KW)
         st.markdown("**Support / saddle loads**")
         s1, s2, s3 = st.columns(3)
         s1.metric("Support type",       wt_sup["support_type"])
@@ -314,8 +335,11 @@ def render_tab_mechanical(inputs: dict, computed: dict):
         sp2.metric("Spacing factor α",   f"{wt_saddle['alpha_pct']} %")
         sp3.metric("Saddles (effective)", str(wt_saddle.get("n_saddles_effective", wt_saddle["n_saddles"])))
         _pos_m = wt_saddle.get("saddle_positions_m") or []
-        sp4.metric("Saddle chainage (m)", ", ".join(f"{p:.2f}" for p in _pos_m[:6]) or "—")
-        st.table(pd.DataFrame([
+        sp4.metric(
+            f"Saddle chainage ({ulbl('length_m')})",
+            ", ".join(fmt(float(p), "length_m", 2) for p in _pos_m[:6]) or "—",
+        )
+        st.dataframe(pd.DataFrame([
             ["Total vessel length (T/T)", fmt(total_length, "length_m", 3)],
             ["Vessel OD",                  fmt(mech["od_m"], "length_m", 4)],
             ["L / D ratio",                f"{wt_saddle['ld_ratio']:.2f}"],
@@ -323,15 +347,15 @@ def render_tab_mechanical(inputs: dict, computed: dict):
             ["Saddle 1 — from left tangent", fmt(wt_saddle["saddle_1_from_left_m"], "length_m", 3)],
             ["Saddle last — from left tangent", fmt(wt_saddle["saddle_2_from_left_m"], "length_m", 3)],
             ["Centre-to-centre spacings",
-             "   ".join(f"{s*1000:.0f} mm" for s in (wt_saddle.get("saddle_spacings_m") or [])) or "—"],
+             "   ".join(fmt(float(s), "length_m", 2) for s in (wt_saddle.get("saddle_spacings_m") or [])) or "—"],
             ["Min. span (between adjacent)", fmt(wt_saddle["saddle_gap_m"], "length_m", 3)],
             ["a / R  (Zick parameter)",   f"{wt_saddle['a_over_R']:.3f}  {_aov_color}"],
             ["Contact arc length (120°)", fmt(wt_saddle["arc_m"], "length_m", 3)],
             ["Simplified saddle moment",  fmt(wt_saddle["m_saddle_kNm"], "moment_knm", 0)],
             ["Manholes (user / recommended)",
              f"{_mh_lay.get('n_user', '—')} / {_mh_lay.get('n_recommended', '—')}  "
-             f"(rule: ≈1 per 7.5 m shell)"],
-        ], columns=["Parameter", "Value"]))
+             f"(rule: ≈1 per {fmt(7.5, 'length_m', 1)} shell)"],
+        ], columns=["Parameter", "Value"]), **ST_DATAFRAME_KW)
         st.markdown("### Vertical reaction & section selection")
         _over = wt_saddle["overstressed"]
         sl1, sl2, sl3, sl4 = st.columns(4)
@@ -355,11 +379,9 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                 f"Minimum **{wt_saddle['min_n_needed']} supports** required."
             )
         st.markdown("**Support arrangement alternatives**")
-        st.dataframe(saddle_alternatives_display_df(wt_saddle["alternatives"]),
-                     use_container_width=True, hide_index=True)
+        st.dataframe(saddle_alternatives_display_df(wt_saddle["alternatives"]), **ST_DATAFRAME_KW)
         st.markdown("### Full catalogue — all section types")
-        st.dataframe(saddle_catalogue_display_df(wt_saddle["catalogue_rows"]),
-                     use_container_width=True, hide_index=True)
+        st.dataframe(saddle_catalogue_display_df(wt_saddle["catalogue_rows"]), **ST_DATAFRAME_KW)
 
     with st.expander("9 · Internal lining / coating", expanded=True):
         st.markdown("### Internal surface areas")
@@ -368,7 +390,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
         ia2.metric("Two dish ends", fmt(vessel_areas["a_two_heads_m2"], "area_m2", 1))
         ia3.metric("Nozzle plate",  fmt(vessel_areas["a_nozzle_plate_m2"], "area_m2", 1))
         ia4.metric("Total to coat", fmt(vessel_areas["a_total_m2"], "area_m2", 1))
-        st.table(pd.DataFrame([
+        st.dataframe(pd.DataFrame([
             ["Cylinder (shell)",
              fmt(vessel_areas["a_cylinder_m2"], "area_m2", 2),
              f"π × {fmt(real_id, 'length_m', 3)} × {fmt(cyl_len, 'length_m', 3)}"],
@@ -383,7 +405,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
              fmt(vessel_areas["a_nozzle_plate_m2"], "area_m2", 2), ""],
             ["Total internal area",
              fmt(vessel_areas["a_total_m2"], "area_m2", 2),  ""],
-        ], columns=["Surface", "Area", "Basis"]))
+        ], columns=["Surface", "Area", "Basis"]), **ST_DATAFRAME_KW)
         st.markdown(f"### Protection system — {protection_type}")
         if protection_type == "None":
             st.info("No internal lining or coating selected. Vessel relies on "
@@ -397,9 +419,10 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                        delta=f"Labour: USD {lining_result['labor_cost_usd']:,.0f}",
                        delta_color="off")
             st.markdown("**Specification & cost breakdown**")
-            st.table(pd.DataFrame(
+            st.dataframe(pd.DataFrame(
                 [[k, v] for k, v in lining_result["detail"].items()],
-                columns=["Parameter", "Value"]))
+                columns=["Parameter", "Value"],
+            ), **ST_DATAFRAME_KW)
 
     with st.expander("10 · Theoretical elevation section", expanded=True):
         _show_exp_mech = st.toggle("Show expanded bed (BW condition)", value=True,
@@ -450,20 +473,20 @@ def render_tab_mechanical(inputs: dict, computed: dict):
         tb1, tb2, tb3 = st.columns([2, 2, 1])
         with tb1:
             st.markdown("**Document**")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Project",     project_name],
                 ["Doc. No.",    doc_number],
                 ["Description", "Horizontal Multi-Media Filter"],
                 ["Vessel/Tag",  "MMF-001"],
-            ], columns=["Field", "Value"]))
+            ], columns=["Field", "Value"]), **ST_DATAFRAME_KW)
         with tb2:
             st.markdown("**Approval**")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Date",        _today],
                 ["Revision",    revision],
                 ["Client",      client or "—"],
                 ["Prepared by", engineer],
-            ], columns=["Field", "Value"]))
+            ], columns=["Field", "Value"]), **ST_DATAFRAME_KW)
         with tb3:
             st.metric("Installed filters", streams * n_filters)
             st.metric("Hydraulic paths (design N)", streams * max(1, n_filters - hydraulic_assist))
@@ -471,7 +494,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
         ds_left, ds_right = st.columns([1, 1.1])
         with ds_left:
             st.markdown("### Design Data")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Design Code",           "ASME VIII Div. 1"],
                 ["Operating pressure",    f"{fmt(design_pressure * 0.7, 'pressure_bar', 2)} gauge  (≈ 70 % design)"],
                 ["Design pressure",       f"{fmt(design_pressure, 'pressure_bar', 2)} gauge"],
@@ -481,29 +504,29 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                 ["Shell joint eff. E",    f"{mech['shell_E']:.2f}  ({shell_radio})"],
                 ["Head joint eff. E",     f"{mech['head_E']:.2f}  ({head_radio})"],
                 ["Head shape",            end_geometry],
-            ], columns=["Parameter", "Value"]))
+            ], columns=["Parameter", "Value"]), **ST_DATAFRAME_KW)
             st.markdown("### Material")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Shell & heads",       material_name],
                 ["Allowable stress S",  fmt(float(mech["allowable_stress"]), "stress_kgf_cm2", 2)],
                 ["Standard",            mat_info["standard"]],
                 ["Nozzle plate",        material_name],
                 ["Internal protection", protection_type],
-            ], columns=["Component", "Specification"]))
+            ], columns=["Component", "Specification"]), **ST_DATAFRAME_KW)
             st.markdown("### Dimensional Data")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Internal diameter (ID)",  fmt(nominal_id * 1000.0, "length_mm", 0)],
                 ["Outside diameter (OD)",   fmt(mech["od_m"] * 1000.0, "length_mm", 0)],
-                ["Shell thickness (t_des)", f"{mech['t_shell_design_mm']} mm"],
-                ["Head thickness (t_des)",  f"{mech['t_head_design_mm']} mm"],
+                ["Shell thickness (t_des)", fmt(float(mech["t_shell_design_mm"]), "length_mm", 1)],
+                ["Head thickness (t_des)", fmt(float(mech["t_head_design_mm"]), "length_mm", 1)],
                 ["T/T length",              fmt(total_length, "length_m", 3)],
                 ["Cylindrical length",      fmt(cyl_len, "length_m", 3)],
                 ["Dish depth",              fmt(h_dish * 1000.0, "length_mm", 0)],
                 ["Nozzle plate height",     fmt(nozzle_plate_h * 1000.0, "length_mm", 0)],
-                ["Nozzle plate thickness",  f"{wt_np['t_design_mm']} mm"],
-            ], columns=["Parameter", "Value"]))
+                ["Nozzle plate thickness", fmt(float(wt_np["t_design_mm"]), "length_mm", 1)],
+            ], columns=["Parameter", "Value"]), **ST_DATAFRAME_KW)
             st.markdown("### Capacity & Weight")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Internal volume",
                  fmt(wt_oper["v_total_internal_m3"], "volume_m3", 2)],
                 ["Empty weight",
@@ -515,7 +538,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                 ["Load / support",
                  f"{fmt(wt_oper['load_per_support_kN'], 'force_kn', 1)}  "
                  f"({fmt(wt_oper['load_per_support_t'], 'mass_t', 3)})"],
-            ], columns=["Item", "Value"]))
+            ], columns=["Item", "Value"]), **ST_DATAFRAME_KW)
         with ds_right:
             st.markdown("### Elevation View — Theoretical Section")
             _ds_fig = vessel_section_elevation(
@@ -575,15 +598,14 @@ def render_tab_mechanical(inputs: dict, computed: dict):
                     f"ρ ({ulbl('density_kg_m3')})": _rho_disp,
                 })
                 _cum_ds += lyr["Depth"]
-            st.dataframe(pd.DataFrame(_media_rows_ds),
-                         use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(_media_rows_ds), **ST_DATAFRAME_KW)
         st.divider()
         st.markdown("### Nomenclature of Nozzles")
         _df_fab_noz, _ = nozzle_schedule_display_df(nozzle_sched)
-        st.dataframe(_df_fab_noz, use_container_width=True, hide_index=True)
+        st.dataframe(_df_fab_noz, **ST_DATAFRAME_KW)
         st.divider()
         st.markdown("### Vessel Standards")
-        st.table(pd.DataFrame([
+        st.dataframe(pd.DataFrame([
             ["Design Code",      "ASME Boiler & Pressure Vessel Code Sect. VIII Div. 1"],
             ["Material (shell)", mat_info["standard"]],
             ["Flanges",          "ASME B16.5 / EN 1092-1"],
@@ -592,7 +614,7 @@ def render_tab_mechanical(inputs: dict, computed: dict):
             ["NDE",             f"Shell: {shell_radio}   Head: {head_radio}"],
             ["Corrosion allow.", fmt(corrosion, "length_mm", 1)],
             ["Internal coating", protection_type],
-        ], columns=["Standard / Item", "Reference / Value"]))
+        ], columns=["Standard / Item", "Reference / Value"]), **ST_DATAFRAME_KW)
 
     with st.expander("12 · Seismic, wind & external painting", expanded=False):
         st.info(
@@ -603,24 +625,24 @@ def render_tab_mechanical(inputs: dict, computed: dict):
         u1, u2 = st.columns(2)
         with u1:
             st.markdown("**Seismic (reference)**")
-            st.table(pd.DataFrame(
+            st.dataframe(pd.DataFrame(
                 env_structural.get("seismic_table_rows", []),
                 columns=["Item", "Value"],
-            ))
+            ), **ST_DATAFRAME_KW)
         with u2:
             st.markdown("**Wind**")
-            st.table(pd.DataFrame(
+            st.dataframe(pd.DataFrame(
                 env_structural.get("wind_table_rows", []),
                 columns=["Item", "Value"],
-            ))
+            ), **ST_DATAFRAME_KW)
         st.markdown("**External painting (outside steel)**")
-        st.table(pd.DataFrame(
+        st.dataframe(pd.DataFrame(
             env_structural.get("paint_table_rows", []),
             columns=["Item", "Value"],
-        ))
+        ), **ST_DATAFRAME_KW)
         st.caption(
             f"Indicative velocity pressure at V = {fmt(float(inputs.get('basic_wind_ms') or 0), 'velocity_m_s', 1)}: "
-            f"{env_structural.get('wind_dynamic_pressure_kpa', 0):.3f} kPa  "
+            f"{fmt(float(env_structural.get('wind_dynamic_pressure_kpa', 0)), 'pressure_kpa', 3)}  "
             "(½ρV² only — not ASCE 7 factored pressure)."
         )
 

@@ -27,11 +27,14 @@ from engine.media import (
     get_media,
     get_lv_range,
     get_ebct_range,
+    get_gac_note,
+    ebct_label,
     interstitial_velocity,
     collector_max_height,
     lv_status,
     ebct_status,
     validate_layer_order,
+    get_layer_intelligence,
 )
 
 REQUIRED_FIELDS = [
@@ -233,6 +236,36 @@ class TestStatusLabels:
         """EBCT 12 min above max=8 → critical."""
         _, code = ebct_status(12.0, 4.0, 8.0)
         assert code == "critical"
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# Labels & layer intelligence (UI / cards)
+# ═════════════════════════════════════════════════════════════════════════════
+
+class TestMediaLabelsAndIntelligence:
+
+    def test_ebct_label_support_is_none(self):
+        assert ebct_label("support") is None
+
+    def test_ebct_label_filtration_string(self):
+        assert "EBCT" in (ebct_label("mechanical_filtration") or "")
+
+    def test_get_gac_note_pressure_mode(self):
+        n = get_gac_note("Medium GAC", "pressure")
+        assert isinstance(n, str)
+
+    def test_get_layer_intelligence_shape(self):
+        layers = [
+            {"Type": "Gravel", "Depth": 0.2, "is_support": True},
+            {"Type": "Fine sand", "Depth": 0.8, "is_support": False},
+        ]
+        intel, warns = get_layer_intelligence(layers)
+        assert len(intel) == 2
+        assert intel[0]["layer"] == 1
+        assert "function" in intel[0]
+        assert isinstance(warns, list)
+        for w in warns:
+            assert "level" in w and "message" in w
 
 
 # ═════════════════════════════════════════════════════════════════════════════

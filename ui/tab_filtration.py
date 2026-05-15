@@ -7,10 +7,13 @@ from engine.thresholds import layer_ebct_floor_min, layer_lv_cap_m_h
 from ui.helpers import (
     fmt, ulbl, dv, show_alert, pressure_drop_layers_display_frames,
     cycle_matrix_temp_title, cycle_matrix_tss_row_title, filtration_dp_curve_display_df,
+    ST_DATAFRAME_KW,
 )
+from ui.scroll_markers import inject_anchor
 
 
 def render_tab_filtration(inputs: dict, computed: dict):
+    inject_anchor("mmf-anchor-main-filtration")
     load_data          = computed["load_data"]
     avg_area           = computed["avg_area"]
     base               = computed["base"]
@@ -70,34 +73,35 @@ def render_tab_filtration(inputs: dict, computed: dict):
     _la_list = computed.get("layer_areas_m2") or []
     _layer_areas_kw = _la_list if len(_la_list) == len(layers) else None
 
-    st.caption("Hydraulic loading, contact times, pressure drop and post-treatment across all redundancy scenarios.")
     st.caption(
-        "**Model scope:** LV / EBCT use **chordal slice areas** per layer (horizontal cylinder + dishes). "
-        "**Ergun clean ΔP** uses **per-layer** superficial velocity u = Q/Aᵢ; **cake (Ruth)** and **M_max** use "
-        "the reference velocity Q/A_mean × **maldistribution factor** (sidebar) so inventory [kg/m²] stays consistent. "
-        "Radial profile and breakthrough are not resolved — compare to field data where needed."
+        "**Filtration** (main tab) — **results** from sidebar inputs: hydraulics, ΔP summaries, cycles, cartridge. "
+        "Edit duty, water, **M_max / α / fouling** on **🧱 Media** sidebar; **per-layer ΔP tables** → **🧱 Media** tab §3."
+    )
+    st.caption(
+        "**LV / EBCT** use **chordal slice areas** per layer. **Ergun + cake** share the same maldistribution factor as **🧱 Media** §3; "
+        "full layer tables and capture-weight narrative live there — this tab keeps scenario roll-ups."
     )
 
     with st.expander("🌊 Water properties — feed & backwash", expanded=False):
         w1, w2 = st.columns(2)
         with w1:
             st.markdown("**Feed water**")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Temperature",   fmt(feed_wp['temp_c'], 'temperature_c', 1)],
                 ["Salinity",      f"{feed_wp['salinity_ppt']:.2f} {ulbl('salinity_ppt')}"],
                 ["Density",       fmt(feed_wp['density_kg_m3'], 'density_kg_m3', 3)],
                 ["Viscosity",     fmt(feed_wp['viscosity_cp'], 'viscosity_cp', 4)],
                 ["TDS (approx.)", f"{feed_wp['tds_mg_l']:,.0f} {ulbl('concentration_mg_l')}"],
-            ], columns=["Property", "Value"]))
+            ], columns=["Property", "Value"]), **ST_DATAFRAME_KW)
         with w2:
             st.markdown("**Backwash water**")
-            st.table(pd.DataFrame([
+            st.dataframe(pd.DataFrame([
                 ["Temperature",   fmt(bw_wp['temp_c'], 'temperature_c', 1)],
                 ["Salinity",      f"{bw_wp['salinity_ppt']:.2f} {ulbl('salinity_ppt')}"],
                 ["Density",       fmt(bw_wp['density_kg_m3'], 'density_kg_m3', 3)],
                 ["Viscosity",     fmt(bw_wp['viscosity_cp'], 'viscosity_cp', 4)],
                 ["TDS (approx.)", f"{bw_wp['tds_mg_l']:,.0f} {ulbl('concentration_mg_l')}"],
-            ], columns=["Property", "Value"]))
+            ], columns=["Property", "Value"]), **ST_DATAFRAME_KW)
         st.info(
             "Water properties feed directly into: terminal velocity (u_t), "
             "minimum fluidisation velocity (u_mf), Ergun pressure drop (ΔP), "
@@ -117,7 +121,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
             f"LV ({ulbl('velocity_m_h')})":           round(dv(lv, 'velocity_m_h'), 2),
             "Hydraulic status":                      _lv_flag,
         })
-    st.dataframe(pd.DataFrame(_flow_comp), use_container_width=True, hide_index=True)
+    st.dataframe(pd.DataFrame(_flow_comp), **ST_DATAFRAME_KW)
 
     st.markdown("#### Operating envelope review by scenario")
     for x, a, q in load_data:
@@ -146,12 +150,12 @@ def render_tab_filtration(inputs: dict, computed: dict):
                     f"Area ({ulbl('area_m2')})":     round(dv(b["Area"], 'area_m2'), 3),
                     f"LV ({ulbl('velocity_m_h')})":  round(dv(vel, 'velocity_m_h'), 2),
                     "LV envelope":                   _lv_env,
-                    "EBCT (min)":                    round(ebct, 2),
+                    f"EBCT ({ulbl('time_min')})":    round(ebct, 2),
                     "EBCT envelope":                 _eb_env,
                 })
                 if _lv_sev: _sc_lv_issues.append((b["Type"], _lv_sev, vel))
                 if _eb_sev: _sc_ebct_issues.append((b["Type"], _eb_sev, ebct))
-            st.dataframe(pd.DataFrame(rows), use_container_width=True, hide_index=True)
+            st.dataframe(pd.DataFrame(rows), **ST_DATAFRAME_KW)
             if _sc_lv_issues:
                 with st.expander(f"🟠 Hydraulic Loading — {len(_sc_lv_issues)} layer(s) outside envelope"):
                     for _layer, _sev, _vel in _sc_lv_issues:
@@ -161,7 +165,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
             if _sc_ebct_issues:
                 with st.expander(f"🟡 Contact Time — {len(_sc_ebct_issues)} layer(s) below design target"):
                     for _layer, _sev, _ebct in _sc_ebct_issues:
-                        show_alert(_sev, f"{_layer}: contact time {_ebct:.2f} min",
+                        show_alert(_sev, f"{_layer}: contact time {fmt(_ebct, 'time_min', 2)}",
                             "Reduced contact time may compromise particulate capture "
                             "stability under peak hydraulic loading.")
             if not _sc_lv_issues and not _sc_ebct_issues:
@@ -169,9 +173,8 @@ def render_tab_filtration(inputs: dict, computed: dict):
 
     with st.expander("Pressure drop — clean / moderate / dirty (all scenarios)", expanded=True):
         st.caption(
-            f"Clean ΔP: Ergun equation on virgin bed.  "
-            f"Moderate = 50 % loaded · Dirty = 100 % loaded — cake model (Ruth).  "
-            f"α ({bw_dp['alpha_source']}) = {bw_dp['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg  |  "
+            f"Summary vs **🧱 Media** tab §3 (same α, M_max).  "
+            f"α ({bw_dp['alpha_source']}) = {bw_dp['alpha_used_m_kg']/1e9:.1f} {ulbl('alpha_m_kg')}  |  "
             f"M_max (effective) = {fmt(_sl_eff, 'loading_kg_m2', 2)}"
         )
         _load_data_dp = filter_loading(
@@ -202,10 +205,10 @@ def render_tab_filtration(inputs: dict, computed: dict):
                 f"ΔP dirty ({ulbl('pressure_mwc')})":    round(dv(sc_dp["dp_dirty_mwc"], 'pressure_mwc'), 3),
             })
         st.markdown("**Summary — all scenarios**")
-        st.dataframe(pd.DataFrame(_dp_summary), use_container_width=True, hide_index=True)
+        st.dataframe(pd.DataFrame(_dp_summary), **ST_DATAFRAME_KW)
         st.markdown("**Per-layer breakdown — N scenario**")
         _layers_full, _ = pressure_drop_layers_display_frames(bw_dp["layers"])
-        st.dataframe(_layers_full, use_container_width=True, hide_index=True)
+        st.dataframe(_layers_full, **ST_DATAFRAME_KW)
         p1, p2, p3 = st.columns(3)
         p1.metric(
             f"ΔP clean (N) ({ulbl('pressure_bar')})",
@@ -232,7 +235,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
             st.info(
                 f"**Ruth cake model** · BW setpoint {fmt(dp_trigger_bar, 'pressure_bar', 2)} · "
                 f"M_max {fmt(solid_loading, 'loading_kg_m2', 2)} · "
-                f"α ({first_cyc['alpha_source']}) = {first_cyc['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg · "
+                f"α ({first_cyc['alpha_source']}) = {first_cyc['alpha_used_m_kg']/1e9:.1f} {ulbl('alpha_m_kg')} · "
                 f"Temperature range {fmt(temp_low, 'temperature_c', 0)} — "
                 f"{fmt(feed_temp, 'temperature_c', 0)} — {fmt(temp_high, 'temperature_c', 0)}"
             )
@@ -259,7 +262,10 @@ def render_tab_filtration(inputs: dict, computed: dict):
                         if _sched:
                             _by_sched.add(tk)
                         _suffix = " ★" if _sched else ""
-                        row[col_disp] = f"{tr['Cycle duration (h)']:.1f} h{_suffix}" if tr else "—"
+                        row[col_disp] = (
+                            f"{fmt(float(tr['Cycle duration (h)']), 'time_h', 1)}{_suffix}"
+                            if tr else "—"
+                        )
                     mat_rows.append(row)
                 st.dataframe(pd.DataFrame(mat_rows).set_index("Feed TSS"), use_container_width=True)
                 if _by_sched:
@@ -275,10 +281,56 @@ def render_tab_filtration(inputs: dict, computed: dict):
             with st.expander("ΔP vs M curve — N scenario, design temperature", expanded=False):
                 st.dataframe(
                     filtration_dp_curve_display_df(first_cyc["dp_curve"]),
-                    use_container_width=True, hide_index=True,
+                    **ST_DATAFRAME_KW,
                 )
         else:
             st.info("No filtration cycle data available.")
+
+    _cycle_unc = computed.get("cycle_uncertainty") or {}
+    if _cycle_unc:
+        with st.expander("Cycle duration uncertainty — optimistic / expected / conservative", expanded=False):
+            st.caption(
+                "Deterministic envelope at **design TSS** (not probabilistic). "
+                "Corners vary α calibration, TSS, capture efficiency, and maldistribution — see "
+                "`engine/uncertainty.py`."
+            )
+            _unc_rows = []
+            for _sc, _u in _cycle_unc.items():
+                _unc_rows.append({
+                    "Scenario": _sc,
+                    f"Optimistic ({ulbl('time_h')})": fmt(_u["cycle_optimistic_h"], "time_h", 1),
+                    f"Expected ({ulbl('time_h')})": fmt(_u["cycle_expected_h"], "time_h", 1),
+                    f"Conservative ({ulbl('time_h')})": fmt(_u["cycle_conservative_h"], "time_h", 1),
+                    "Spread %": f"{_u['spread_pct']:.1f}",
+                    "Stability": _u["stability"],
+                })
+            st.dataframe(pd.DataFrame(_unc_rows), **ST_DATAFRAME_KW)
+            _u_n = _cycle_unc.get("N") or {}
+            if _u_n:
+                st.info(_u_n.get("stability_note", ""))
+                try:
+                    import plotly.graph_objects as go
+
+                    _fig = go.Figure(
+                        go.Bar(
+                            x=["Optimistic", "Expected", "Conservative"],
+                            y=[
+                                dv(_u_n["cycle_optimistic_h"], "time_h"),
+                                dv(_u_n["cycle_expected_h"], "time_h"),
+                                dv(_u_n["cycle_conservative_h"], "time_h"),
+                            ],
+                            marker_color=["#1a7a1a", "#2563eb", "#cc5500"],
+                        )
+                    )
+                    _fig.update_layout(
+                        title=f"N scenario — cycle duration ({ulbl('time_h')})",
+                        yaxis_title=ulbl("time_h"),
+                        height=320,
+                        margin=dict(t=48, b=40),
+                    )
+                    st.plotly_chart(_fig, use_container_width=True)
+                except ImportError:
+                    pass
 
     st.divider()
     m1, m2, m3, m4 = st.columns(4)
@@ -296,9 +348,13 @@ def render_tab_filtration(inputs: dict, computed: dict):
                    fmt(cart_result['actual_flow_m3h_element'], 'flow_m3h', 3),
                    delta=fmt(cart_result["q_lpm_element"], "flow_l_min", 1),
                    delta_color="off")
-        ca4.metric("Dirt hold / element", f"{cart_result['dhc_g_element']:.0f} g",
-                   delta=f"{cart_result['element_ties']} TIE", delta_color="off")
-        st.table(pd.DataFrame([
+        ca4.metric(
+            f"Dirt hold / element ({ulbl('mass_kg')})",
+            fmt(float(cart_result["dhc_g_element"]) / 1000.0, "mass_kg", 2),
+            delta=f"{cart_result['element_ties']} TIE",
+            delta_color="off",
+        )
+        st.dataframe(pd.DataFrame([
             [f"Design flow ({ulbl('flow_m3h')})", fmt(cart_result['design_flow_m3h'], 'flow_m3h', 1)],
             ["Element size",         cart_result["element_size"]],
             ["Rating",               f"{cart_result['rating_um']} µm absolute"],
@@ -307,11 +363,11 @@ def render_tab_filtration(inputs: dict, computed: dict):
             [f"Flow / element ({ulbl('flow_m3h')})", fmt(cart_result['actual_flow_m3h_element'], 'flow_m3h', 3)],
             ["ΔP clean (BOL)",       fmt(cart_result["dp_clean_bar"], "pressure_bar", 4)],
             ["ΔP EOL",               fmt(cart_result["dp_eol_bar"], "pressure_bar", 4)],
-            ["DHC / element",        f"{cart_result['dhc_g_element']:.0f} g"],
+            [f"DHC / element ({ulbl('mass_kg')})", fmt(float(cart_result["dhc_g_element"]) / 1000.0, "mass_kg", 2)],
             ["DHC basis",            (
                 "Vendor datasheet" if cart_result.get("dhc_basis") == "vendor_override"
                 else "Model (g/TIE × rating)"
             )],
             ["Replacement interval", f"{cart_result['replacement_freq_days']:.0f} days"],
             ["Annual element cost",  f"USD {cart_result['annual_cost_usd']:,.0f}"],
-        ], columns=["Parameter", "Value"]))
+        ], columns=["Parameter", "Value"]), **ST_DATAFRAME_KW)

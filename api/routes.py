@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import copy
 import json
 import logging
-from typing import Annotated, Any, Dict
+from typing import Annotated, Any, Dict, Literal
 
-from fastapi import APIRouter, Body, HTTPException
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from engine.compute import compute_all
+from engine.units import convert_inputs
 
 _LOG = logging.getLogger("aquasight.api")
 
@@ -32,9 +34,16 @@ router = APIRouter(tags=["compute"])
 @router.post(
     "/compute",
     summary="Run full MMF engineering compute",
-    description="Body must be a JSON object: the same **SI** ``inputs`` dict as ``compute_all`` "
-    "(after sidebar ``convert_inputs`` in the Streamlit app). Returns a JSON-serialisable **computed** dict.",
-    responses={422: {"description": "Malformed body (not a JSON object)"}},
+    description=(
+        "Body: JSON object of **inputs** passed to ``engine.compute.compute_all`` after optional "
+        "unit conversion.\n\n"
+        "* ``unit_system=metric`` (default): numeric fields are **SI** (same contract as the "
+        "Streamlit app after the sidebar builds the inputs dict).\n"
+        "* ``unit_system=imperial``: numeric fields use **US customary display** units where "
+        "``engine.units.INPUT_QUANTITY_MAP`` applies (e.g. ``total_flow`` in gpm, lengths in ft / "
+        "in, pressures in psi). The server runs ``engine.units.convert_inputs`` before compute."
+    ),
+    responses={422: {"description": "Malformed body or invalid query parameters"}},
 )
 def post_compute(
     inputs: Annotated[
@@ -49,11 +58,22 @@ def post_compute(
             },
         ),
     ],
+    unit_system: Annotated[
+        Literal["metric", "imperial"],
+        Query(
+            description=(
+                "Physical units of numeric fields in the JSON body. "
+                "`metric` (default): SI. `imperial`: converted to SI via `convert_inputs` before compute."
+            ),
+        ),
+    ] = "metric",
 ) -> Dict[str, Any]:
     if not isinstance(inputs, dict):
         raise HTTPException(status_code=422, detail="Request body must be a JSON object.")
+    work = copy.deepcopy(inputs)
+    si_inputs = convert_inputs(work, unit_system)
     try:
-        out = compute_all(inputs)
+        out = compute_all(si_inputs)
     except Exception as e:
         _LOG.exception("compute_all failed: %s", e)
         raise HTTPException(status_code=500, detail=f"compute_all failed: {type(e).__name__}: {e}") from e

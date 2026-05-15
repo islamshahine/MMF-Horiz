@@ -2,14 +2,15 @@
 
 All numeric checks assume **SI base values** — the same dict ``inputs`` that
 ``compute_all`` receives after ``render_sidebar`` → ``convert_inputs`` (see
-``engine/units.py``). Lengths in messages are labelled **(SI, m)**; the sidebar
-still shows imperial/metric via ``fmt`` / ``ulbl`` / ``dv`` — do not convert
-validation thresholds to display units here.
+``engine/units.py``). User-facing error text uses ``format_value`` when
+``unit_system`` is ``imperial`` so thresholds match the sidebar toggle.
 """
 from __future__ import annotations
 
 import copy
-from typing import Any, List, Sequence
+from typing import Any, List, Optional, Sequence
+
+from engine.units import format_value
 
 # Reference inputs (SI) aligned with tests/test_integration.py::_INPUTS — used only when
 # user inputs fail validation so compute_all can still return a full computed dict.
@@ -25,6 +26,11 @@ _REF_LAYERS = [
      "rho_p_eff": 1450, "psi": 0.70, "is_porous": False, "is_support": False,
      "lv_threshold_m_h": 15.0, "ebct_threshold_min": 2.0},
 ]
+def _qty_msg(si_val: float, quantity: str, unit_system: str, *, decimals: int = 3) -> str:
+    """Format an SI magnitude for validation messages (matches sidebar units)."""
+    return format_value(float(si_val), quantity, unit_system, decimals)
+
+
 REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
     "total_flow": 21000.0, "streams": 1, "n_filters": 16,
     "hydraulic_assist": 0, "redundancy": 1,
@@ -45,6 +51,18 @@ REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
     "layers": copy.deepcopy(_REF_LAYERS),
     "solid_loading": 1.5, "captured_solids_density": 1020.0,
     "solid_loading_scale": 1.0, "maldistribution_factor": 1.0,
+    "use_calculated_maldistribution": False,
+    "collector_header_id_m": 0.25,
+    "collector_header_id_linked": True,
+    "n_bw_laterals": 4,
+    "lateral_dn_mm": 50.0, "lateral_spacing_m": 0.0, "lateral_length_m": 0.0,
+    "lateral_orifice_d_mm": 0.0, "n_orifices_per_lateral": 0,
+    "lateral_discharge_cd": 0.62, "use_geometry_lateral": True,
+    "lateral_material": "Stainless steel",
+    "lateral_construction": "Drilled perforated pipe",
+    "wedge_slot_width_mm": 0.0,
+    "wedge_open_area_fraction": 0.0,
+    "max_lateral_open_area_fraction": 0.0,
     "alpha_calibration_factor": 1.0, "tss_capture_efficiency": 1.0,
     "expansion_calibration_scale": 1.0,
     "alpha_specific": 1e12, "dp_trigger_bar": 1.0,
@@ -52,6 +70,9 @@ REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
     "air_scour_mode": "manual", "air_scour_target_expansion_pct": 20.0,
     "airwater_step_water_m_h": 12.5,
     "bw_timeline_stagger": "feasibility_trains",
+    "bw_schedule_horizon_days": 7,
+    "collector_header_feed_mode": "one_end",
+    "nozzle_catalogue_id": "",
     "bw_cycles_day": 1,
     "bw_s_drain": 10, "bw_s_air": 1, "bw_s_airw": 5,
     "bw_s_hw": 10, "bw_s_settle": 2, "bw_s_fill": 10, "bw_total_min": 38,
@@ -82,7 +103,7 @@ REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
     "cf_inlet_tss": 10.0, "cf_outlet_tss": 1.5,
     "dp_dist": 0.02, "dp_inlet_pipe": 0.30, "dp_outlet_pipe": 0.20,
     "p_residual": 0.5, "static_head": 0.0,
-    "pump_eta": 0.75, "bw_pump_eta": 0.72, "motor_eta": 0.95,
+    "pump_eta": 0.75, "bw_pump_eta": 0.72, "motor_iec_class": "IE3", "motor_eta": 0.955,
     "elec_tariff": 0.10, "op_hours_yr": 8400,
     "design_life_years": 20, "discount_rate": 5.0,
     "project_life_years": 20,
@@ -99,8 +120,11 @@ REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
     "replacement_interval_lining": 15.0,
     "annual_benefit_usd": 0.0,
     "steel_cost_usd_kg": 3.5,
-    "erection_usd_vessel": 50000.0, "piping_usd_vessel": 80000.0,
-    "instrumentation_usd_vessel": 30000.0, "civil_usd_vessel": 40000.0,
+    "erection_usd_per_kg_steel": 0.625,
+    "labor_usd_per_kg_steel": 0.25,
+    "piping_usd_vessel": 80000.0,
+    "instrumentation_usd_vessel": 30000.0,
+    "civil_usd_per_kg_working": 0.10,
     "engineering_pct": 12.0, "contingency_pct": 10.0,
     "media_replace_years": 7.0,
     "econ_media_gravel": 80.0, "econ_media_sand": 150.0,
@@ -245,12 +269,17 @@ def validate_layers(layers: Any, errors: List[str], warnings: List[str]) -> None
                     )
 
 
-def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
+def validate_inputs(
+    inputs: dict[str, Any],
+    *,
+    unit_system: Optional[str] = None,
+) -> dict[str, Any]:
     """
     Cross-check key engineering inputs (SI magnitudes, same contract as ``compute_all``).
 
     ``render_sidebar`` must have applied ``convert_inputs`` so lengths, flows,
     and velocities here are SI even when the UI unit toggle is imperial.
+    Pass ``unit_system`` (from ``inputs.get("unit_system")``) for display-aligned messages.
 
     Returns
     -------
@@ -258,7 +287,11 @@ def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
         valid: bool
         errors: list[str]
         warnings: list[str]
+        unit_system: str — echo of the display system used for messages
     """
+    us = str(unit_system or inputs.get("unit_system") or "metric")
+    if us not in ("metric", "imperial"):
+        us = "metric"
     errors: List[str] = []
     warnings: List[str] = []
 
@@ -271,7 +304,7 @@ def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
         errors,
     )
     if errors:
-        return {"valid": False, "errors": errors, "warnings": warnings}
+        return {"valid": False, "errors": errors, "warnings": warnings, "unit_system": us}
 
     validate_positive("total_flow", inputs["total_flow"], errors)
     validate_positive("streams", inputs["streams"], errors)
@@ -312,7 +345,8 @@ def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
         tlen = float(inputs["total_length"])
         if tlen <= nid:
             errors.append(
-                f"total_length ({tlen:g} m, SI) must be greater than nominal_id ({nid:g} m, SI)."
+                f"total_length ({_qty_msg(tlen, 'length_m', us)}) must be greater than "
+                f"nominal_id ({_qty_msg(nid, 'length_m', us)})."
             )
     except (TypeError, ValueError):
         errors.append("nominal_id / total_length: must be numeric.")
@@ -320,17 +354,29 @@ def validate_inputs(inputs: dict[str, Any]) -> dict[str, Any]:
     validate_positive("bw_velocity", inputs["bw_velocity"], errors)
 
     try:
+        from engine.collector_geometry import max_collector_centerline_height_m
+
         np_h = float(inputs["nozzle_plate_h"])
         col_h = float(inputs["collector_h"])
+        nid = float(inputs["nominal_id"])
+        hdr = float(inputs.get("collector_header_id_m", 0.25) or 0.25)
+        col_max = max_collector_centerline_height_m(nid, hdr)
         if col_h <= np_h:
             errors.append(
-                f"collector_h ({col_h:g} m, SI) must be greater than nozzle_plate_h ({np_h:g} m, SI)."
+                f"collector_h ({_qty_msg(col_h, 'length_m', us)}) must be greater than "
+                f"nozzle_plate_h ({_qty_msg(np_h, 'length_m', us)})."
+            )
+        if col_h > col_max + 1e-6:
+            errors.append(
+                f"collector_h ({_qty_msg(col_h, 'length_m', us)}) exceeds geometric max "
+                f"{_qty_msg(col_max, 'length_m', us)} "
+                f"(vessel ID − 100 mm − header ID/2)."
             )
     except (TypeError, ValueError):
-        errors.append("nozzle_plate_h / collector_h: must be numeric.")
+        errors.append("nozzle_plate_h / collector_h / nominal_id: must be numeric.")
 
     layers = inputs.get("layers")
     validate_layers(layers, errors, warnings)
 
     valid = len(errors) == 0
-    return {"valid": valid, "errors": errors, "warnings": warnings}
+    return {"valid": valid, "errors": errors, "warnings": warnings, "unit_system": us}

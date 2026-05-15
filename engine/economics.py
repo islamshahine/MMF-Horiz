@@ -22,29 +22,43 @@ def capital_recovery_factor(discount_rate_pct: float, design_life_years: int) ->
 
 def capex_breakdown(
     weight_total_kg: float,
+    working_weight_kg: float,
     n_vessels: int,
     steel_cost_usd_kg: float,
-    erection_usd: float,
+    erection_usd_per_kg_steel: float,
+    labor_usd_per_kg_steel: float,
     piping_usd: float,
     instrumentation_usd: float,
-    civil_usd: float,
+    civil_usd_per_kg_working: float,
     engineering_pct: float,
     contingency_pct: float,
 ) -> dict:
     """
     Returns CAPEX breakdown for the complete filter station.
 
-    Direct costs: steel + erection + piping + instrumentation + civil
+    Direct costs: steel + **erection** + **field labor** (both scaled by **dry
+    installed steel kg / vessel**) + piping + instrumentation + **civil**
+    (scaled by **operating / working weight kg / vessel** — water, media, steel,
+    lining in service).
+
     Indirect: engineering % of direct, then contingency % of (direct + eng).
-    All cost inputs are per-vessel; multiplied by n_vessels internally.
+
+    ``piping_usd`` and ``instrumentation_usd`` remain **per-vessel lump sums**
+    (× ``n_vessels``).
     """
-    steel_cost = weight_total_kg * steel_cost_usd_kg * n_vessels
+    w_s = max(0.0, float(weight_total_kg))
+    w_op = max(0.0, float(working_weight_kg))
+    n = max(0, int(n_vessels))
+
+    steel_cost = w_s * steel_cost_usd_kg * n
+    erection_usd = max(0.0, float(erection_usd_per_kg_steel)) * w_s * n
+    labor_usd = max(0.0, float(labor_usd_per_kg_steel)) * w_s * n
+    civil_usd = max(0.0, float(civil_usd_per_kg_working)) * w_op * n
+    piping_total = max(0.0, float(piping_usd)) * n
+    instr_total = max(0.0, float(instrumentation_usd)) * n
+
     direct_installed = (
-        steel_cost
-        + erection_usd * n_vessels
-        + piping_usd * n_vessels
-        + instrumentation_usd * n_vessels
-        + civil_usd * n_vessels
+        steel_cost + erection_usd + labor_usd + piping_total + instr_total + civil_usd
     )
     engineering_cost = direct_installed * engineering_pct / 100.0
     contingency_cost = (direct_installed + engineering_cost) * contingency_pct / 100.0
@@ -52,15 +66,16 @@ def capex_breakdown(
 
     return {
         "steel_cost_usd":         round(steel_cost),
-        "erection_usd":           round(erection_usd * n_vessels),
-        "piping_usd":             round(piping_usd * n_vessels),
-        "instrumentation_usd":    round(instrumentation_usd * n_vessels),
-        "civil_usd":              round(civil_usd * n_vessels),
+        "erection_usd":           round(erection_usd),
+        "labor_usd":              round(labor_usd),
+        "piping_usd":             round(piping_total),
+        "instrumentation_usd":    round(instr_total),
+        "civil_usd":              round(civil_usd),
         "direct_installed_usd":   round(direct_installed),
         "engineering_usd":        round(engineering_cost),
         "contingency_usd":        round(contingency_cost),
         "total_capex_usd":        round(total_capex),
-        "capex_per_vessel_usd":   round(total_capex / n_vessels) if n_vessels else 0,
+        "capex_per_vessel_usd":   round(total_capex / n) if n else 0,
     }
 
 

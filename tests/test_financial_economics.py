@@ -161,3 +161,53 @@ def test_build_econ_financial_smoke():
     assert fin["lifecycle_cost"] == calculate_lifecycle_cost(
         [r["net_cash_flow_usd"] for r in fin["cashflow_table"]]
     )
+
+
+def test_build_econ_financial_energy_sensitivity_matches_linkage_pattern():
+    """Higher annual energy cost → more negative NPV (Economics tab rebuild uses same entry point)."""
+    base = {
+        "design_life_years": 5,
+        "project_life_years": 5,
+        "discount_rate": 5.0,
+        "inflation_rate": 0.0,
+        "escalation_energy_pct": 0.0,
+        "escalation_maintenance_pct": 0.0,
+        "tax_rate": 0.0,
+        "maintenance_pct_capex": 0.0,
+        "salvage_value_pct": 0.0,
+        "depreciation_method": "straight_line",
+        "depreciation_years": 5,
+        "annual_benefit_usd": 0.0,
+        "replacement_interval_media": 10,
+        "replacement_interval_nozzles": 10,
+        "replacement_interval_lining": 20,
+    }
+    econ_capex = {"total_capex_usd": 1_000_000}
+    lining = {"protection_type": "None", "total_cost_usd": 0.0}
+    econ_carbon = {"co2_operational_kg_yr": 100.0, "co2_construction_kg": 1000.0}
+    econ_bench = {"lcow": 0.1, "annual_flow_m3": 1e6}
+    o1 = _minimal_econ_opex()
+    o2 = {
+        **o1,
+        "energy_cost_usd_yr": o1["energy_cost_usd_yr"] + 50_000.0,
+        "total_opex_usd_yr": o1["total_opex_usd_yr"] + 50_000.0,
+    }
+    f1 = build_econ_financial(
+        inputs=base,
+        econ_capex=econ_capex,
+        econ_opex=o1,
+        econ_carbon=econ_carbon,
+        econ_bench=econ_bench,
+        lining_result=lining,
+        n_vessels=1,
+    )
+    f2 = build_econ_financial(
+        inputs=base,
+        econ_capex=econ_capex,
+        econ_opex=o2,
+        econ_carbon=econ_carbon,
+        econ_bench=econ_bench,
+        lining_result=lining,
+        n_vessels=1,
+    )
+    assert float(f2["npv"]) < float(f1["npv"])

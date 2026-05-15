@@ -35,6 +35,12 @@ from engine.thresholds import (
     layer_ebct_floor_min,
     layer_lv_cap_m_h,
 )
+from engine.uncertainty import cycle_uncertainty_by_scenario
+from engine.uncertainty_economics import lcow_envelope_from_cycle_uncertainty
+from engine.collector_intelligence import analyse_collector_performance
+from engine.collector_hydraulics import compute_collector_hydraulics, distribution_solver_converged
+from engine.collector_geometry import enrich_collector_design_advisory
+from engine.design_basis import build_design_basis
 
 
 def lv_severity_classify(vel: float, threshold: float):
@@ -65,7 +71,10 @@ def compute_all(inputs: dict) -> dict:
     import time
     from engine import logger as _log
     t0 = time.perf_counter()
-    input_validation = validate_inputs(inputs)
+    input_validation = validate_inputs(
+        inputs,
+        unit_system=str(inputs.get("unit_system") or "metric"),
+    )
     if not input_validation["valid"]:
         _log.log_validation_errors(input_validation.get("errors", []))
     _work = REFERENCE_FALLBACK_INPUTS if not input_validation["valid"] else inputs
@@ -143,7 +152,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         solid_loading   = _work["solid_loading"]
         _sl_scale = max(0.5, min(1.5, float(_work.get("solid_loading_scale", 1.0) or 1.0)))
         solid_loading_eff = float(solid_loading) * _sl_scale
-        _mal = max(1.0, float(_work.get("maldistribution_factor", 1.0) or 1.0))
+        _mal_user = max(1.0, min(2.0, float(_work.get("maldistribution_factor", 1.0) or 1.0)))
+        _use_mal_calc = bool(_work.get("use_calculated_maldistribution", False))
         _acf = max(0.05, min(3.0, float(_work.get("alpha_calibration_factor", 1.0) or 1.0)))
         _tss_cap = max(0.0, min(1.0, float(_work.get("tss_capture_efficiency", 1.0) or 1.0)))
         _exp_scl = max(0.5, min(1.5, float(_work.get("expansion_calibration_scale", 1.0) or 1.0)))
@@ -220,10 +230,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         design_life_years    = _work["design_life_years"]
         discount_rate        = _work.get("discount_rate", 5.0)
         steel_cost_usd_kg    = _work["steel_cost_usd_kg"]
-        erection_usd_vessel  = _work["erection_usd_vessel"]
         piping_usd_vessel    = _work["piping_usd_vessel"]
         instrumentation_usd_vessel = _work["instrumentation_usd_vessel"]
-        civil_usd_vessel     = _work["civil_usd_vessel"]
         engineering_pct      = _work["engineering_pct"]
         contingency_pct      = _work["contingency_pct"]
         media_replace_years  = _work["media_replace_years"]
@@ -298,6 +306,37 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         _n_hyd       = max(1, n_filters - hydraulic_assist)
         q_per_filter = (total_flow / streams) / _n_hyd if _n_hyd > 0 else 0.0
 
+        _q_bw_est = max(bw_velocity * avg_area, 2.0 * q_per_filter)
+        collector_hyd = compute_collector_hydraulics(
+            q_bw_m3h=_q_bw_est,
+            filter_area_m2=avg_area,
+            cyl_len_m=cyl_len,
+            nominal_id_m=float(nominal_id),
+            np_bore_dia_mm=float(np_bore_dia),
+            np_density_per_m2=float(np_density),
+            collector_header_id_m=float(_work.get("collector_header_id_m", 0.25) or 0.25),
+            n_laterals=int(_work.get("n_bw_laterals", 4) or 4),
+            lateral_dn_mm=float(_work.get("lateral_dn_mm", 50.0) or 50.0),
+            lateral_spacing_m=float(_work.get("lateral_spacing_m", 0.0) or 0.0),
+            lateral_length_m=float(_work.get("lateral_length_m", 0.0) or 0.0),
+            lateral_orifice_d_mm=float(_work.get("lateral_orifice_d_mm", 0.0) or 0.0),
+            n_orifices_per_lateral=int(_work.get("n_orifices_per_lateral", 0) or 0),
+            nozzle_plate_h_m=float(nozzle_plate_h),
+            collector_h_m=float(collector_h),
+            use_geometry_lateral=bool(_work.get("use_geometry_lateral", True)),
+            lateral_material=str(_work.get("lateral_material", "Stainless steel")),
+            lateral_construction=str(_work.get("lateral_construction", "Drilled perforated pipe")),
+            max_open_area_fraction=float(_work.get("max_lateral_open_area_fraction", 0) or 0),
+            wedge_slot_width_mm=float(_work.get("wedge_slot_width_mm", 0) or 0),
+            wedge_open_area_fraction=float(_work.get("wedge_open_area_fraction", 0) or 0),
+            bw_head_mwc=float(bw_head_mwc),
+            discharge_coefficient=float(_work.get("lateral_discharge_cd", 0.62) or 0.62),
+            rho_water=rho_bw,
+            header_feed_mode=str(_work.get("collector_header_feed_mode", "one_end") or "one_end"),
+        )
+        _mal_calc = float(collector_hyd.get("maldistribution_factor_calc", 1.0) or 1.0)
+        _mal = max(1.0, min(2.0, _mal_calc if _use_mal_calc else _mal_user))
+
         # ── Block 4: Pressure drop (Ergun) ────────────────────────────────────────
         bw_dp = pressure_drop(
             layers=layers,
@@ -331,15 +370,6 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             corrosion_allowance_mm=corrosion,
             density_kg_m3=steel_density,
             override_thickness_mm=np_override_t,
-        )
-
-        # ── Block 6: Nozzle schedule ──────────────────────────────────────────────
-        nozzle_sched = estimate_nozzle_schedule(
-            q_filter_m3h=q_per_filter,
-            bw_velocity_ms=bw_velocity,
-            area_filter_m2=avg_area,
-            default_rating=default_rating,
-            stub_length_mm=float(nozzle_stub_len),
         )
 
         # ── Block 6: Supports ─────────────────────────────────────────────────────
@@ -378,6 +408,20 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                 ),
             }
 
+        # Nozzle schedule (after air scour rate resolved for auto-expansion mode)
+        _sched_override = _work.get("nozzle_sched_override")
+        if isinstance(_sched_override, list) and len(_sched_override) > 0:
+            nozzle_sched = list(_sched_override)
+        else:
+            nozzle_sched = estimate_nozzle_schedule(
+                q_filter_m3h=q_per_filter,
+                bw_velocity_ms=bw_velocity,
+                area_filter_m2=avg_area,
+                default_rating=default_rating,
+                stub_length_mm=float(nozzle_stub_len),
+                air_scour_rate_m_h=float(air_scour_used),
+            )
+
         bw_hyd = backwash_hydraulics(
             filter_area_m2=avg_area,
             bw_rate_m_h=bw_velocity,
@@ -402,6 +446,21 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             rho_water=rho_bw,
             min_freeboard_m=freeboard_mm / 1000.0,
         )
+        collector_hyd = enrich_collector_design_advisory(
+            collector_hyd,
+            bw_col=bw_col,
+            design_pressure_bar=float(design_pressure),
+            bw_head_mwc=float(bw_head_mwc),
+            default_rating=str(default_rating),
+            vessel_pressure_bar=float(vessel_pressure_bar),
+            max_open_area_fraction=float(_work.get("max_lateral_open_area_fraction", 0) or 0),
+            lateral_material=str(_work.get("lateral_material", "Stainless steel")),
+            lateral_construction=str(_work.get("lateral_construction", "Drilled perforated pipe")),
+            feed_salinity_ppt=float(_work.get("feed_sal", 35.0) or 35.0),
+            wedge_slot_width_mm=float(_work.get("wedge_slot_width_mm", 0) or 0),
+            wedge_open_area_fraction=float(_work.get("wedge_open_area_fraction", 0) or 0),
+        )
+        collector_hyd["distribution_converged"] = distribution_solver_converged(collector_hyd)
         bw_exp = bed_expansion(
             layers=layers,
             bw_velocity_m_h=bw_velocity,
@@ -493,6 +552,23 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                     tss_capture_efficiency=_tss_cap,
                 )
 
+        cycle_uncertainty = cycle_uncertainty_by_scenario(
+            _load_data_cyc,
+            layers=layers,
+            avg_area_m2=avg_area,
+            solid_loading_kg_m2=solid_loading_eff,
+            captured_density_kg_m3=captured_solids_density,
+            water_temp_c=feed_temp,
+            rho_water=rho_feed,
+            dp_trigger_bar=dp_trigger_bar,
+            alpha_m_kg=alpha_specific,
+            layer_areas_m2=_layer_areas,
+            maldistribution_factor=_mal,
+            alpha_calibration_factor=_acf,
+            tss_capture_efficiency=_tss_cap,
+            design_tss_mg_l=tss_avg,
+        )
+
         # ── BW scheduling & feasibility ───────────────────────────────────────────
         _bw_dur_h = bw_total_min / 60.0
 
@@ -559,16 +635,21 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             _sim_d_tl = float(_cell_tl.get("sim_demand", 0.0))
         except (KeyError, TypeError):
             pass
-        _stag = bw_timeline_stagger if bw_timeline_stagger in ("uniform", "feasibility_trains") else "feasibility_trains"
+        _stag = bw_timeline_stagger if bw_timeline_stagger in (
+            "uniform", "feasibility_trains", "optimized_trains",
+        ) else "feasibility_trains"
+        _horizon_days = int(max(1, min(14, int(_work.get("bw_schedule_horizon_days", 7) or 7))))
+        _horizon_h = float(_horizon_days * 24)
         bw_timeline = filter_bw_timeline_24h(
             n_filters_total=int(streams * n_filters),
             t_cycle_h=_tl_tcyc,
             bw_duration_h=_bw_dur_h,
-            horizon_h=24.0,
+            horizon_h=_horizon_h,
             bw_trains=_bw_trains_tl,
             stagger_model=_stag,
             sim_demand=_sim_d_tl,
         )
+        bw_timeline["horizon_days"] = _horizon_days
         _n_des_paths = streams * max(1, n_filters - hydraulic_assist)
         _tl_stats = timeline_plant_operating_hours(
             bw_timeline.get("filters") or [],
@@ -833,14 +914,34 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                                   else econ_media_sand) / 1000.0
             _media_co2_kg[_mt] = media_co2_by_type.get(_mt, 0.05)
 
+        _wop_kg = float(wt_oper.get("w_operating_kg") or 0.0)
+        if "erection_usd_per_kg_steel" in _work:
+            erection_usd_per_kg_steel = float(_work["erection_usd_per_kg_steel"])
+        elif "erection_usd_vessel" in _work:
+            erection_usd_per_kg_steel = float(_work["erection_usd_vessel"]) / max(w_total, 1.0)
+        else:
+            erection_usd_per_kg_steel = 0.625
+        if "labor_usd_per_kg_steel" in _work:
+            labor_usd_per_kg_steel = float(_work["labor_usd_per_kg_steel"])
+        else:
+            labor_usd_per_kg_steel = 0.25
+        if "civil_usd_per_kg_working" in _work:
+            civil_usd_per_kg_working = float(_work["civil_usd_per_kg_working"])
+        elif "civil_usd_vessel" in _work:
+            civil_usd_per_kg_working = float(_work["civil_usd_vessel"]) / max(_wop_kg, 1.0)
+        else:
+            civil_usd_per_kg_working = 0.10
+
         econ_capex = capex_breakdown(
             weight_total_kg     = w_total,
+            working_weight_kg   = _wop_kg,
             n_vessels           = _n_total_vessels,
             steel_cost_usd_kg   = steel_cost_usd_kg,
-            erection_usd        = erection_usd_vessel,
+            erection_usd_per_kg_steel=erection_usd_per_kg_steel,
+            labor_usd_per_kg_steel=labor_usd_per_kg_steel,
             piping_usd          = piping_usd_vessel,
             instrumentation_usd = instrumentation_usd_vessel,
-            civil_usd           = civil_usd_vessel,
+            civil_usd_per_kg_working=civil_usd_per_kg_working,
             engineering_pct     = engineering_pct,
             contingency_pct     = contingency_pct,
         )
@@ -898,6 +999,18 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             operating_hours    = float(op_hours_yr),
             discount_rate_pct  = float(discount_rate),
         )
+        _cu_n_econ = (cycle_uncertainty or {}).get("N") or {}
+        cycle_economics = {}
+        if _cu_n_econ and float(econ_opex.get("total_opex_usd_yr", 0) or 0) > 0:
+            cycle_economics = lcow_envelope_from_cycle_uncertainty(
+                capex_total_usd=float(econ_capex["total_capex_usd"]),
+                econ_opex=econ_opex,
+                cycle_uncertainty_n=_cu_n_econ,
+                discount_rate_pct=float(discount_rate),
+                design_life_years=int(design_life_years),
+                annual_flow_m3=float(econ_opex.get("annual_flow_m3", 0) or 0),
+                electricity_tariff=float(elec_tariff),
+            )
         econ_npv = npv_lifecycle_cost_profile(
             capex_total_usd   = float(econ_capex["total_capex_usd"]),
             annual_opex_usd   = float(econ_opex["total_opex_usd_yr"]),
@@ -976,6 +1089,12 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                 f"(below min EBCT setpoint for layer {_worst_eb[1]}) "
                 f"in scenario {_worst_eb[0]}."
             )
+        _cu_n = (cycle_uncertainty or {}).get("N") or {}
+        if _cu_n.get("stability") in ("wide", "moderate"):
+            drivers.append(str(_cu_n.get("stability_note", "")))
+            if _cu_n.get("stability") == "wide":
+                n_advisories += 1
+
         if not drivers:
             drivers.append("All hydraulic parameters remain within the recommended operating envelope across all evaluated scenarios.")
 
@@ -1012,9 +1131,13 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
 
         for _sc_name, _xr in _all_scenarios:
             if _sc_name not in _eval_set:
-                rob_rows.append({"Scenario": _sc_name, "Filtration rate": "—",
-                                 "Hydraulic status": "Not evaluated",
-                                 "EBCT status": "Not evaluated", "Overall": "Not evaluated"})
+                rob_rows.append({
+                    "Scenario": _sc_name,
+                    "lv_m_h": None,
+                    "Hydraulic status": "Not evaluated",
+                    "EBCT status": "Not evaluated",
+                    "Overall": "Not evaluated",
+                })
                 continue
             _q = _eval_set[_sc_name]
             _lv_n = _q / avg_area if avg_area > 0 else 0
@@ -1040,11 +1163,41 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                               else "Marginal"  if _worst_overall == "advisory"
                               else "Sensitive" if _worst_overall == "warning"
                               else "Critical")
-            rob_rows.append({"Scenario": _sc_name, "Filtration rate": f"{_lv_n:.2f} m/h",
-                             "Hydraulic status": _lv_label, "EBCT status": _eb_label,
-                             "Overall": _overall_label})
+            rob_rows.append({
+                "Scenario": _sc_name,
+                "lv_m_h": _lv_n,
+                "Hydraulic status": _lv_label,
+                "EBCT status": _eb_label,
+                "Overall": _overall_label,
+            })
 
         env_structural = compute_environment_structural(_work)
+
+        collector_intel = analyse_collector_performance(
+            bw_col=bw_col,
+            bw_hyd=bw_hyd,
+            nozzle_sched=nozzle_sched,
+            air_header_dn_mm=int(air_header_dn),
+            air_scour_rate_m_h=float(air_scour_rate),
+            nominal_id_m=float(nominal_id),
+        )
+
+        collector_cfd_bundle = None
+        try:
+            from engine.collector_cfd_export import build_collector_cfd_bundle
+
+            collector_cfd_bundle = build_collector_cfd_bundle(
+                _work,
+                {
+                    "collector_hyd": collector_hyd,
+                    "cyl_len": cyl_len,
+                    "nominal_id": nominal_id,
+                    "rho_bw": rho_bw,
+                    "mu_bw": mu_bw,
+                },
+            )
+        except Exception:
+            collector_cfd_bundle = None
 
         # ── Return dict ───────────────────────────────────────────────────────────
         return {
@@ -1078,6 +1231,11 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             "wt_sup": wt_sup, "wt_int": wt_int,
             # backwash
             "bw_hyd": bw_hyd, "bw_col": bw_col, "bw_exp": bw_exp, "bw_seq": bw_seq,
+            "collector_intel": collector_intel,
+            "collector_hyd": collector_hyd,
+            "collector_cfd_bundle": collector_cfd_bundle,
+            "maldistribution_factor_user": _mal_user,
+            "maldistribution_from_collector_model": _use_mal_calc,
             "air_scour_solve": air_scour_solve,
             "bw_timeline": bw_timeline,
             # TSS balance
@@ -1087,6 +1245,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             # filtration cycles & matrices
             "filt_cycles": filt_cycles, "load_data": load_data,
             "cycle_matrix": cycle_matrix,
+            "cycle_uncertainty": cycle_uncertainty,
+            "cycle_economics": cycle_economics,
             "tss_col_keys": tss_col_keys, "tss_vals": tss_vals,
             "temp_col_keys": temp_col_keys,
             "feasibility_matrix": feasibility_matrix,
@@ -1120,4 +1280,10 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             "input_validation": input_validation,
             "compute_used_reference_fallback": (not input_validation["valid"]),
             "env_structural": env_structural,
+            "design_basis": build_design_basis(_work, {
+                "q_per_filter": q_per_filter,
+                "maldistribution_factor": _mal,
+                "maldistribution_from_collector_model": _use_mal_calc,
+                "collector_hyd": collector_hyd,
+            }),
         }

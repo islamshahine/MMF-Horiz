@@ -1,5 +1,17 @@
 """ui/helpers.py — Shared UI helper functions for AQUASIGHT™ MMF."""
+from __future__ import annotations
+
+import re
+from typing import Any, Final
+
+import pandas as pd
 import streamlit as st
+
+# Default layout for read-only `st.dataframe` tables (single place if Streamlit API evolves).
+ST_DATAFRAME_KW: Final[dict[str, Any]] = {
+    "use_container_width": True,
+    "hide_index": True,
+}
 
 
 def fmt(si_val, quantity: str, decimals: int = 2) -> str:
@@ -31,6 +43,152 @@ def dv(si_val, quantity: str):
     from engine.units import display_value
     system = st.session_state.get("unit_system", "metric")
     return display_value(si_val, quantity, system)
+
+
+def _unit_system() -> str:
+    return str(st.session_state.get("unit_system", "metric"))
+
+
+def localize_engine_message(msg: str) -> str:
+    """
+    Rewrite embedded SI literals in engine-generated strings for imperial UI.
+
+    Engine layers store SI; warnings from ``collector_hydraulics`` / ``collector_geometry``
+    are formatted at display time so we do not duplicate physics strings.
+    """
+    if _unit_system() == "metric" or not msg:
+        return msg
+    from engine.units import format_value
+
+    us = "imperial"
+    out = str(msg)
+
+    def _fv(m: re.Match, qty: str, dec: int) -> str:
+        return format_value(float(m.group(1)), qty, us, dec)
+
+    out = re.sub(
+        r"([\d]+(?:\.[\d]+)?)\s*m³/h",
+        lambda m: _fv(m, "flow_m3h", 1),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"([\d]+(?:\.[\d]+)?)\s*m3/h",
+        lambda m: _fv(m, "flow_m3h", 1),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"([\d]+(?:\.[\d]+)?)\s*m/s",
+        lambda m: _fv(m, "velocity_m_s", 2),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"([\d]+(?:\.[\d]+)?)\s*m/h",
+        lambda m: _fv(m, "velocity_m_h", 1),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"([\d]+(?:\.[\d]+)?)\s*kPa",
+        lambda m: _fv(m, "pressure_kpa", 2),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"([\d]+(?:\.[\d]+)?)\s*mm\b",
+        lambda m: _fv(m, "length_mm", 1),
+        out,
+        flags=re.IGNORECASE,
+    )
+    out = re.sub(
+        r"([\d]+(?:\.[\d]+)?)\s*m\b",
+        lambda m: _fv(m, "length_m", 2),
+        out,
+        flags=re.IGNORECASE,
+    )
+    return out
+
+
+_COLLECTOR_PROFILE_FIELDS: Final[list[tuple[str, str, str, int]]] = [
+    ("station_m", "Station", "length_m", 3),
+    ("header_flow_m3h", "Header flow", "flow_m3h", 1),
+    ("header_velocity_m_s", "Header velocity", "velocity_m_s", 2),
+    ("lateral_flow_m3h", "Lateral flow", "flow_m3h", 1),
+    ("lateral_velocity_m_s", "Lateral velocity", "velocity_m_s", 2),
+    ("orifice_velocity_m_s", "Opening velocity", "velocity_m_s", 2),
+    ("cumulative_header_loss_kpa", "Cumulative header loss", "pressure_kpa", 2),
+]
+
+
+def collector_hyd_profile_display_df(profile: list[dict[str, Any]]) -> pd.DataFrame:
+    """Collector ladder profile table with unit labels for the active unit system."""
+    rows: list[dict[str, Any]] = []
+    for pt in profile:
+        row: dict[str, Any] = {}
+        for key, title, qty, dec in _COLLECTOR_PROFILE_FIELDS:
+            val = pt.get(key)
+            col = f"{title} ({ulbl(qty)})"
+            if val is None:
+                row[col] = "—"
+            else:
+                row[col] = fmt(val, qty, dec)
+        if "lateral_index" in pt:
+            row["Lateral #"] = pt["lateral_index"]
+        rows.append(row)
+    cols = ["Lateral #"] + [f"{t} ({ulbl(q)})" for _, t, q, _ in _COLLECTOR_PROFILE_FIELDS]
+    df = pd.DataFrame(rows)
+    return df[[c for c in cols if c in df.columns]]
+
+
+_BW_TIMELINE_STAGGER_LABELS: Final[dict[str, str]] = {
+    "feasibility_trains": "Feasibility BW trains (section 4)",
+    "optimized_trains": "Optimized trains (scheduling aid)",
+    "uniform": "Uniform stagger (legacy)",
+}
+
+
+_ORIFICE_NETWORK_FIELDS: Final[list[tuple[str, str, str, int]]] = [
+    ("station_m", "Station along header", "length_m", 3),
+    ("y_along_lateral_m", "Along lateral", "length_m", 3),
+    ("flow_m3h", "Hole flow", "flow_m3h", 2),
+    ("velocity_m_s", "Hole velocity", "velocity_m_s", 2),
+    ("orifice_d_mm", "Opening size", "length_mm", 1),
+]
+
+
+def orifice_network_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Perforation network table with unit labels for the active unit system."""
+    out_rows: list[dict[str, Any]] = []
+    for r in rows:
+        row: dict[str, Any] = {
+            "Lateral #": r.get("lateral_index"),
+            "Hole #": r.get("hole_index"),
+        }
+        for key, title, qty, dec in _ORIFICE_NETWORK_FIELDS:
+            val = r.get(key)
+            col = f"{title} ({ulbl(qty)})"
+            if val is None:
+                row[col] = "—"
+            else:
+                row[col] = fmt(val, qty, dec)
+        if r.get("construction"):
+            row["Construction"] = r.get("construction")
+        out_rows.append(row)
+    cols = (
+        ["Lateral #", "Hole #"]
+        + [f"{t} ({ulbl(q)})" for _, t, q, _ in _ORIFICE_NETWORK_FIELDS]
+        + (["Construction"] if any(r.get("construction") for r in rows) else [])
+    )
+    df = pd.DataFrame(out_rows)
+    return df[[c for c in cols if c in df.columns]]
+
+
+def bw_timeline_stagger_label(stagger_model: str | None) -> str:
+    """User-facing label for duty-chart stagger mode (not internal keys)."""
+    key = str(stagger_model or "").strip().lower()
+    return _BW_TIMELINE_STAGGER_LABELS.get(key, key.replace("_", " ").title() or "—")
 
 
 def pressure_drop_layers_display_frames(rows: list) -> tuple:
@@ -177,7 +335,7 @@ def media_properties_display_df(base: list) -> "object":
             f"Avg area ({ulbl('area_m2')})": round(dv(float(b["Area"]), "area_m2"), 4),
             f"ρp,eff ({ulbl('density_kg_m3')})": round(dv(float(b["rho_p_eff"]), "density_kg_m3"), 0),
             "ε₀": b.get("epsilon0", 0),
-            "d10 (mm)": round(float(b["d10"]), 2),
+            f"d10 ({ulbl('length_mm')})": round(dv(float(b["d10"]), "length_mm"), 2),
             "CU": round(float(b["cu"]), 2),
         })
     return pd.DataFrame(recs)
@@ -347,6 +505,84 @@ def nozzle_schedule_display_df(sched_rows: list) -> tuple:
             keys["notes"]: r.get("Notes", ""),
         })
     return pd.DataFrame(recs), keys
+
+
+def data_editor_value_to_dataframe(editor_value: "object", base_df: "object" = None):
+    """
+    Normalize st.data_editor session value to a pandas DataFrame.
+
+    Streamlit stores widget state as EditingState (edited_rows / added_rows /
+    deleted_rows), not as a DataFrame. Pass the display table as base_df.
+    """
+    import pandas as pd
+
+    if editor_value is None:
+        return None
+    if isinstance(editor_value, pd.DataFrame):
+        return editor_value
+    if hasattr(editor_value, "iloc"):
+        return editor_value
+    if not isinstance(editor_value, dict):
+        return None
+    if "edited_rows" in editor_value or "added_rows" in editor_value or "deleted_rows" in editor_value:
+        if base_df is None:
+            return None
+        base = base_df.copy() if isinstance(base_df, pd.DataFrame) else pd.DataFrame(base_df)
+        edited_rows = editor_value.get("edited_rows") or {}
+        for row_idx, changes in edited_rows.items():
+            i = int(row_idx)
+            if i < 0 or i >= len(base):
+                continue
+            for col, val in (changes or {}).items():
+                if col in base.columns:
+                    base.at[base.index[i], col] = val
+        for row_idx in sorted((editor_value.get("deleted_rows") or []), reverse=True):
+            i = int(row_idx)
+            if 0 <= i < len(base):
+                base = base.drop(base.index[i])
+        added = editor_value.get("added_rows") or []
+        if added:
+            base = pd.concat([base, pd.DataFrame(added)], ignore_index=True)
+        return base.reset_index(drop=True)
+    try:
+        return pd.DataFrame(editor_value)
+    except (ValueError, TypeError):
+        return None
+
+
+def nozzle_schedule_si_from_editor_df(
+    edited_df: "object",
+    keys: dict,
+    base_rows: list,
+    *,
+    editor_base_df: "object" = None,
+) -> list:
+    """Map §4 data_editor back to engine schedule rows (SI); refresh ID & V when DN changes."""
+    from engine.nozzles import refresh_nozzle_row_hydraulics
+    from engine.units import si_value
+
+    edited_df = data_editor_value_to_dataframe(edited_df, editor_base_df)
+    if edited_df is None or not base_rows:
+        return list(base_rows)
+    system = st.session_state.get("unit_system", "metric")
+    out_rows: list = []
+    for i, base in enumerate(base_rows):
+        row = dict(base)
+        if i < len(edited_df):
+            er = edited_df.iloc[i]
+            try:
+                row["DN (mm)"] = int(er[keys["dn"]])
+            except (TypeError, ValueError):
+                pass
+            if keys["schedule"] in er:
+                row["Schedule"] = str(er[keys["schedule"]])
+            if keys["rating"] in er:
+                row["Rating"] = str(er[keys["rating"]])
+            if keys["qty"] in er:
+                row["Qty"] = int(er[keys["qty"]])
+        row = refresh_nozzle_row_hydraulics(row)
+        out_rows.append(row)
+    return out_rows
 
 
 def nozzle_schedule_total_weight_kg(edited_df: "object", total_wt_col: str) -> float:

@@ -3,17 +3,31 @@ import pandas as pd
 import streamlit as st
 from engine.backwash import bed_expansion as _bed_exp
 from ui.helpers import (
-    fmt, ulbl, dv, show_alert,
-    cycle_matrix_temp_title, cycle_matrix_tss_row_title,
+    fmt,
+    ulbl,
+    dv,
+    show_alert,
+    localize_engine_message,
+    collector_hyd_profile_display_df,
+    orifice_network_display_df,
+    cycle_matrix_temp_title,
+    cycle_matrix_tss_row_title,
     backwash_sequence_steps_display_df,
+    bw_timeline_stagger_label,
+    fmt_si_range,
 )
+from ui.collector_hyd_schematic import (
+    build_collector_elevation_figure,
+    build_collector_underdrain_figure,
+)
+from ui.scroll_markers import inject_anchor
 
 
 def render_tab_backwash(inputs: dict, computed: dict):
+    inject_anchor("mmf-anchor-main-backwash")
     bw_col       = computed["bw_col"]
     bw_hyd       = computed["bw_hyd"]
     bw_seq       = computed["bw_seq"]
-    bw_sizing    = computed["bw_sizing"]
     air_scour_solve = computed.get("air_scour_solve")
     bw_timeline  = computed.get("bw_timeline") or {}
     filt_cycles  = computed["filt_cycles"]
@@ -24,7 +38,6 @@ def render_tab_backwash(inputs: dict, computed: dict):
     _temp_col_keys = computed["temp_col_keys"]
     rho_bw       = computed["rho_bw"]
     mu_bw        = computed["mu_bw"]
-    _n_bw_systems = computed["n_bw_systems"]
     m_sol_low    = computed["m_sol_low"]
     m_sol_avg    = computed["m_sol_avg"]
     m_sol_high   = computed["m_sol_high"]
@@ -34,6 +47,11 @@ def render_tab_backwash(inputs: dict, computed: dict):
     m_daily_low  = computed["m_daily_low"]
     m_daily_avg  = computed["m_daily_avg"]
     m_daily_high = computed["m_daily_high"]
+
+    st.caption(
+        "**Backwash** (main tab) — **results** from **🔄 BW** sidebar: step durations, air scour mode, collector. "
+        "**BW pump / blower / tank duties:** **Pumps & power** tab. Stagger / timeline / expansion charts reflect inputs after **Apply**."
+    )
 
     layers             = inputs["layers"]
     freeboard_mm       = inputs["freeboard_mm"]
@@ -47,8 +65,6 @@ def render_tab_backwash(inputs: dict, computed: dict):
     bw_s_settle        = inputs["bw_s_settle"]
     bw_s_fill          = inputs["bw_s_fill"]
     bw_total_min       = inputs["bw_total_min"]
-    vessel_pressure_bar = inputs["vessel_pressure_bar"]
-    blower_air_delta_p_bar = float(inputs.get("blower_air_delta_p_bar", 0.15))
     streams             = inputs["streams"]
     n_filters             = inputs["n_filters"]
     hydraulic_assist_bw = int(inputs.get("hydraulic_assist", 0))
@@ -72,12 +88,396 @@ def render_tab_backwash(inputs: dict, computed: dict):
                    delta=f"{bw_col['freeboard_pct']:.1f}% of bed",
                    delta_color="normal" if bw_col["freeboard_m"] >= bw_col["min_freeboard_m"] else "inverse")
         st.info(
-            f"**Max safe BW velocity: {fmt(bw_col['max_safe_bw_m_h'], 'velocity_m_h', 1)}** "
-            f"(maintains ≥ {freeboard_mm:.0f} mm freeboard below collector).  "
-            f"Proposed BW: **{fmt(bw_col['proposed_bw_m_h'], 'velocity_m_h', 1)}**."
+            localize_engine_message(
+                f"**Max safe BW velocity: {fmt(bw_col['max_safe_bw_m_h'], 'velocity_m_h', 1)}** "
+                f"(maintains ≥ {fmt(freeboard_mm, 'length_mm', 0)} freeboard below collector).  "
+                f"Proposed BW: **{fmt(bw_col['proposed_bw_m_h'], 'velocity_m_h', 1)}**."
+            )
         )
         exp_rows = []
         _bw_integrity_alerts = []
+        _ci = computed.get("collector_intel") or {}
+        if _ci:
+            from engine.collector_intelligence import summarize_nozzle_schedule_velocities
+            with st.expander("Collector intelligence — distribution & freeboard screening", expanded=False):
+                st.caption(
+                    "Quick checks on **bed freeboard** and **BW velocity**, plus **vessel-wall nozzle** "
+                    "velocities from §4 (not the internal collector header/laterals). "
+                    "For distributor geometry and lateral hydraulics, use **Collector hydraulics** below."
+                )
+                st.metric("Collector performance score", f"{_ci.get('score', 0)}/100 — {_ci.get('grade', '—')}")
+                _peaks = summarize_nozzle_schedule_velocities(computed.get("nozzle_sched") or [])
+                _lim_w = float(_ci.get("nozzle_velocity_limit_water_m_s", 3.5) or 3.5)
+                _lim_a = float(_ci.get("nozzle_velocity_limit_air_m_s", 28.0) or 28.0)
+                _v_in = float(
+                    _peaks.get("backwash_inlet_velocity_m_s")
+                    or _ci.get("backwash_inlet_velocity_m_s", 0) or 0
+                )
+                _v_out = float(
+                    _peaks.get("backwash_outlet_velocity_m_s")
+                    or _ci.get("backwash_outlet_velocity_m_s", 0) or 0
+                )
+                _v_air = float(
+                    _peaks.get("air_scour_nozzle_velocity_m_s")
+                    or _ci.get("air_scour_nozzle_velocity_m_s", 0) or 0
+                )
+                st.markdown("**Vessel nozzles (§4 schedule)** — not internal collector pipework")
+                nv1, nv2, nv3 = st.columns(3)
+                nv1.metric(
+                    f"BW inlet nozzle ({ulbl('velocity_m_s')})",
+                    fmt(_v_in, "velocity_m_s", 2) if _v_in > 0 else "—",
+                    delta=f"water erosion screen {fmt(_lim_w, 'velocity_m_s', 1)}",
+                    delta_color="inverse" if _v_in > _lim_w else "off",
+                    help="Vessel connection for BW supply — separate from internal header ID.",
+                )
+                nv2.metric(
+                    f"BW outlet nozzle ({ulbl('velocity_m_s')})",
+                    fmt(_v_out, "velocity_m_s", 2) if _v_out > 0 else "—",
+                    delta="pairs with collector DN",
+                    delta_color="off",
+                    help="Vessel connection at the collector zone — internal header may match this DN.",
+                )
+                nv3.metric(
+                    f"Air scour nozzle ({ulbl('velocity_m_s')})",
+                    fmt(_v_air, "velocity_m_s", 2) if _v_air > 0 else "—",
+                    delta=f"high-air flag {fmt(_lim_a, 'velocity_m_s', 0)}",
+                    delta_color="inverse" if _v_air > _lim_a else "off",
+                    help="Separate air line through the vessel shell — not the BW collector lateral velocity.",
+                )
+                if _ci.get("nozzle_velocity_note_air"):
+                    st.caption(localize_engine_message(str(_ci["nozzle_velocity_note_air"])))
+                if _ci.get("nozzle_velocity_note_vessel"):
+                    st.caption(localize_engine_message(str(_ci["nozzle_velocity_note_vessel"])))
+                for _rec in _ci.get("recommendations") or []:
+                    st.markdown(f"- {localize_engine_message(str(_rec))}")
+                for _f in _ci.get("findings") or []:
+                    _topic = str(_f.get("topic", ""))
+                    if _topic in ("Nozzle velocity", "Nozzle spread"):
+                        continue
+                    _sev = str(_f.get("severity", "advisory"))
+                    _msg = localize_engine_message(
+                        f"**{_topic}:** {_f.get('detail', '')}"
+                    )
+                    if _sev == "critical":
+                        st.error(_msg)
+                    elif _sev == "warning":
+                        st.warning(_msg)
+                    else:
+                        st.info(_msg)
+
+        _ch = computed.get("collector_hyd") or {}
+        if _ch:
+            with st.expander("Collector hydraulics — 1D header / lateral ladder", expanded=False):
+                st.caption(_ch.get("method", ""))
+                _mal_used = float(computed.get("maldistribution_factor", 1.0) or 1.0)
+                _mal_calc = float(_ch.get("maldistribution_factor_calc", 1.0) or 1.0)
+                _from_model = bool(computed.get("maldistribution_from_collector_model"))
+                hc1, hc2, hc3, hc4 = st.columns(4)
+                hc1.metric("Mal. factor (used in ΔP)", f"{_mal_used:.3f}")
+                hc2.metric("Mal. factor (model)", f"{_mal_calc:.3f}")
+                hc3.metric("Lateral imbalance", f"{_ch.get('flow_imbalance_pct', 0):.1f}%")
+                hc4.metric("Source", "Calculated" if _from_model else "Manual")
+                from engine.collector_hydraulics import (
+                    DISTRIBUTION_TOL_REL,
+                    distribution_metadata_available,
+                    distribution_residual_rel,
+                    distribution_solver_converged,
+                )
+
+                _dist_meta = distribution_metadata_available(_ch)
+                _dist_res = distribution_residual_rel(_ch)
+                _dist_ok = distribution_solver_converged(_ch)
+                hd1, hd2, hd3 = st.columns(3)
+                hd1.metric("Distribution iterations", int(_ch.get("distribution_iterations", 0)))
+                if not _dist_meta:
+                    hd2.metric(
+                        "Solver status",
+                        "Stale",
+                        delta="change any input to refresh",
+                        delta_color="off",
+                    )
+                else:
+                    hd2.metric(
+                        "Solver status",
+                        "Converged" if _dist_ok else "Not converged",
+                        delta=(
+                            f"residual {_dist_res:.4f} (≤ {DISTRIBUTION_TOL_REL:.3f})"
+                            if _dist_res is not None
+                            else ""
+                        ),
+                        delta_color="normal" if _dist_ok else "inverse",
+                    )
+                hd3.metric(
+                    f"Max header V ({ulbl('velocity_m_s')})",
+                    fmt(_ch.get("header_velocity_max_m_s", 0), "velocity_m_s", 2),
+                )
+                from ui.collector_apply import apply_collector_suggested_design
+
+                def _apply_collector_suggested() -> None:
+                    apply_collector_suggested_design(computed)
+
+                st.button(
+                    "Apply suggested collector design",
+                    key="collector_apply_suggested",
+                    help=(
+                        "Writes screening suggestions to sidebar BW collector inputs "
+                        "(N laterals, DN, spacing, perforations, calculated maldistribution). "
+                        "Does not change §4 vessel nozzles or linked header ID."
+                    ),
+                    on_click=_apply_collector_suggested,
+                )
+                st.caption(
+                    "Apply is explicit — review advisories above before accepting. "
+                    "Header ID follows §4 when **Link** is on (Mechanical §4 / sidebar BW)."
+                )
+                g1, g2, g3, g4, g5 = st.columns(5)
+                g1.metric("θ (lateral)", f"{float(_ch.get('theta_deg', 0)):.1f}°")
+                g2.metric("L lateral max (pipe)", fmt(float(_ch.get("lateral_length_max_m", 0)), "length_m", 2))
+                g2.caption(
+                    f"Plan reach {fmt(float(_ch.get('lateral_horiz_reach_m', 0)), 'length_m', 2)}"
+                )
+                g3.metric("Header spacing max", fmt(float(_ch.get("lateral_spacing_max_m", 0)), "length_m", 2))
+                g4.metric(
+                    f"Perf. pitch ({ulbl('length_mm')})",
+                    fmt(
+                        float(_ch.get("perforation_pitch_used_mm")
+                              or _ch.get("perforation_pitch_min_mm") or 0),
+                        "length_mm",
+                        0,
+                    ),
+                )
+                _is_wedge = str(_ch.get("screening_model", "")) == "wedge_wire"
+                g5.metric(
+                    "Openings / lateral" if _is_wedge else "Perforations / lateral",
+                    int(_ch.get("n_orifices_per_lateral") or 0) if not _is_wedge else "—",
+                )
+                st1, st2, st3 = st.columns(3)
+                st1.metric(
+                    "Open area (screening)",
+                    f"{float(_ch.get('open_area_fraction_pct', 0)):.1f}%",
+                    delta=f"typical {_ch.get('lateral_material_open_area_range_pct', '—')}",
+                    delta_color=(
+                        "inverse"
+                        if float(_ch.get("open_area_fraction_pct", 0))
+                        > float(_ch.get("open_area_limit_pct", 60))
+                        else "off"
+                    ),
+                )
+                if _is_wedge:
+                    st2.metric("Screening model", "Wedge wire", delta="collapse / OEM")
+                    st3.metric(
+                        f"Target slot V ({ulbl('velocity_m_s')})",
+                        fmt(_ch.get("target_opening_velocity_m_s", 0), "velocity_m_s", 1),
+                    )
+                else:
+                    st2.metric("Max perf. / lateral (struct.)", int(_ch.get("n_perforations_max_structural") or 0))
+                    st3.metric("Pipe schedule (advisory)", str(_ch.get("lateral_schedule_suggest", "—")))
+                st.caption(
+                    f"**{_ch.get('lateral_construction', '—')}** · **{_ch.get('lateral_material', '—')}** · "
+                    f"water **{_ch.get('water_service', '—')}** · "
+                    f"Cd **{float(_ch.get('discharge_coefficient', 0.62)):.2f}** · "
+                    f"headloss factor **{float(_ch.get('hydraulic_headloss_factor', 1)):.2f}**"
+                )
+                for _wrec in _ch.get("water_material_recommendations") or []:
+                    st.caption(localize_engine_message(str(_wrec)))
+                _des = _ch.get("design") or {}
+                if _des.get("lateral_dn_suggest_mm"):
+                    st.caption(
+                        f"Screening: lateral DN ≥ **{fmt(_des['lateral_dn_suggest_mm'], 'length_mm', 0)}** · "
+                        f"perforation Ø ≥ **{fmt(_des.get('perforation_d_suggest_mm', 0), 'length_mm', 1)}** "
+                        f"(velocity targets)."
+                    )
+                _pmin = _ch.get("perforation_pitch_min_mm")
+                _pmax = _ch.get("perforation_pitch_max_mm")
+                if isinstance(_pmin, (int, float)) and isinstance(_pmax, (int, float)):
+                    _pitch_lim = fmt_si_range(float(_pmin), float(_pmax), "length_mm", 0, 0)
+                else:
+                    _pitch_lim = localize_engine_message(
+                        f"{_pmin}–{_pmax} mm"
+                    )
+                st.caption(
+                    f"Lateral length from **nozzle-plate axis → shell @ collector height** when geometry auto is on. "
+                    f"Pitch limits **{_pitch_lim}**. "
+                    f"Perforation source: {_ch.get('perforation_auto_source', '—')}."
+                )
+                for _gn in _des.get("notes") or []:
+                    st.info(localize_engine_message(str(_gn)))
+                for _adv in _ch.get("advisories") or []:
+                    _sev = str(_adv.get("severity", "advisory"))
+                    _msg = localize_engine_message(
+                        f"**{_adv.get('topic', '')}:** {_adv.get('detail', '')}"
+                    )
+                    if _sev == "critical":
+                        st.error(_msg)
+                    elif _sev == "warning":
+                        st.warning(_msg)
+                    else:
+                        st.info(_msg)
+                for _rec in _ch.get("recommendations") or []:
+                    st.markdown(f"- {localize_engine_message(str(_rec))}")
+                with st.expander("1A/1B regression benchmarks", expanded=False):
+                    from engine.collector_benchmarks import (
+                        check_collector_hyd_sanity,
+                        run_collector_benchmark_suite,
+                        suite_all_passed,
+                    )
+
+                    st.caption(
+                        "Hand-calc style checks on the **1D** header/lateral model "
+                        "(not CFD). Sanity runs on this design; full suite is eight reference cases."
+                    )
+                    _san = [
+                        {
+                            **row,
+                            "detail": localize_engine_message(str(row.get("detail", ""))),
+                        }
+                        for row in check_collector_hyd_sanity(_ch)
+                    ]
+                    st.dataframe(
+                        _san,
+                        use_container_width=True,
+                        hide_index=True,
+                        column_config={
+                            "check": st.column_config.TextColumn("Check"),
+                            "ok": st.column_config.TextColumn("OK"),
+                            "detail": st.column_config.TextColumn("Detail", width="large"),
+                        },
+                    )
+                    if st.button("Run full benchmark suite", key="collector_run_benchmarks"):
+                        _bench = run_collector_benchmark_suite()
+                        st.session_state["collector_benchmark_results"] = _bench
+                    _bench_res = st.session_state.get("collector_benchmark_results")
+                    if _bench_res:
+                        _n_pass = sum(1 for r in _bench_res if r.get("passed"))
+                        st.caption(
+                            f"**{_n_pass}/{len(_bench_res)}** passed · "
+                            f"{'All OK' if suite_all_passed(_bench_res) else 'Review failures'}"
+                        )
+                        st.dataframe(
+                            [
+                                {
+                                    "Benchmark": r["title"],
+                                    "Pass": "✓" if r["passed"] else "✗",
+                                    "Detail": localize_engine_message(str(r["detail"])),
+                                }
+                                for r in _bench_res
+                            ],
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                _chk = _ch.get("design_checklist") or []
+                if _chk:
+                    with st.expander("Design checklist — collector & expansion", expanded=False):
+                        for _line in _chk:
+                            st.markdown(f"- {localize_engine_message(str(_line))}")
+                _fig_el = build_collector_elevation_figure(
+                    vessel_id_m=float(computed.get("nominal_id") or inputs.get("nominal_id", 1.0)),
+                    collector_hyd=_ch,
+                    layers=inputs.get("layers"),
+                    bw_exp=computed.get("bw_exp"),
+                )
+                if _fig_el is not None:
+                    st.plotly_chart(_fig_el, use_container_width=True, key="collector_hyd_elevation")
+                hc5, hc6 = st.columns(2)
+                hc5.metric(
+                    f"Header V max ({ulbl('velocity_m_s')})",
+                    fmt(_ch.get("header_velocity_max_m_s", 0), "velocity_m_s", 2),
+                )
+                hc6.metric(
+                    f"Perforation V max ({ulbl('velocity_m_s')})",
+                    fmt(_ch.get("orifice_velocity_max_m_s", 0), "velocity_m_s", 2),
+                )
+                for _w in _ch.get("warnings") or []:
+                    st.warning(localize_engine_message(str(_w)))
+                _prof = _ch.get("profile") or []
+                if _prof:
+                    st.dataframe(
+                        collector_hyd_profile_display_df(_prof),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
+                _fig_col = build_collector_underdrain_figure(
+                    cyl_len_m=float(computed.get("cyl_len") or inputs.get("total_length", 1.0)),
+                    vessel_id_m=float(computed.get("nominal_id") or inputs.get("nominal_id", 1.0)),
+                    collector_hyd=_ch,
+                    inputs=inputs,
+                )
+                if _fig_col is not None:
+                    st.plotly_chart(_fig_col, use_container_width=True, key="collector_hyd_schematic")
+                else:
+                    st.info("Install **plotly** to show the collector plan schematic.")
+
+                with st.expander("1B+ Manifold screening (per-hole table)", expanded=False):
+                    st.caption(
+                        "**1B+** compares **one-end vs dual-end** header feed and lists each perforation "
+                        "flow/velocity in your selected unit system. Use this for design review — "
+                        "no external CFD software required."
+                    )
+                    _feed = str(_ch.get("header_feed_mode") or "one_end")
+                    _feed_lbl = (
+                        "One end (standard 1B)"
+                        if _feed == "one_end"
+                        else "Dual end (centre-fed screening)"
+                    )
+                    st.markdown(f"**Header feed:** {_feed_lbl}")
+                    _cmp = _ch.get("feed_mode_comparison")
+                    if _cmp:
+                        c1, c2, c3 = st.columns(3)
+                        c1.metric(
+                            "Mal. (one end)",
+                            f"{_cmp.get('one_end', {}).get('mal', 1):.3f}",
+                        )
+                        c2.metric(
+                            "Mal. (dual end)",
+                            f"{_cmp.get('dual_end', {}).get('mal', 1):.3f}",
+                        )
+                        c3.metric(
+                            "Imbalance Δ (pp)",
+                            f"{_cmp.get('imbalance_improvement_pct_pts', 0):.1f}",
+                            help="Positive = dual-end reduced lateral spread vs one-end on this case.",
+                        )
+                    _orn = _ch.get("orifice_network") or []
+                    if _orn:
+                        st.markdown(f"**Perforation network** — {len(_orn)} holes")
+                        _show = _orn[:80]
+                        st.dataframe(
+                            orifice_network_display_df(_show),
+                            use_container_width=True,
+                            hide_index=True,
+                        )
+                        if len(_orn) > 80:
+                            st.caption(f"Showing 80 of {len(_orn)} holes.")
+                    _cfd = computed.get("collector_cfd_bundle")
+                    if _cfd:
+                        with st.expander(
+                            "Optional — export for external CFD (OpenFOAM / Fluent)",
+                            expanded=False,
+                        ):
+                            st.caption(
+                                "Only needed if a consultant runs CFD. You can ignore this "
+                                "if you do not have CFD software."
+                            )
+                            from engine.collector_cfd_export import build_cfd_export_bytes
+
+                            _cfd_fmt = st.selectbox(
+                                "Export format",
+                                options=["json", "csv_orifices"],
+                                format_func=lambda x: (
+                                    "JSON (full boundary package)"
+                                    if x == "json"
+                                    else "CSV (orifice table only)"
+                                ),
+                                key="collector_cfd_export_fmt",
+                            )
+                            _data, _fname, _mime = build_cfd_export_bytes(_cfd, _cfd_fmt)
+                            st.download_button(
+                                "Download for external CFD",
+                                data=_data,
+                                file_name=_fname,
+                                mime=_mime,
+                                key="collector_cfd_download",
+                            )
+
         for L in bw_col["per_layer"]:
             if L.get("is_support"):
                 _status = "Support layer — hydraulic bed lift not required"
@@ -96,7 +496,8 @@ def render_tab_backwash(inputs: dict, computed: dict):
                     "Backwash velocity is below the minimum fluidisation threshold for this media. "
                     "Air scour provides primary mechanical cleaning action."))
             exp_rows.append({
-                "Media": L["media_type"], "d10 (mm)": L["d10_mm"],
+                "Media": L["media_type"],
+                f"d10 ({ulbl('length_mm')})": round(dv(float(L["d10_mm"]), "length_mm"), 2),
                 f"u_mf ({ulbl('velocity_m_h')})": round(dv(L["u_mf_m_h"], "velocity_m_h"), 2),
                 f"u_t ({ulbl('velocity_m_h')})": round(dv(L["u_t_m_h"], "velocity_m_h"), 2),
                 "ε₀": L["epsilon0"], "ε_f": L["eps_f"],
@@ -154,14 +555,14 @@ def render_tab_backwash(inputs: dict, computed: dict):
         bh4.metric(f"Blower est. ({ulbl('power_kw')})",       fmt(bw_hyd['p_blower_est_kw'], 'power_kw', 1))
         if air_scour_solve is not None:
             _nm = air_scour_solve.get("nm3_m2_h")
-            _nm_txt = f"{_nm:.1f}" if isinstance(_nm, (int, float)) else "—"
+            _nm_txt = fmt(_nm, "air_flux_nm3_m2h", 2) if isinstance(_nm, (int, float)) else "—"
             _ew = air_scour_solve.get("expansion_water_only_pct", "—")
             _dair = air_scour_solve.get("expansion_increment_from_air_pct", "—")
             st.success(
                 f"**Auto-sized air scour** — target **{air_scour_solve['target_expansion_pct']:.1f} %** net expansion "
                 f"at **{fmt(float(air_scour_solve.get('low_rate_water_m_h', 0)), 'velocity_m_h', 1)}** water + air.  "
                 f"Air equivalent **{fmt(float(bw_hyd.get('air_scour_rate_m_h', 0)), 'velocity_m_h', 2)}** "
-                f"m³/m²·h  (~**{_nm_txt}** Nm³/m²·h @ 0 °C, 1 atm).  "
+                f"({ulbl('velocity_m_h')})  (~**{_nm_txt}** @ 0 °C, 1 atm).  "
                 f"R–Z split: water-only **{_ew} %** · increment from air **{_dair} %** · total **{air_scour_solve['expansion_at_velocity_pct']:.1f} %**."
                 + ("" if air_scour_solve.get("ok") else "  ⚠️ Target not reached within solver scan limit.")
             )
@@ -261,74 +662,38 @@ def render_tab_backwash(inputs: dict, computed: dict):
                 st.markdown("*BW systems required (plant-wide)*")
                 st.dataframe(pd.DataFrame(sim_rows).set_index("Feed TSS"), use_container_width=True)
 
-    with st.expander("5 · BW system equipment data sheet", expanded=True):
-        st.markdown("### BW pump")
-        p1, p2, p3, p4 = st.columns(4)
-        p1.metric(f"Design flow ({ulbl('flow_m3h')})",       fmt(bw_sizing['q_bw_design_m3h'], 'flow_m3h', 0))
-        p2.metric(f"Total head ({ulbl('pressure_mwc')})",   fmt(bw_sizing['bw_head_mwc'], 'pressure_mwc', 1))
-        p3.metric(f"Shaft power ({ulbl('power_kw')})",      fmt(bw_sizing['p_pump_shaft_kw'], 'power_kw', 0))
-        p4.metric(f"Motor power ({ulbl('power_kw')})",      fmt(bw_sizing['p_pump_motor_kw'], 'power_kw', 0))
-        st.table(pd.DataFrame([
-            ["Design flow (duty)", fmt(bw_sizing["q_bw_design_m3h"], "flow_m3h", 1)],
-            ["Total dynamic head",
-             f"{fmt(bw_sizing['bw_head_mwc'], 'pressure_mwc', 1)} "
-             f"({fmt(bw_sizing['bw_head_bar'], 'pressure_bar', 3)})"],
-            ["Pump hydraulic efficiency", f"{bw_sizing['bw_pump_eta']*100:.0f} %"],
-            ["Shaft power",               fmt(bw_sizing["p_pump_shaft_kw"], "power_kw", 1)],
-            ["Motor power (absorbed)",    fmt(bw_sizing["p_pump_motor_kw"], "power_kw", 1)],
-            ["Duty / standby",            f"{_n_bw_systems}D / 1S  (plant-wide)"],
-        ], columns=["Parameter", "Value"]))
-        st.markdown("### Air blower")
-        if bw_sizing.get("blower_dp_warning"):
-            st.warning(bw_sizing["blower_dp_warning"])
-        b1, b2, b3, b4 = st.columns(4)
-        b1.metric(f"Design flow ({ulbl('air_flow_nm3h')})", fmt(bw_sizing["q_air_design_nm3h"], "air_flow_nm3h", 0))
-        b2.metric(f"ΔP total ({ulbl('pressure_bar')})",    fmt(bw_sizing['dp_total_bar'], 'pressure_bar', 3))
-        b3.metric(f"Shaft power ({ulbl('power_kw')})",     fmt(bw_sizing['p_blower_shaft_kw'], 'power_kw', 0))
-        b4.metric(f"Motor power ({ulbl('power_kw')})",     fmt(bw_sizing['p_blower_motor_kw'], 'power_kw', 0))
-        st.table(pd.DataFrame([
-            ["Inlet volume flow (normal)",
-             fmt(bw_sizing["q_air_design_nm3h"], "air_flow_nm3h", 1) + "  (0 °C, 1 atm dry)"],
-            ["Vessel operating gauge (inputs)",
-             f"{fmt(vessel_pressure_bar, 'pressure_bar', 2)} g — Nm³ conversion only"],
-            ["Air-side ΔP (beyond submergence)",
-             f"{fmt(float(bw_sizing.get('blower_air_delta_p_bar', blower_air_delta_p_bar)), 'pressure_bar', 3)} g"],
-            ["Water submergence (≈ ID/2)",
-             f"{fmt(bw_sizing['h_submergence_m'], 'length_m', 2)}  →  "
-             f"{fmt(bw_sizing['dp_sub_bar'], 'pressure_bar', 3)}"],
-            ["P₁ inlet (absolute)", f"{float(bw_sizing['P1_pa']):,.0f} Pa"],
-            ["P₂ discharge (absolute)", f"{float(bw_sizing['P2_pa']):,.0f} Pa"],
-            ["Total ΔP (P₂−P₁)", fmt(bw_sizing["dp_total_bar"], "pressure_bar", 3)],
-            ["Shaft power", fmt(bw_sizing["p_blower_shaft_kw"], "power_kw", 1)],
-            ["Motor power (absorbed)", fmt(bw_sizing["p_blower_motor_kw"], "power_kw", 1)],
-        ], columns=["Parameter", "Value"]))
-        st.markdown("### BW water storage tank")
-        t1, t2, t3 = st.columns(3)
-        t1.metric("Vol/cycle/system", fmt(bw_sizing["bw_vol_per_cycle_m3"], "volume_m3", 0))
-        t2.metric("Simultaneous syst.", f"{bw_sizing['n_bw_systems']}")
-        t3.metric("Recommended tank", fmt(bw_sizing["v_tank_m3"], "volume_m3", 0),
-                  help=f"Governs: {bw_sizing['tank_governs']}")
-        st.table(pd.DataFrame([
-            ["BW vol / filter / cycle (avg)", fmt(bw_sizing["bw_vol_per_cycle_m3"], "volume_m3", 1)],
-            ["Simultaneous BW systems", str(bw_sizing["n_bw_systems"])],
-            ["Volume — cycle-based", fmt(bw_sizing["v_cycle_m3"], "volume_m3", 0)],
-            ["Volume — 10-min rule", fmt(bw_sizing["v_10min_m3"], "volume_m3", 0)],
-            ["Recommended tank volume",
-             f"{fmt(bw_sizing['v_tank_m3'], 'volume_m3', 0)}  (governs: {bw_sizing['tank_governs']})"],
-        ], columns=["Parameter", "Value"]))
-
-    with st.expander("6 · Filter duty timeline (24 h schematic)", expanded=False):
+    with st.expander("5 · Filter duty timeline (multi-day schematic)", expanded=False):
         _sm = bw_timeline.get("stagger_model", "—")
         _ktr = bw_timeline.get("bw_trains")
         _ktr_s = str(_ktr) if _ktr is not None else "—"
         _sd = bw_timeline.get("sim_demand")
         _sd_s = f"{_sd:.2f}" if isinstance(_sd, (int, float)) else "—"
+        _hdays = int(bw_timeline.get("horizon_days") or max(1, round(float(bw_timeline.get("horizon_h", 24)) / 24)))
         st.caption(
-            f"**Stagger:** `{_sm}` · **bw_trains** (scenario N, design temp, avg TSS): {_ktr_s} · "
-            f"**sim_demand:** {_sd_s}.  "
-            "Green = operating; red = full BW sequence. **Feasibility-train** mode uses start spacing "
-            "**Δt_bw / bw_trains** (see Backwash section 4). **Uniform** is a legacy smooth-stagger comparison only."
+            f"**Horizon:** {_hdays} day(s) · **Stagger:** {bw_timeline_stagger_label(_sm)} · "
+            f"**BW trains required** (rated N, design temperature, average TSS): **{_ktr_s}** · "
+            f"**Concurrent demand index:** **{_sd_s}**.  "
+            "Green = operating; red = full backwash sequence. "
+            "**Feasibility-train** mode spaces starts by **Δt_bw ÷ BW trains** (matches section 4). "
+            "**Optimized trains** adjusts start times to reduce peak overlap — *scheduling aid only*, not plant DCS logic. "
+            "**Uniform** is a smooth legacy comparison."
         )
+        _opt = bw_timeline.get("optimizer") or {}
+        if _sm == "optimized_trains" and _opt:
+            o1, o2, o3 = st.columns(3)
+            o1.metric(
+                "Peak concurrent BW (optimized)",
+                str(_opt.get("peak_optimized", "—")),
+            )
+            o2.metric(
+                "Peak (feasibility spacing)",
+                str(_opt.get("peak_feasibility_spacing", "—")),
+            )
+            o3.metric(
+                "Peak reduction",
+                str(_opt.get("improvement_filters", 0)),
+                help="Filters fewer at peak vs feasibility-train spacing on this horizon.",
+            )
         _hge = bw_timeline.get("hours_operating_ge_design_n_h")
         _heq = bw_timeline.get("hours_operating_eq_design_n_h")
         _hgt = bw_timeline.get("hours_operating_gt_design_n_h")
@@ -347,7 +712,7 @@ def render_tab_backwash(inputs: dict, computed: dict):
                 f"{_nphys} physical" if isinstance(_nphys, int) else f"{streams}×{n_filters} physical"
             )
             st.info(
-                f"**Plant-wide duty ({_phys_txt} on chart, {_horz:.0f} h window):** "
+                f"**Plant-wide duty ({_phys_txt} on chart, {_hdays} d / {_horz:.0f} h window):** "
                 f"**At N** — exactly **{_ndes}** units not in BW (rated set): **{_eq:.2f}** h · "
                 f"**At N−1** — exactly **{_ndes - 1}** not in BW: **{_n1:.2f}** h · "
                 f"**Below N−1**: **{_lt:.2f}** h.  "
@@ -409,7 +774,7 @@ def render_tab_backwash(inputs: dict, computed: dict):
                     height=max(360, min(920, 26 * len(_frows))),
                     margin=dict(l=72, r=24, t=48, b=48),
                     xaxis_title="Time (h)",
-                    title="24 h filter state (schematic stagger)",
+                    title=f"{_hdays}-day filter state (schematic stagger)",
                     template="plotly_white",
                 )
                 fig.update_xaxes(range=[0.0, _hor])

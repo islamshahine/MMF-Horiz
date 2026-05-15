@@ -36,6 +36,35 @@ _REF_TSS = 10.0  # mg/L — mid-range open-intake seawater after screening
 _REF_LV = 10.0  # m/h — nominal MMF LV reference for scaling
 _SDI_SOFT_CAP = 5.0  # above this: extrapolation warning
 _MFI_SOFT_CAP = 8.0
+# When ASTM SDI₁₅ blocks (∞), UI offers a bracketing cap for advisory correlation only.
+SDI_BLOCKED_CAP_OPTIONS: tuple[float, ...] = (6.0, 8.0, 10.0)
+SDI_BLOCKED_CAP_DEFAULT = 8.0
+
+
+def effective_sdi15_for_correlation(
+    sdi15: float,
+    *,
+    test_blocked: bool = False,
+    blocked_cap: float = SDI_BLOCKED_CAP_DEFAULT,
+) -> tuple[float, list[str]]:
+    """
+    Return SDI₁₅ value used in correlations and any extra user-facing warnings.
+
+    When the 15-min test never completes (plugging factor → ∞), pass ``test_blocked=True``
+  and a **cap** (typically 6–10). Design basis for M_max should still rely on TSS / pilot data.
+    """
+    extra: List[str] = []
+    if test_blocked:
+        cap = float(blocked_cap)
+        if cap not in SDI_BLOCKED_CAP_OPTIONS:
+            cap = max(6.0, min(cap, 15.0))
+        extra.append(
+            f"SDI₁₅ reported as blocked (∞) — correlation uses cap **{cap:g}** for advisory only. "
+            "Set **M_max** from Process TSS bands, pilot cake loading, or site history; "
+            "do not use this cap as sole design sign-off."
+        )
+        return cap, extra
+    return max(float(sdi15), 0.0), extra
 
 
 def _warn_extrapolation(
@@ -211,9 +240,96 @@ def estimate_bw_frequency(
     }
 
 
+def water_stability_class(
+    *,
+    severity: str,
+    seasonal_variability: str,
+    algae_risk: str,
+) -> Dict[str, Any]:
+    """Qualitative feed stability for fouling workflow (advisory only)."""
+    sev = str(severity).lower()
+    rank = {"low": 0, "moderate": 1, "high": 2, "severe": 3}.get(sev, 1)
+    if seasonal_variability in ("high", "very_high"):
+        rank += 1
+    if algae_risk in ("moderate", "high"):
+        rank += 1
+    if rank <= 0:
+        label, tone = "stable", "ok"
+    elif rank == 1:
+        label, tone = "moderate", "caution"
+    elif rank == 2:
+        label, tone = "aggressive", "warning"
+    else:
+        label, tone = "unstable", "critical"
+    return {"label": label, "tone": tone, "rank": rank}
+
+
+def fouling_confidence_level(
+    *,
+    sdi15: float,
+    mfi_index: float,
+    tss_mg_l: float,
+    has_upstream_uf_daf: bool,
+    seasonal_variability: str,
+) -> Dict[str, Any]:
+    """How much to trust fouling guidance from input completeness (not statistics)."""
+    score = 0
+    if float(sdi15) > 0:
+        score += 25
+    if float(mfi_index) > 0:
+        score += 25
+    if float(tss_mg_l) > 0:
+        score += 25
+    if has_upstream_uf_daf:
+        score += 15
+    if seasonal_variability not in ("unknown", ""):
+        score += 10
+    if score >= 75:
+        level = "high"
+        note = "Key indices provided — still validate M_max and BW frequency on site."
+    elif score >= 50:
+        level = "moderate"
+        note = "Partial characterisation — treat suggested M_max as bracketing only."
+    else:
+        level = "low"
+        note = "Sparse inputs — use fouling panel for orientation, not design sign-off."
+    return {"level": level, "score": score, "note": note}
+
+
+def fouling_advisory_recommendations(
+    *,
+    severity: str,
+    score: float,
+    stability_label: str,
+    run_time_h: float,
+) -> List[str]:
+    """Non-binding design hints — user must Apply changes explicitly."""
+    rec: List[str] = []
+    sev = str(severity).lower()
+    if sev in ("high", "severe"):
+        rec.append("Consider additional filter in service (N+1 margin) or lower approach LV.")
+        rec.append("Review BW step durations and peak concurrent BW demand in the feasibility matrix.")
+    if stability_label in ("aggressive", "unstable"):
+        rec.append("Plan for seasonal TSS/SDI peaks — align M_max and BW cycles with conservative case.")
+    if float(run_time_h) < 12.0:
+        rec.append("Short indicative run time — verify BW train count and cartridge loading.")
+    if float(score) >= 70:
+        rec.append("Elevated fouling score — confirm pretreatment (DAF/UF) and chlorination strategy with client.")
+    if not rec:
+        rec.append("Current fouling indices are in a typical SWRO pretreatment band — maintain monitoring.")
+    rec.append("Optional: compare cycle uncertainty band on **Filtration** tab after Apply.")
+    return rec
+
+
 __all__ = [
     "estimate_solids_loading",
     "estimate_run_time",
     "estimate_fouling_severity",
     "estimate_bw_frequency",
+    "effective_sdi15_for_correlation",
+    "SDI_BLOCKED_CAP_OPTIONS",
+    "SDI_BLOCKED_CAP_DEFAULT",
+    "water_stability_class",
+    "fouling_confidence_level",
+    "fouling_advisory_recommendations",
 ]

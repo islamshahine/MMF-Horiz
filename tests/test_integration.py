@@ -59,6 +59,10 @@ _INPUTS = {
     "layers": _LAYERS,
     "solid_loading": 1.5, "captured_solids_density": 1020.0,
     "solid_loading_scale": 1.0, "maldistribution_factor": 1.0,
+    "use_calculated_maldistribution": False,
+    "collector_header_id_m": 0.25, "n_bw_laterals": 4,
+    "lateral_dn_mm": 50.0, "lateral_spacing_m": 0.0, "lateral_length_m": 0.0,
+    "lateral_orifice_d_mm": 0.0, "n_orifices_per_lateral": 0, "lateral_discharge_cd": 0.62,
     "alpha_calibration_factor": 1.0, "tss_capture_efficiency": 1.0,
     "expansion_calibration_scale": 1.0,
     "alpha_specific": 1e12, "dp_trigger_bar": 1.0,
@@ -66,6 +70,7 @@ _INPUTS = {
     "air_scour_mode": "manual", "air_scour_target_expansion_pct": 20.0,
     "airwater_step_water_m_h": 12.5,
     "bw_timeline_stagger": "feasibility_trains",
+    "bw_schedule_horizon_days": 7,
     "bw_cycles_day": 1,
     "bw_s_drain": 10, "bw_s_air": 1, "bw_s_airw": 5,
     "bw_s_hw": 10, "bw_s_settle": 2, "bw_s_fill": 10, "bw_total_min": 38,
@@ -113,8 +118,9 @@ _INPUTS = {
     "replacement_interval_lining": 15.0,
     "annual_benefit_usd": 0.0,
     "steel_cost_usd_kg": 3.5,
-    "erection_usd_vessel": 50000.0, "piping_usd_vessel": 80000.0,
-    "instrumentation_usd_vessel": 30000.0, "civil_usd_vessel": 40000.0,
+    "erection_usd_per_kg_steel": 0.625, "labor_usd_per_kg_steel": 0.25,
+    "piping_usd_vessel": 80000.0,
+    "instrumentation_usd_vessel": 30000.0, "civil_usd_per_kg_working": 0.10,
     "engineering_pct": 12.0, "contingency_pct": 10.0,
     "media_replace_years": 7.0,
     "econ_media_gravel": 80.0, "econ_media_sand": 150.0,
@@ -274,9 +280,10 @@ class TestBackwashIntegration:
         assert result["bw_sizing"]["q_air_design_nm3h"] == result["bw_hyd"]["q_air_design_nm3h"]
 
     def test_bw_timeline_present(self, result):
-        """24 h duty chart uses feasibility trains and matches filter count."""
+        """Duty window = bw_schedule_horizon_days × 24 h; feasibility trains; filter count."""
         tl = result["bw_timeline"]
-        assert tl["horizon_h"] == pytest.approx(24.0, rel=0.01)
+        expected_h = float(_INPUTS["bw_schedule_horizon_days"]) * 24.0
+        assert tl["horizon_h"] == pytest.approx(expected_h, rel=0.01)
         assert len(tl["filters"]) == 16
         assert tl.get("stagger_model") == "feasibility_trains"
         kt = int(tl.get("bw_trains") or 1)
@@ -316,7 +323,7 @@ def test_hydraulic_standby_n_plus_one_bank_and_timeline():
         + r["bw_timeline"]["hours_operating_eq_n_minus_1_h"]
         + r["bw_timeline"]["hours_operating_below_n_minus_1_h"]
     )
-    assert hsum == pytest.approx(24.0, abs=0.1)
+    assert hsum == pytest.approx(float(r["bw_timeline"]["horizon_h"]), abs=0.1)
 
 
 # ═════════════════════════════════════════════════════════════════════════════

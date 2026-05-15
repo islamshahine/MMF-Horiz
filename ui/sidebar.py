@@ -2,44 +2,21 @@
 import streamlit as st
 from engine.water import water_properties, FEED_PRESETS, BW_PRESETS
 from engine.media import get_media_names, get_media, get_lv_range, get_ebct_range, get_gac_note
-from engine.fouling import estimate_fouling_severity, estimate_run_time, estimate_solids_loading
 from engine.units import (
     UNIT_SYSTEMS, display_value, si_value,
-    unit_label, convert_inputs,
+    unit_label, convert_inputs, format_value,
     SESSION_WIDGET_QUANTITIES, transpose_display_value,
 )
-
-# ── Constants mirrored from app.py (kept here so sidebar is self-contained) ──
-_DEFAULT_MEDIA_PRESETS = {
-    "Gravel":            {"d10": 6.0,  "cu": 1.0, "epsilon0": 0.46, "psi": 0.90,
-                          "rho_p_eff": 2600, "d60": 6.00, "is_porous": False, "default_depth": 0.20},
-    "Coarse sand":       {"d10": 1.35, "cu": 1.5, "epsilon0": 0.44, "psi": 0.85,
-                          "rho_p_eff": 2650, "d60": 2.03, "is_porous": False, "default_depth": 0.60},
-    "Fine sand":         {"d10": 0.80, "cu": 1.3, "epsilon0": 0.42, "psi": 0.80,
-                          "rho_p_eff": 2650, "d60": 1.04, "is_porous": False, "default_depth": 0.80},
-    "Fine sand (extra)": {"d10": 0.50, "cu": 1.3, "epsilon0": 0.41, "psi": 0.75,
-                          "rho_p_eff": 2650, "d60": 0.65, "is_porous": False, "default_depth": 0.70},
-    "Anthracite":        {"d10": 1.30, "cu": 1.5, "epsilon0": 0.48, "psi": 0.70,
-                          "rho_p_eff": 1450, "d60": 2.25, "is_porous": False, "default_depth": 0.80},
-    "Garnet":            {"d10": 0.30, "cu": 1.3, "epsilon0": 0.38, "psi": 0.80,
-                          "rho_p_eff": 4100, "d60": 0.39, "is_porous": False, "default_depth": 0.10},
-    "MnO₂":             {"d10": 1.00, "cu": 2.4, "epsilon0": 0.50, "psi": 0.65,
-                          "rho_p_eff": 4200, "d60": 2.40, "is_porous": False, "default_depth": 0.40},
-    "Medium GAC":        {"d10": 1.00, "cu": 1.6, "epsilon0": 0.55, "psi": 0.65,
-                          "rho_p_eff": 1000, "d60": 1.44, "is_porous": True,  "default_depth": 1.00},
-    "Biodagene":         {"d10": 2.50, "cu": 1.4, "epsilon0": 0.42, "psi": 0.80,
-                          "rho_p_eff": 1600, "d60": 3.50, "is_porous": False, "default_depth": 0.60},
-    "Schist":            {"d10": 3.30, "cu": 1.5, "epsilon0": 0.47, "psi": 0.65,
-                          "rho_p_eff": 1300, "d60": 4.95, "is_porous": False, "default_depth": 0.30},
-    "Limestone":         {"d10": 3.00, "cu": 1.4, "epsilon0": 0.55, "psi": 0.60,
-                          "rho_p_eff": 2700, "d60": 4.20, "is_porous": False, "default_depth": 0.50},
-    "Pumice":            {"d10": 1.50, "cu": 1.3, "epsilon0": 0.55, "psi": 0.55,
-                          "rho_p_eff":  900, "d60": 1.56, "is_porous": True,  "default_depth": 0.60},
-    "FILTRALITE clay":   {"d10": 1.20, "cu": 1.5, "epsilon0": 0.48, "psi": 0.50,
-                          "rho_p_eff": 1250, "d60": 1.80, "is_porous": True,  "default_depth": 0.80},
-    "Custom":            {"d10": 0.0,  "cu": 1.5, "epsilon0": 0.42, "psi": 0.80,
-                          "rho_p_eff": 2650, "d60": 0.0,  "is_porous": False, "default_depth": 0.50},
-}
+from ui.compare_units import reconvert_compare_b_widgets
+from ui.feed_pump_context_inputs import merge_feed_hydraulics_into_out
+from ui.fouling_workflow import render_fouling_guided_workflow
+from ui.scroll_markers import inject_anchor
+from engine.default_media_presets import (
+    DEFAULT_MEDIA_PRESETS,
+    eps0_from_psi,
+    rho_eff_porous,
+)
+from engine.project_io import AB_RFQ_SESSION_TO_QUANTITY
 
 _GAC_MEDIA_NAMES = {"Medium GAC"}
 
@@ -59,6 +36,17 @@ def _reconvert_session_units(old: str, new: str) -> None:
             continue
         nv = transpose_display_value(fv, qty, old, new)
         st.session_state[wkey] = int(round(nv)) if wkey == "fb_mm" else nv
+    for wkey, qty in AB_RFQ_SESSION_TO_QUANTITY.items():
+        if wkey not in st.session_state:
+            continue
+        v = st.session_state[wkey]
+        if not isinstance(v, (int, float)):
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        st.session_state[wkey] = transpose_display_value(fv, qty, old, new)
     for wkey in list(st.session_state.keys()):
         if not isinstance(wkey, str):
             continue
@@ -78,14 +66,7 @@ def _reconvert_session_units(old: str, new: str) -> None:
         if not isinstance(v, (int, float)):
             continue
         st.session_state[wkey] = transpose_display_value(float(v), qty, old, new)
-
-
-def _eps0_from_psi(psi: float) -> float:
-    return round(0.4 + 0.1 * (1.0 - psi) / max(psi, 0.01), 3)
-
-
-def _rho_eff_porous(rho_dry: float, eps_p: float, rho_water: float = 1025.0) -> float:
-    return rho_dry + rho_water * eps_p
+    reconvert_compare_b_widgets(old, new)
 
 
 def _apply_fouling_suggested_solid_loading() -> None:
@@ -95,10 +76,32 @@ def _apply_fouling_suggested_solid_loading() -> None:
         st.session_state["solid_loading"] = float(v)
 
 
+def _clamp_layer_widget_session_mins(unit_system: str) -> None:
+    """Streamlit keys override ``value=`` — clamp stale session_state before number_input."""
+    _min_d10 = float(display_value(0.01, "length_mm", unit_system))
+    _min_rho = float(display_value(100.0, "density_kg_m3", unit_system))
+    for wkey in list(st.session_state.keys()):
+        if not isinstance(wkey, str):
+            continue
+        v = st.session_state.get(wkey)
+        if not isinstance(v, (int, float)):
+            continue
+        try:
+            fv = float(v)
+        except (TypeError, ValueError):
+            continue
+        if wkey.startswith("d10_") and wkey[4:].isdigit():
+            st.session_state[wkey] = max(_min_d10, fv)
+        elif wkey.startswith("rhd_") and wkey[4:].isdigit():
+            st.session_state[wkey] = max(_min_rho, fv)
+        elif wkey.startswith("rh_") and wkey[3:].isdigit():
+            st.session_state[wkey] = max(_min_rho, fv)
+
+
 def _ensure_presets():
     if ("media_presets" not in st.session_state or
-            set(st.session_state.media_presets.keys()) != set(_DEFAULT_MEDIA_PRESETS.keys())):
-        st.session_state.media_presets = _DEFAULT_MEDIA_PRESETS.copy()
+            set(st.session_state.media_presets.keys()) != set(DEFAULT_MEDIA_PRESETS.keys())):
+        st.session_state.media_presets = DEFAULT_MEDIA_PRESETS.copy()
 
 
 def render_sidebar(
@@ -132,13 +135,23 @@ def render_sidebar(
         _reconvert_session_units(_prev_units, unit_system)
     st.session_state["_prev_unit_system"] = unit_system
     st.divider()
+    st.caption(
+        "**Sidebar = inputs** (what you change before **Apply**). **Main tabs** = **Filtration · Backwash · "
+        "Mechanical · Media** = read-only **results** from the same inputs — edit here, review there."
+    )
 
-    proc_tab, vessel_tab, media_tab, bw_tab, econ_tab = st.tabs([
-        "⚙️ Process", "🏗️ Vessel", "🧱 Media", "🔄 BW", "💰 Econ"
-    ])
+    proc_tab, vessel_tab, media_tab, bw_tab, econ_tab = st.tabs(
+        ["⚙️ Process", "🏗️ Vessel", "🧱 Media", "🔄 BW", "💰 Econ"],
+        key="mmf_sidebar_tabs",
+    )
 
     # ── Tab 1: Process ────────────────────────────────────────────────────
     with proc_tab:
+        inject_anchor("mmf-anchor-sb-process")
+        st.caption(
+            "**Process** — plant duty, water quality, **cartridge/CF** (below). **LV/EBCT** limits: **🧱 Media** tab. "
+            "**Hydraulics & ΔP curves:** **💧 Filtration** & **🧱 Media** (main)."
+        )
         st.markdown("**Project**")
         out["project_name"] = st.text_input("Project",     value="NPC SWRO 60 000 m³/d", key="project_name")
         out["doc_number"]   = st.text_input("Doc. No.",    value="EXXXX-VWT-PCS-CAL-2001", key="doc_number")
@@ -234,115 +247,122 @@ def render_sidebar(
             "**Max LV** and **min EBCT** setpoints are defined **per media layer** "
             "in the **Media** tab (with each layer). Support layers show read-only N/A."
         )
-        out["cart_flow"]   = st.number_input(
-            f"Design flow ({unit_label('flow_m3h', unit_system)})",
-            value=float(out["total_flow"]),
-            step=_stp_flow, key="cart_flow",
-        )
-        out["cart_size"]   = st.selectbox("Element length", ELEMENT_SIZE_LABELS, index=2, key="cart_size")
-        out["cart_rating"] = st.selectbox("Rating (μm absolute)", RATING_UM_OPTIONS, index=1, key="cart_rating")
-        out["cart_cip"]    = st.toggle("CIP system (SS 316L elements)", value=False, key="cart_cip")
-        _hsg_options     = [str(r) for r in HOUSING_CAPACITY_OPTIONS] + ["Custom…"]
-        _hsg_default_idx = HOUSING_CAPACITY_OPTIONS.index(DEFAULT_ELEMENTS_PER_HOUSING)
-        cart_hsg_sel = st.selectbox("Elements per housing", _hsg_options, index=_hsg_default_idx, key="cart_hsg_sel")
-        if cart_hsg_sel == "Custom…":
-            out["cart_housing"] = st.number_input("Custom elements per housing",
-                                                   min_value=1, max_value=500, value=100, step=1, key="cart_hsg_custom")
-        else:
-            out["cart_housing"] = int(cart_hsg_sel)
-        _use_vendor_dhc = st.toggle(
-            "Vendor DHC override (g/element)",
-            value=False,
-            key="cart_dhc_vendor",
-            help=(
-                "By default, element life uses the built-in **g/TIE × rating** curve. "
-                "Enable to enter **total dirt-hold per element** from a supplier datasheet; "
-                "clean/EOL ΔP still follows the vendor quadratic flow curves."
-            ),
-        )
-        if _use_vendor_dhc:
-            out["cart_dhc_override_g"] = float(st.number_input(
-                "DHC per element (g)",
-                min_value=1.0, max_value=8000.0, value=180.0, step=5.0, format="%.0f",
-                key="cart_dhc_override_g",
-            ))
-        else:
-            out["cart_dhc_override_g"] = 0.0
-        _tss_lo = float(out["tss_low"])
-        _tss_md = float(out["tss_avg"])
-        _tss_hi = max(_tss_lo, _tss_md, float(out["tss_high"]))
-        out["cf_sync_feed_tss"] = st.toggle(
-            "Sync CF inlet TSS from MMF feed scenario",
-            value=False,
-            key="cf_sync_feed_tss",
-            help=(
-                "When enabled, CF inlet (MMF effluent basis for cartridge loading) follows the "
-                "same **low / average / high** feed TSS band as the BW solids scenarios. "
-                "Turn off to enter CF inlet manually (still capped at the highest feed TSS)."
-            ),
-        )
-        _band_opts = ("low", "avg", "high")
-        _band_fmt = {"low": "Low", "avg": "Average", "high": "High"}
-        if out["cf_sync_feed_tss"]:
-            _sb0 = str(st.session_state.get("cf_sync_tss_band", "avg"))
-            if _sb0 not in _band_opts:
-                _sb0 = "avg"
-            out["cf_sync_tss_band"] = st.radio(
-                "CF inlet matches feed TSS",
-                options=_band_opts,
-                format_func=lambda k: _band_fmt[str(k)],
-                index=_band_opts.index(_sb0),
-                horizontal=True,
-                key="cf_sync_tss_band",
+        inject_anchor("mmf-anchor-sb-process-cartridge")
+        with st.expander("Cartridge & solids calibration", expanded=False):
+            out["cart_flow"]   = st.number_input(
+                f"Design flow ({unit_label('flow_m3h', unit_system)})",
+                value=float(out["total_flow"]),
+                step=_stp_flow, key="cart_flow",
             )
-            _bind = float(out[f"tss_{out['cf_sync_tss_band']}"])
-            out["cf_inlet_tss"] = _bind
-            _cf_inlet_max = _bind
-            _cf_outlet_max = round(0.15 * _bind, 4)
-            st.caption(
-                f"CF inlet = **{_bind:.2f} mg/L** (feed {_band_fmt[out['cf_sync_tss_band']].lower()}). "
-                f"Outlet target ≤ **{_cf_outlet_max:.2f} mg/L** (15 % of that inlet)."
+            out["cart_size"]   = st.selectbox("Element length", ELEMENT_SIZE_LABELS, index=2, key="cart_size")
+            out["cart_rating"] = st.selectbox("Rating (μm absolute)", RATING_UM_OPTIONS, index=1, key="cart_rating")
+            out["cart_cip"]    = st.toggle("CIP system (SS 316L elements)", value=False, key="cart_cip")
+            _hsg_options     = [str(r) for r in HOUSING_CAPACITY_OPTIONS] + ["Custom…"]
+            _hsg_default_idx = HOUSING_CAPACITY_OPTIONS.index(DEFAULT_ELEMENTS_PER_HOUSING)
+            cart_hsg_sel = st.selectbox("Elements per housing", _hsg_options, index=_hsg_default_idx, key="cart_hsg_sel")
+            if cart_hsg_sel == "Custom…":
+                out["cart_housing"] = st.number_input("Custom elements per housing",
+                                                       min_value=1, max_value=500, value=100, step=1, key="cart_hsg_custom")
+            else:
+                out["cart_housing"] = int(cart_hsg_sel)
+            _use_vendor_dhc = st.toggle(
+                "Vendor DHC override (g/element)",
+                value=False,
+                key="cart_dhc_vendor",
+                help=(
+                    "By default, element life uses the built-in **g/TIE × rating** curve. "
+                    "Enable to enter **total dirt-hold per element** from a supplier datasheet; "
+                    "clean/EOL ΔP still follows the vendor quadratic flow curves."
+                ),
             )
-            if "cf_outlet_tss" in st.session_state:
-                st.session_state["cf_outlet_tss"] = min(
-                    float(st.session_state["cf_outlet_tss"]), float(_cf_outlet_max),
+            if _use_vendor_dhc:
+                out["cart_dhc_override_g"] = float(st.number_input(
+                    "DHC per element (g)",
+                    min_value=1.0, max_value=8000.0, value=180.0, step=5.0, format="%.0f",
+                    key="cart_dhc_override_g",
+                ))
+            else:
+                out["cart_dhc_override_g"] = 0.0
+            _tss_lo = float(out["tss_low"])
+            _tss_md = float(out["tss_avg"])
+            _tss_hi = max(_tss_lo, _tss_md, float(out["tss_high"]))
+            out["cf_sync_feed_tss"] = st.toggle(
+                "Sync CF inlet TSS from MMF feed scenario",
+                value=False,
+                key="cf_sync_feed_tss",
+                help=(
+                    "When enabled, CF inlet (MMF effluent basis for cartridge loading) follows the "
+                    "same **low / average / high** feed TSS band as the BW solids scenarios. "
+                    "Turn off to enter CF inlet manually (still capped at the highest feed TSS)."
+                ),
+            )
+            _band_opts = ("low", "avg", "high")
+            _band_fmt = {"low": "Low", "avg": "Average", "high": "High"}
+            if out["cf_sync_feed_tss"]:
+                _sb0 = str(st.session_state.get("cf_sync_tss_band", "avg"))
+                if _sb0 not in _band_opts:
+                    _sb0 = "avg"
+                out["cf_sync_tss_band"] = st.radio(
+                    "CF inlet matches feed TSS",
+                    options=_band_opts,
+                    format_func=lambda k: _band_fmt[str(k)],
+                    index=_band_opts.index(_sb0),
+                    horizontal=True,
+                    key="cf_sync_tss_band",
                 )
-            out["cf_outlet_tss"] = st.number_input(
-                "CF outlet TSS — target (mg/L)", min_value=0.0,
-                max_value=float(_cf_outlet_max),
-                value=min(0.5, float(_cf_outlet_max)), step=0.05,
-                format="%.2f", key="cf_outlet_tss",
-            )
-        else:
-            out["cf_sync_tss_band"] = str(st.session_state.get("cf_sync_tss_band", "avg"))
-            if out["cf_sync_tss_band"] not in _band_opts:
-                out["cf_sync_tss_band"] = "avg"
-            _cf_inlet_max = _tss_hi
-            _cf_outlet_max = round(0.15 * _cf_inlet_max, 4)
-            if "cf_inlet_tss" in st.session_state:
-                st.session_state["cf_inlet_tss"] = min(
-                    float(st.session_state["cf_inlet_tss"]), float(_cf_inlet_max),
+                _bind = float(out[f"tss_{out['cf_sync_tss_band']}"])
+                out["cf_inlet_tss"] = _bind
+                _cf_inlet_max = _bind
+                _cf_outlet_max = round(0.15 * _bind, 4)
+                st.caption(
+                    f"CF inlet = **{_bind:.2f} mg/L** (feed {_band_fmt[out['cf_sync_tss_band']].lower()}). "
+                    f"Outlet target ≤ **{_cf_outlet_max:.2f} mg/L** (15 % of that inlet)."
                 )
-            if "cf_outlet_tss" in st.session_state:
-                st.session_state["cf_outlet_tss"] = min(
-                    float(st.session_state["cf_outlet_tss"]), float(_cf_outlet_max),
+                if "cf_outlet_tss" in st.session_state:
+                    st.session_state["cf_outlet_tss"] = min(
+                        float(st.session_state["cf_outlet_tss"]), float(_cf_outlet_max),
+                    )
+                out["cf_outlet_tss"] = st.number_input(
+                    "CF outlet TSS — target (mg/L)", min_value=0.0,
+                    max_value=float(_cf_outlet_max),
+                    value=min(0.5, float(_cf_outlet_max)), step=0.05,
+                    format="%.2f", key="cf_outlet_tss",
                 )
-            out["cf_inlet_tss"] = st.number_input(
-                "CF inlet TSS (mg/L)", min_value=0.0,
-                max_value=float(_cf_inlet_max),
-                value=min(2.0, float(_cf_inlet_max)), step=0.1,
-                format="%.2f", key="cf_inlet_tss",
-                help="MMF effluent basis — capped at the **highest** of low / avg / high feed TSS.",
-            )
-            out["cf_outlet_tss"] = st.number_input(
-                "CF outlet TSS — target (mg/L)", min_value=0.0,
-                max_value=float(_cf_outlet_max),
-                value=min(0.5, float(_cf_outlet_max)), step=0.05,
-                format="%.2f", key="cf_outlet_tss",
-            )
+            else:
+                out["cf_sync_tss_band"] = str(st.session_state.get("cf_sync_tss_band", "avg"))
+                if out["cf_sync_tss_band"] not in _band_opts:
+                    out["cf_sync_tss_band"] = "avg"
+                _cf_inlet_max = _tss_hi
+                _cf_outlet_max = round(0.15 * _cf_inlet_max, 4)
+                if "cf_inlet_tss" in st.session_state:
+                    st.session_state["cf_inlet_tss"] = min(
+                        float(st.session_state["cf_inlet_tss"]), float(_cf_inlet_max),
+                    )
+                if "cf_outlet_tss" in st.session_state:
+                    st.session_state["cf_outlet_tss"] = min(
+                        float(st.session_state["cf_outlet_tss"]), float(_cf_outlet_max),
+                    )
+                out["cf_inlet_tss"] = st.number_input(
+                    "CF inlet TSS (mg/L)", min_value=0.0,
+                    max_value=float(_cf_inlet_max),
+                    value=min(2.0, float(_cf_inlet_max)), step=0.1,
+                    format="%.2f", key="cf_inlet_tss",
+                    help="MMF effluent basis — capped at the **highest** of low / avg / high feed TSS.",
+                )
+                out["cf_outlet_tss"] = st.number_input(
+                    "CF outlet TSS — target (mg/L)", min_value=0.0,
+                    max_value=float(_cf_outlet_max),
+                    value=min(0.5, float(_cf_outlet_max)), step=0.05,
+                    format="%.2f", key="cf_outlet_tss",
+                )
 
     # ── Tab 2: Vessel ─────────────────────────────────────────────────────
     with vessel_tab:
+        inject_anchor("mmf-anchor-sb-vessel")
+        st.caption(
+            "**Vessel** — geometry, ASME design, lining, environment. **Thicknesses, weights, nozzles, drawing:** "
+            "main **⚙️ Mechanical** tab (read-only from these inputs)."
+        )
         st.markdown("**Vessel geometry**")
         _lbl_id = f"Nominal internal diameter ({unit_label('length_m', unit_system)})"
         _def_id = display_value(5.5, "length_m", unit_system)
@@ -378,13 +398,29 @@ def render_sidebar(
             out["head_radio"]  = st.selectbox("Head",  RADIOGRAPHY_OPTIONS, index=2, key="hd_r")
             st.caption(f"E = {JOINT_EFFICIENCY[out['head_radio']]:.2f}")
         st.markdown("*Thickness overrides* (**0** = use ASME-calculated thickness)")
+        _lbl_ov_sh = f"Shell t override ({unit_label('length_mm', unit_system)})"
+        _def_ov = float(display_value(0.0, "length_mm", unit_system))
+        _stp_ov = float(display_value(1.0, "length_mm", unit_system))
         out["ov_shell"]     = st.number_input(
-            "Shell t override (mm)", value=0.0, step=1.0, key="ov_sh",
-            help="0 — use calculated shell thickness from ASME VIII-1. Non-zero — force this thickness (mm).",
+            _lbl_ov_sh,
+            value=_def_ov,
+            step=_stp_ov,
+            key="ov_sh",
+            help=(
+                "0 — use calculated shell thickness from ASME VIII-1. Non-zero — force this thickness "
+                f"({unit_label('length_mm', unit_system)})."
+            ),
         )
+        _lbl_ov_hd = f"Head t override ({unit_label('length_mm', unit_system)})"
         out["ov_head"]      = st.number_input(
-            "Head t override (mm)", value=0.0, step=1.0, key="ov_hd",
-            help="0 — use calculated head thickness from ASME VIII-1. Non-zero — force this thickness (mm).",
+            _lbl_ov_hd,
+            value=_def_ov,
+            step=_stp_ov,
+            key="ov_hd",
+            help=(
+                "0 — use calculated head thickness from ASME VIII-1. Non-zero — force this thickness "
+                f"({unit_label('length_mm', unit_system)})."
+            ),
         )
         _lbl_sd = f"Steel density ({unit_label('density_kg_m3', unit_system)})"
         _def_sd = display_value(float(STEEL_DENSITY_KG_M3), "density_kg_m3", unit_system)
@@ -525,6 +561,12 @@ def render_sidebar(
 
     # ── Tab 3: Media ──────────────────────────────────────────────────────
     with media_tab:
+        inject_anchor("mmf-anchor-sb-media")
+        st.caption(
+            "**Media** — nozzle plate, **layer stack** (bottom→top), **M_max / α / fouling** (below). "
+            "**Volumes, ΔP tables, inventory:** main **🧱 Media** tab. **Filtration cycles & scenarios:** **💧 Filtration**."
+        )
+        inject_anchor("mmf-anchor-sb-media-nozzle")
         st.markdown("**Nozzle plate**")
         _lbl_nph = f"Nozzle plate height ({unit_label('length_m', unit_system)})"
         _def_nph = display_value(1.0, "length_m", unit_system)
@@ -544,7 +586,10 @@ def render_sidebar(
             value=0.0, step=float(display_value(1.0, "length_mm", unit_system)), key="np_ov",
             help="0 — calculate nozzle-plate thickness from loads. Non-zero — use this thickness.",
         )
+        from ui.nozzle_catalogue_ui import render_nozzle_catalogue_sidebar
+        out = render_nozzle_catalogue_sidebar(out, unit_system)
 
+        inject_anchor("mmf-anchor-sb-media-layers")
         st.markdown("**Media layers**")
         out["n_layers"] = int(st.selectbox("Layers", [1, 2, 3, 4, 5, 6], index=2, key="n_layers"))
         # Normalize capture weights on the *next* run only, and only before cap_* widgets
@@ -570,6 +615,11 @@ def render_sidebar(
         _rho_water_sb   = water_properties(_feed_temp_si, out["feed_sal"])["density_kg_m3"]
         layers = []
         default_types = ["Gravel", "Fine sand", "Anthracite"]
+        _clamp_layer_widget_session_mins(unit_system)
+        # dp_trigger can be 0 in stale session_state while min is > 0 in display units
+        if "dp_trig" in st.session_state and isinstance(st.session_state["dp_trig"], (int, float)):
+            _min_dp = float(display_value(0.01, "pressure_bar", unit_system))
+            st.session_state["dp_trig"] = max(_min_dp, float(st.session_state["dp_trig"]))
         for i in range(out["n_layers"]):
             st.markdown(f"**Layer {i+1}** (bottom → top)")
             def_type = default_types[i] if i < 3 else "Custom"
@@ -615,7 +665,9 @@ def render_sidebar(
                 _eb_lo, _eb_hi = get_ebct_range(m_type, gac_mode)
                 if _lv_lo is not None:
                     st.caption(
-                        f"Envelope — LV: {_lv_lo}–{_lv_hi} m/h · "
+                        f"Envelope — LV: "
+                        f"{format_value(float(_lv_lo), 'velocity_m_h', unit_system, 1)}–"
+                        f"{format_value(float(_lv_hi), 'velocity_m_h', unit_system, 1)} · "
                         f"EBCT: {_eb_lo}–{_eb_hi} min"
                     )
                 _thr_c1, _thr_c2 = st.columns(2)
@@ -664,31 +716,51 @@ def render_sidebar(
             data = preset.copy()
             if m_type == "Custom":
                 _c1, _c2 = st.columns(2)
-                _d10  = _c1.number_input("d10 (mm)", value=1.0, step=0.05,
-                                         min_value=0.01, key=f"d10_{i}")
+                _lbl_d10 = f"d10 ({unit_label('length_mm', unit_system)})"
+                _d10_disp = _c1.number_input(
+                    _lbl_d10,
+                    value=float(display_value(float(preset.get("d10", 1.0)), "length_mm", unit_system)),
+                    step=float(display_value(0.05, "length_mm", unit_system)),
+                    min_value=float(display_value(0.01, "length_mm", unit_system)),
+                    key=f"d10_{i}",
+                )
                 _cu   = _c2.number_input("CU (d60/d10)", value=1.5, step=0.05,
                                          min_value=1.0, key=f"cu_{i}")
                 _psi  = _c1.number_input("Sphericity ψ", value=0.80, step=0.05,
                                          min_value=0.3, max_value=1.0, key=f"psi_{i}")
-                _eps0_est = _eps0_from_psi(_psi)
+                _eps0_est = eps0_from_psi(_psi)
                 _eps0 = _c2.number_input("Voidage ε₀", value=_eps0_est, step=0.01,
                                          min_value=0.25, max_value=0.70, key=f"ep_{i}")
                 _is_por = st.checkbox("Porous media (water fills particle pores)",
                                       value=False, key=f"por_{i}")
                 if _is_por:
                     _p1, _p2 = st.columns(2)
-                    _rho_dry = _p1.number_input("Dry apparent density (kg/m³)",
-                                                 value=500.0, step=50.0, min_value=100.0, key=f"rhd_{i}")
+                    _lbl_rho_dry = f"Dry apparent density ({unit_label('density_kg_m3', unit_system)})"
+                    _rho_dry_disp = _p1.number_input(
+                        _lbl_rho_dry,
+                        value=float(display_value(500.0, "density_kg_m3", unit_system)),
+                        step=float(display_value(50.0, "density_kg_m3", unit_system)),
+                        min_value=float(display_value(100.0, "density_kg_m3", unit_system)),
+                        key=f"rhd_{i}",
+                    )
+                    _rho_dry_si = float(si_value(_rho_dry_disp, "density_kg_m3", unit_system))
                     _eps_p   = _p2.number_input("Particle internal porosity εₚ", value=0.50,
                                                  step=0.05, min_value=0.0, max_value=0.95, key=f"epp_{i}")
-                    _rho_eff = _rho_eff_porous(_rho_dry, _eps_p, _rho_water_sb)
-                    st.caption(f"ρ_eff = {_rho_eff:.0f} kg/m³")
+                    _rho_eff = rho_eff_porous(_rho_dry_si, _eps_p, _rho_water_sb)
+                    st.caption(f"ρ_eff = {format_value(_rho_eff, 'density_kg_m3', unit_system, 0)}")
                 else:
-                    _rho_eff = st.number_input("Particle density (kg/m³)",
-                                                value=2650.0, step=50.0, min_value=100.0, key=f"rh_{i}")
-                data["d10"]       = _d10
+                    _lbl_rho_p = f"Particle density ({unit_label('density_kg_m3', unit_system)})"
+                    _rho_disp = st.number_input(
+                        _lbl_rho_p,
+                        value=float(display_value(2650.0, "density_kg_m3", unit_system)),
+                        step=float(display_value(50.0, "density_kg_m3", unit_system)),
+                        min_value=float(display_value(100.0, "density_kg_m3", unit_system)),
+                        key=f"rh_{i}",
+                    )
+                    _rho_eff = float(si_value(_rho_disp, "density_kg_m3", unit_system))
+                data["d10"]       = float(si_value(_d10_disp, "length_mm", unit_system))
                 data["cu"]        = _cu
-                data["d60"]       = round(_d10 * _cu, 3)
+                data["d60"]       = round(data["d10"] * _cu, 3)
                 data["epsilon0"]  = _eps0
                 data["psi"]       = _psi
                 data["is_porous"] = _is_por
@@ -719,150 +791,168 @@ def render_sidebar(
                 st.session_state["_pending_normalize_cap_weights"] = True
                 st.rerun()
 
+        inject_anchor("mmf-anchor-sb-media-mmax")
         st.markdown("**Filtration performance**")
         _lbl_sl = f"Solid loading before BW ({unit_label('loading_kg_m2', unit_system)})"
         _def_sl = display_value(1.5, "loading_kg_m2", unit_system)
         _stp_sl = display_value(0.1, "loading_kg_m2", unit_system)
         out["solid_loading"]          = st.number_input(_lbl_sl, value=_def_sl, step=_stp_sl, key="solid_loading")
 
-        with st.expander("Advanced — pilot / field calibration factors", expanded=False):
-            st.caption(
-                "**M_max scale** scales the solids inventory used in ΔP dirty and BW trigger math "
-                "(not the label value above). **Maldistribution (≥1)** inflates superficial velocity for "
-                "Ergun + cake (distributor / wall effects). **α factor** scales cake resistance after "
-                "auto or user α. **TSS capture** is the fraction of feed TSS assumed to deposit for cycle-time "
-                "estimates. **Expansion scale** adjusts R–Z expanded bed height increment (pilot vs correlation)."
-            )
-            _c1a, _c2a = st.columns(2)
-            with _c1a:
-                out["solid_loading_scale"] = st.number_input(
-                    "M_max scale (−)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
-                    key="solid_loading_scale",
+        with st.expander("Calibration, fouling assistant & cake resistance (α)", expanded=False):
+            with st.expander("Advanced — pilot / field calibration factors", expanded=False):
+                st.caption(
+                    "**M_max scale** scales the solids inventory used in ΔP dirty and BW trigger math "
+                    "(not the label value above). **Maldistribution (≥1)** inflates superficial velocity for "
+                    "Ergun + cake (distributor / wall effects). **α factor** scales cake resistance after "
+                    "auto or user α. **TSS capture** is the fraction of feed TSS assumed to deposit for cycle-time "
+                    "estimates. **Expansion scale** adjusts R–Z expanded bed height increment (pilot vs correlation)."
                 )
-                out["maldistribution_factor"] = st.number_input(
-                    "Maldistribution factor (≥1)", value=1.0, min_value=1.0, max_value=2.0, step=0.05,
-                    key="maldistribution_factor",
+                _c1a, _c2a = st.columns(2)
+                with _c1a:
+                    out["solid_loading_scale"] = st.number_input(
+                        "M_max scale (−)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
+                        key="solid_loading_scale",
+                    )
+                    out["use_calculated_maldistribution"] = st.checkbox(
+                        "Use calculated maldistribution (1D collector model)",
+                        value=bool(st.session_state.get("use_calculated_maldistribution", False)),
+                        key="use_calculated_maldistribution",
+                        help="When enabled, Ergun / cake use max(lateral Q)/mean(Q) from BW → inlet feed / outlet collector inputs.",
+                    )
+                    out["maldistribution_factor"] = st.number_input(
+                        "Maldistribution factor (≥1) — manual",
+                        value=1.0, min_value=1.0, max_value=2.0, step=0.05,
+                        key="maldistribution_factor",
+                        disabled=bool(out.get("use_calculated_maldistribution")),
+                        help="Ignored when calculated maldistribution is enabled.",
+                    )
+                with _c2a:
+                    out["alpha_calibration_factor"] = st.number_input(
+                        "α calibration factor (−)", value=1.0, min_value=0.3, max_value=3.0, step=0.05,
+                        key="alpha_calibration_factor",
+                    )
+                    out["tss_capture_efficiency"] = st.number_input(
+                        "TSS capture efficiency (0–1)", value=1.0, min_value=0.0, max_value=1.0, step=0.05,
+                        key="tss_capture_efficiency",
+                    )
+                out["expansion_calibration_scale"] = st.number_input(
+                    "BW expansion increment scale (0.5–1.5)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
+                    key="expansion_calibration_scale",
+                    help="Scales only the **expanded height increment** above settled depth per layer (1 = model).",
                 )
-            with _c2a:
-                out["alpha_calibration_factor"] = st.number_input(
-                    "α calibration factor (−)", value=1.0, min_value=0.3, max_value=3.0, step=0.05,
-                    key="alpha_calibration_factor",
-                )
-                out["tss_capture_efficiency"] = st.number_input(
-                    "TSS capture efficiency (0–1)", value=1.0, min_value=0.0, max_value=1.0, step=0.05,
-                    key="tss_capture_efficiency",
-                )
-            out["expansion_calibration_scale"] = st.number_input(
-                "BW expansion increment scale (0.5–1.5)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
-                key="expansion_calibration_scale",
-                help="Scales only the **expanded height increment** above settled depth per layer (1 = model).",
-            )
 
-        with st.expander("Fouling assistant — SDI / MFI → suggested **M_max**", expanded=False):
-            st.caption(
-                "Empirical correlation from `engine/fouling.py` (order-of-magnitude). "
-                "MFI is a **0–10+ severity index** from your lab protocol — not raw s/L²."
-            )
-            _vth_disp = float(out.get("velocity_threshold") or 12.0)
-            _vth_si = si_value(_vth_disp, "velocity_m_h", unit_system)
-            _def_lv_si = max(4.0, min(float(_vth_si) * 0.88, 14.0))
-            _lbl_flv = f"Filtration LV for correlation ({unit_label('velocity_m_h', unit_system)})"
-            _def_flv = display_value(_def_lv_si, "velocity_m_h", unit_system)
-            _stp_flv = display_value(0.5, "velocity_m_h", unit_system)
-            _f_lv_disp = st.number_input(
-                _lbl_flv,
-                value=_def_flv,
-                step=float(_stp_flv),
-                min_value=0.0,
-                key="fouling_lv_mh",
-                help="Typical superficial velocity at the media (N scenario). Defaults below your max LV threshold.",
-            )
-            _c1f, _c2f = st.columns(2)
-            with _c1f:
-                _f_sdi = st.number_input(
-                    "SDI₁₅ (−)",
-                    value=3.0,
-                    min_value=0.0,
-                    max_value=15.0,
-                    step=0.1,
-                    key="fouling_sdi",
+            with st.expander("Fouling assistant — guided workflow (SDI / MFI → M_max)", expanded=False):
+                render_fouling_guided_workflow(
+                    out, unit_system, on_apply_solid_loading=_apply_fouling_suggested_solid_loading,
                 )
-            with _c2f:
-                _f_mfi = st.number_input(
-                    "MFI index (−)",
-                    value=2.0,
-                    min_value=0.0,
-                    max_value=15.0,
-                    step=0.1,
-                    key="fouling_mfi",
-                )
-            _lv_si = si_value(float(_f_lv_disp), "velocity_m_h", unit_system)
-            _lv_si = max(0.1, float(_lv_si))
-            _tss_use = max(0.05, float(out.get("tss_avg", 10.0)))
-            _esl = estimate_solids_loading(
-                tss_mg_l=_tss_use,
-                lv_m_h=_lv_si,
-                sdi15=float(_f_sdi),
-                mfi_index=float(_f_mfi),
-            )
-            _sev = estimate_fouling_severity(
-                sdi15=float(_f_sdi),
-                mfi_index=float(_f_mfi),
-                tss_mg_l=_tss_use,
-                lv_m_h=_lv_si,
-            )
-            _sugg_si = float(_esl["solid_loading_kg_m2"])
-            _sugg_disp = display_value(_sugg_si, "loading_kg_m2", unit_system)
-            st.session_state["_fouling_last_sugg_disp"] = round(float(_sugg_disp), 5)
-            st.markdown(
-                f"**Suggested M_max:** {_sugg_disp:.3f} {unit_label('loading_kg_m2', unit_system)}  ·  "
-                f"**Fouling score:** {_sev['score']:.0f}/100 — {_sev['severity']}"
-            )
-            _rt = estimate_run_time(
-                sdi15=float(_f_sdi),
-                mfi_index=float(_f_mfi),
-                tss_mg_l=_tss_use,
-                lv_m_h=_lv_si,
-            )
-            st.caption(
-                f"Indicative filter run time (same fouling model): **~{_rt['run_time_h']:.1f} h** "
-                f"between backwashes — advisory only; set BW cycles / day separately."
-            )
-            _seen_fw = set()
-            for _w in _esl.get("warnings", ()) + _sev.get("warnings", ()) + _rt.get("warnings", ()):
-                if _w and _w not in _seen_fw:
-                    _seen_fw.add(_w)
-                    st.warning(_w)
-            st.button(
-                "Apply suggested solid loading",
-                key="fouling_apply_mmax",
-                on_click=_apply_fouling_suggested_solid_loading,
-            )
 
-        _lbl_csd = f"Captured solids density ({unit_label('density_kg_m3', unit_system)})"
-        _def_csd = display_value(1020.0, "density_kg_m3", unit_system)
-        _stp_csd = display_value(10.0, "density_kg_m3", unit_system)
-        out["captured_solids_density"]= st.number_input(_lbl_csd, value=_def_csd, step=_stp_csd, key="captured_solids_density")
-        alpha_9 = st.number_input(
-            "Specific cake resistance α (× 10⁹ m/kg)",
-            value=0.0, step=5.0, min_value=0.0, key="alpha_res",
-            help="0 — auto-calibrate α so dirty-bed ΔP matches the BW initiation setpoint at M_max solid loading. "
-                 "Non-zero — fixed α for the Ruth cake model (ΔP tables, filtration cycles).",
-        )
-        out["alpha_specific"] = alpha_9 * 1e9
-        st.caption(
-            "**0** — auto-calibrate α from the BW ΔP setpoint and **M_max** solid loading. "
-            "**> 0** — your α (×10⁹ m/kg). "
-            "*Same pattern:* shell/head thickness **0** = ASME-calculated (Vessel tab); nozzle-plate override **0** = calculated."
-        )
+            _lbl_csd = f"Captured solids density ({unit_label('density_kg_m3', unit_system)})"
+            _def_csd = display_value(1020.0, "density_kg_m3", unit_system)
+            _stp_csd = display_value(10.0, "density_kg_m3", unit_system)
+            out["captured_solids_density"]= st.number_input(_lbl_csd, value=_def_csd, step=_stp_csd, key="captured_solids_density")
+            alpha_9 = st.number_input(
+                "Specific cake resistance α (× 10⁹ m/kg)",
+                value=0.0, step=5.0, min_value=0.0, key="alpha_res",
+                help="0 — auto-calibrate α so dirty-bed ΔP matches the BW initiation setpoint at M_max solid loading. "
+                     "Non-zero — fixed α for the Ruth cake model (ΔP tables, filtration cycles).",
+            )
+            out["alpha_specific"] = alpha_9 * 1e9
+            st.caption(
+                "**0** — auto-calibrate α from the BW ΔP setpoint and **M_max** solid loading. "
+                "**> 0** — your α (×10⁹ m/kg). "
+                "*Same pattern:* shell/head thickness **0** = ASME-calculated (Vessel tab); nozzle-plate override **0** = calculated."
+            )
 
     # ── Tab 4: BW ─────────────────────────────────────────────────────────
     with bw_tab:
+        inject_anchor("mmf-anchor-sb-bw")
+        st.caption(
+            "**BW** — collector, velocities, **air scour** mode, **step times**, equipment (blower ΔP, BW head, supports). "
+            "**Expansion tables, sequence, timeline, feasibility:** main **🔄 Backwash** tab."
+        )
         st.markdown("**BW hydraulics**")
+        from engine.collector_geometry import max_collector_centerline_height_m
+        from ui.nozzle_header_sync import linked_collector_header_id_si, user_nozzle_schedule
+
+        _sched = user_nozzle_schedule()
+        _q_pf = float(st.session_state.get("mmf_last_q_per_filter") or 0.0)
+        _area = float(st.session_state.get("mmf_last_avg_area") or 0.0)
+        _bwv_si = si_value(
+            float(out.get("bw_velocity") or st.session_state.get("bw_velocity", display_value(30.0, "velocity_m_h", unit_system))),
+            "velocity_m_h", unit_system,
+        )
+        _flow_kw = dict(
+            q_filter_m3h=_q_pf,
+            bw_velocity_m_h=_bwv_si,
+            area_filter_m2=_area if _area > 0 else 25.0,
+            default_rating=str(st.session_state.get("default_rating", "PN 16")),
+            air_scour_rate_m_h=si_value(
+                float(st.session_state.get("air_scour_rate", display_value(55.0, "velocity_m_h", unit_system))),
+                "velocity_m_h", unit_system,
+            ),
+        )
+        _hdr_si_sug, _hdr_link_note = linked_collector_header_id_si(**_flow_kw)
+        _hdr_disp_sug = display_value(_hdr_si_sug, "length_m", unit_system)
+        out["collector_header_id_linked"] = st.checkbox(
+            "Link internal header ID to §4 Backwash outlet DN",
+            value=bool(st.session_state.get("collector_header_id_linked", True)),
+            key="collector_header_id_linked",
+            help=(
+                "Sets collector header ID = calculated internal diameter of §4 Backwash inlet "
+                "and outlet (same DN, OD − 2× wall — not filtrate / nominal DN). "
+                "Edit DN in **Mechanical → §4 Nozzle schedule**."
+            ),
+        )
+        if out["collector_header_id_linked"]:
+            st.session_state.pop("collector_header_id_m", None)
+            st.session_state["_collector_header_id_linked_disp"] = _hdr_disp_sug
+            from engine.nozzles import nozzle_dn_mm_for_service, nozzle_row_for_service
+            _bw_out = nozzle_row_for_service(_sched, "Backwash outlet")
+            _dn = nozzle_dn_mm_for_service(_sched, "Backwash outlet")
+            st.caption(
+                f"{_hdr_link_note} → **{format_value(_hdr_si_sug, 'length_m', unit_system)}** "
+                f"(BW DN **{_dn or '—'}** mm, calculated ID **{_bw_out.get('ID (mm)', '—') if _bw_out else '—'}** mm)."
+            )
+
         _lbl_ch = f"BW outlet collector height ({unit_label('length_m', unit_system)})"
-        _def_ch = display_value(4.2, "length_m", unit_system)
         _stp_ch = display_value(0.1, "length_m", unit_system)
-        out["collector_h"]    = st.number_input(_lbl_ch, value=_def_ch, step=_stp_ch, key="collector_h")
+        _nid_si = si_value(
+            float(out.get("nominal_id") or st.session_state.get("nominal_id", display_value(5.5, "length_m", unit_system))),
+            "length_m", unit_system,
+        )
+        _hdr_si = _hdr_si_sug if out["collector_header_id_linked"] else si_value(
+            float(st.session_state.get("collector_header_id_manual", _hdr_disp_sug)),
+            "length_m", unit_system,
+        )
+        if out["collector_header_id_linked"]:
+            out["collector_header_id_m"] = _hdr_disp_sug
+        _np_si = si_value(
+            float(out.get("nozzle_plate_h") or st.session_state.get("nozzle_plate_h", display_value(1.0, "length_m", unit_system))),
+            "length_m", unit_system,
+        )
+        _max_ch_si = max_collector_centerline_height_m(_nid_si, _hdr_si)
+        _min_ch_si = max(_np_si + 0.01, 0.1)
+        _max_ch_disp = display_value(_max_ch_si, "length_m", unit_system)
+        _min_ch_disp = display_value(_min_ch_si, "length_m", unit_system)
+        if _max_ch_disp < _min_ch_disp:
+            _max_ch_disp = _min_ch_disp
+        _def_ch = display_value(4.2, "length_m", unit_system)
+        _sess_ch = float(st.session_state.get("collector_h", _def_ch))
+        _def_ch = min(max(_sess_ch, _min_ch_disp), _max_ch_disp)
+        out["collector_h"] = st.number_input(
+            _lbl_ch, value=_def_ch, step=_stp_ch,
+            min_value=_min_ch_disp, max_value=_max_ch_disp,
+            key="collector_h",
+            help=(
+                f"Centreline height from vessel bottom. Max ≈ vessel ID − 100 mm − header ID/2 "
+                f"({format_value(_max_ch_si, 'length_m', unit_system)} with current vessel & header)."
+            ),
+        )
+        st.caption(
+            f"Collector height limit: **{format_value(_max_ch_si, 'length_m', unit_system)}** "
+            f"(ID {format_value(_nid_si, 'length_m', unit_system)} − 100 mm − "
+            f"header Ø {format_value(_hdr_si, 'length_m', unit_system)}/2)."
+        )
         out["freeboard_mm"]   = st.number_input(
             f"Min. freeboard ({unit_label('length_mm', unit_system)})",
             value=int(round(display_value(200.0, "length_mm", unit_system))),
@@ -872,6 +962,213 @@ def render_sidebar(
         _def_bwv = display_value(30.0, "velocity_m_h", unit_system)
         _stp_bwv = display_value(5.0, "velocity_m_h", unit_system)
         out["bw_velocity"]    = st.number_input(_lbl_bwv, value=_def_bwv, step=_stp_bwv, key="bw_velocity")
+
+        with st.expander(
+            "Inlet feed / BW outlet collector — 1D hydraulic model (optional)",
+            expanded=False,
+        ):
+            st.caption(
+                "**Inlet feed / BW outlet collector** (not a bottom underdrain). Set sizes and material below; "
+                "use **Re-optimize** when you change diameters or alloy. Not CFD — enable **Use calculated** "
+                "maldistribution in Media → Advanced calibration to drive ΔP."
+            )
+            st.markdown("**Sizes & hydraulics**")
+            _lbl_chid = f"Header internal diameter ({unit_label('length_m', unit_system)})"
+            if out.get("collector_header_id_linked"):
+                st.metric(
+                    _lbl_chid,
+                    format_value(_hdr_si_sug, "length_m", unit_system),
+                    help="Linked to §4 Backwash inlet/outlet calculated ID (OD − 2× wall). Uncheck link above to edit.",
+                )
+            else:
+                _def_chid = float(st.session_state.get("collector_header_id_manual", _hdr_disp_sug))
+                out["collector_header_id_m"] = st.number_input(
+                    _lbl_chid,
+                    value=_def_chid,
+                    step=float(display_value(0.05, "length_m", unit_system)),
+                    min_value=float(display_value(0.05, "length_m", unit_system)),
+                    key="collector_header_id_manual",
+                )
+            out["collector_header_feed_mode"] = st.radio(
+                "Header feed (1B+ manifold)",
+                options=["one_end", "dual_end"],
+                format_func=lambda x: (
+                    "One end (standard 1B)"
+                    if x == "one_end"
+                    else "Dual end (centre-fed, 1B+ screening)"
+                ),
+                horizontal=True,
+                key="collector_header_feed_mode_sel",
+                help="Dual-end uses a split-header balance — screening only, not CFD.",
+            )
+            out["n_bw_laterals"] = int(st.number_input(
+                "Number of BW laterals along vessel length", value=4, min_value=1, max_value=24, step=1,
+                key="n_bw_laterals",
+            ))
+            out["lateral_dn_mm"] = st.number_input(
+                f"Lateral pipe DN ({unit_label('length_mm', unit_system)})",
+                value=float(display_value(50.0, "length_mm", unit_system)),
+                step=float(display_value(5.0, "length_mm", unit_system)),
+                min_value=float(display_value(15.0, "length_mm", unit_system)),
+                key="lateral_dn_mm",
+            )
+            _lbl_lsp = f"Lateral spacing along header — 0 = auto ({unit_label('length_m', unit_system)})"
+            out["lateral_spacing_m"] = st.number_input(
+                _lbl_lsp, value=0.0,
+                step=float(display_value(0.5, "length_m", unit_system)),
+                min_value=0.0, key="lateral_spacing_m",
+            )
+            out["use_geometry_lateral"] = st.checkbox(
+                "Auto lateral length & spacing from vessel θ (ID + collector height)",
+                value=bool(st.session_state.get("use_geometry_lateral", True)),
+                key="use_geometry_lateral",
+                help=(
+                    "L_max from cross-section: header at **nozzle-plate height** to shell at "
+                    "**BW collector height**. Spacing capped by ~vessel ID."
+                ),
+            )
+            _lbl_llen = f"Lateral run length — 0 = geometry L_max ({unit_label('length_m', unit_system)})"
+            out["lateral_length_m"] = st.number_input(
+                _lbl_llen, value=0.0,
+                step=float(display_value(0.1, "length_m", unit_system)),
+                min_value=0.0, key="lateral_length_m",
+                disabled=bool(out.get("use_geometry_lateral")),
+            )
+            out["lateral_orifice_d_mm"] = st.number_input(
+                f"Lateral perforation Ø — 0 = nozzle bore ({unit_label('length_mm', unit_system)})",
+                value=0.0,
+                step=float(display_value(2.0, "length_mm", unit_system)),
+                min_value=0.0, key="lateral_orifice_d_mm",
+                help="Hydraulic diameter of holes/slots in the **lateral pipe wall** (not the nozzle-plate bores).",
+            )
+            out["n_orifices_per_lateral"] = int(st.number_input(
+                "Perforations per lateral — 0 = auto (~200 mm pitch along lateral)",
+                value=0, min_value=0, max_value=500, step=1, key="n_orifices_per_lateral",
+                help=(
+                    "Count **on each** lateral branch. **Not** the nozzle-plate hole count "
+                    "(Media → nozzle density). Total plant perforations = this × N laterals."
+                ),
+            ))
+            out["lateral_discharge_cd"] = st.number_input(
+                "Orifice discharge coefficient Cd (−)", value=0.62,
+                min_value=0.3, max_value=0.95, step=0.02, key="lateral_discharge_cd",
+            )
+
+            st.markdown("**Construction & material**")
+            from engine.collector_lateral_types import (
+                LATERAL_CONSTRUCTION_OPTIONS,
+                WEDGE_OPEN_AREA_TYPICAL_PCT,
+                materials_for_construction,
+                water_service_class,
+                water_service_material_guidance,
+            )
+            from engine.collector_geometry import LATERAL_MATERIAL_OPEN_AREA
+
+            _feed_sal_si = si_value(
+                float(out.get("feed_sal") or st.session_state.get("f_sal", 35.0)),
+                "salinity_ppt", unit_system,
+            )
+            _wsvc = water_service_class(_feed_sal_si)
+            _lcon_default = str(st.session_state.get("lateral_construction", "Drilled perforated pipe"))
+            if _lcon_default not in LATERAL_CONSTRUCTION_OPTIONS:
+                _lcon_default = "Drilled perforated pipe"
+            out["lateral_construction"] = st.selectbox(
+                "Lateral construction type",
+                options=list(LATERAL_CONSTRUCTION_OPTIONS),
+                index=list(LATERAL_CONSTRUCTION_OPTIONS).index(_lcon_default),
+                key="lateral_construction",
+                help=(
+                    "**Drilled pipe** — perforation % and ligament govern. "
+                    "**Wedge wire** — slot screen; collapse / rod spacing / OEM data (20–60% open area). "
+                    "**Coated CS** — drilled + lining holidays / abrasion review."
+                ),
+            )
+            _mat_opts = list(materials_for_construction(out["lateral_construction"]))
+            _mat_default = str(st.session_state.get("lateral_material", _mat_opts[0]))
+            if _mat_default not in _mat_opts:
+                _mat_default = _mat_opts[0]
+            out["lateral_material"] = st.selectbox(
+                "Lateral material / alloy",
+                options=_mat_opts,
+                index=_mat_opts.index(_mat_default),
+                key="lateral_material",
+            )
+            _wm = water_service_material_guidance(
+                salinity_ppt=_feed_sal_si,
+                lateral_construction=out["lateral_construction"],
+                lateral_material=out["lateral_material"],
+            )
+            st.caption(
+                f"Feed water: **{_wsvc}** ({_feed_sal_si:.1f} ppt). "
+                + " ".join(_wm.get("recommendations") or [])[:280]
+            )
+            if out["lateral_construction"] == "Wedge wire screen":
+                st.caption(
+                    f"Wedge wire typical open area **{WEDGE_OPEN_AREA_TYPICAL_PCT}** — "
+                    "not drilled-hole ligament rules."
+                )
+                out["wedge_slot_width_mm"] = st.number_input(
+                    f"Slot width ({unit_label('length_mm', unit_system)}) — 0 = advisory only",
+                    value=float(st.session_state.get("wedge_slot_width_mm", 0.0)),
+                    min_value=0.0,
+                    step=float(display_value(0.1, "length_mm", unit_system)),
+                    key="wedge_slot_width_mm",
+                )
+                out["wedge_open_area_fraction"] = st.number_input(
+                    "Wedge wire open area (fraction) — 0 = default 35%",
+                    value=float(st.session_state.get("wedge_open_area_fraction", 0.0)),
+                    min_value=0.0, max_value=0.60, step=0.01,
+                    key="wedge_open_area_fraction",
+                )
+                out["max_lateral_open_area_fraction"] = 0.0
+            else:
+                out["wedge_slot_width_mm"] = 0.0
+                out["wedge_open_area_fraction"] = 0.0
+                _mat_spec = LATERAL_MATERIAL_OPEN_AREA.get(
+                    out["lateral_material"],
+                    LATERAL_MATERIAL_OPEN_AREA.get("Stainless steel", {}),
+                )
+                if out["lateral_construction"] == "Coated carbon steel (drilled)":
+                    st.caption(
+                        "Coated CS: check **holidays**, **weld edges**, **BW/air scour abrasion**, repair strategy."
+                    )
+                else:
+                    st.caption(
+                        f"Drilled pipe max open area **{_mat_spec.get('open_area_range_pct', '—')}** "
+                        f"(cap **{float(_mat_spec.get('open_area_max_fraction', 0.1)) * 100:.0f}%**)."
+                    )
+                _custom_cap = out["lateral_material"] == "Custom"
+                out["max_lateral_open_area_fraction"] = st.number_input(
+                    "Custom max open area (fraction) — 0 = use material table",
+                    value=float(st.session_state.get("max_lateral_open_area_fraction", 0.0)),
+                    min_value=0.0, max_value=0.40, step=0.01,
+                    key="max_lateral_open_area_fraction",
+                    disabled=not _custom_cap,
+                )
+
+            st.divider()
+            st.markdown("**Re-optimize after edits**")
+            st.caption(
+                "Run when you change **lateral DN**, **perforation Ø**, **N laterals**, "
+                "**construction**, or **material** (and header ID if not linked to §4). "
+                "The solver picks N × DN × perforation count for the lowest maldistribution; "
+                "it does not change §4 vessel nozzles or a linked header diameter."
+            )
+            _opt_msg = st.session_state.pop("_collector_opt_message", None)
+            if _opt_msg:
+                st.success(_opt_msg)
+            from ui.collector_optim_ui import run_collector_optimization_from_session
+
+            st.button(
+                "Run collector optimization solver",
+                key="collector_run_optim_solver",
+                type="primary",
+                help=(
+                    "Uses your current material, diameters, and BW flow. "
+                    "Overwrites N laterals, lateral DN, and perforation count when a better layout is found."
+                ),
+                on_click=run_collector_optimization_from_session,
+            )
 
         _lbl_aw = f"③ Air + low-rate water — superficial water ({unit_label('velocity_m_h', unit_system)})"
         _def_aw = display_value(12.5, "velocity_m_h", unit_system)
@@ -902,7 +1199,7 @@ def render_sidebar(
                 value=20.0,
                 min_value=0.0, max_value=80.0, step=1.0,
                 key="air_scour_target_expansion_pct",
-                help="Engine solves equivalent m³/m²·h using the same Richardson–Zaki stack "
+                help="Engine solves equivalent superficial velocity using the same Richardson–Zaki stack "
                      "as the combined-phase table on the Backwash tab (not CFD).",
             ))
             st.caption(
@@ -943,15 +1240,24 @@ def render_sidebar(
         out["bw_total_min"] = (out["bw_s_drain"] + out["bw_s_air"] + out["bw_s_airw"]
                                + out["bw_s_hw"] + out["bw_s_settle"] + out["bw_s_fill"])
         st.metric("Total BW duration", f"{out['bw_total_min']} min")
+        out["bw_schedule_horizon_days"] = int(
+            st.selectbox(
+                "Duty chart horizon (days)",
+                options=[1, 3, 7, 14],
+                index=2,
+                key="bw_schedule_horizon_days_sel",
+                help="Multi-day Gantt on Backwash tab · scheduling aid only (not DCS).",
+            )
+        )
         out["bw_timeline_stagger"] = st.radio(
-            "24 h duty chart stagger (Backwash tab)",
-            options=["feasibility_trains", "uniform"],
-            format_func=lambda x: (
-                "From feasibility BW trains (recommended)"
-                if x == "feasibility_trains"
-                else "Uniform (legacy comparison only)"
-            ),
-            horizontal=True,
+            "Duty chart stagger (Backwash tab)",
+            options=["feasibility_trains", "optimized_trains", "uniform"],
+            format_func=lambda x: {
+                "feasibility_trains": "Feasibility BW trains (recommended)",
+                "optimized_trains": "Optimized trains (scheduling aid)",
+                "uniform": "Uniform (legacy comparison)",
+            }[x],
+            horizontal=False,
             key="bw_timeline_stagger_sel",
         )
 
@@ -973,7 +1279,11 @@ def render_sidebar(
             help=(
                 "**Beyond** the hydrostatic column (submergence). Covers sparger, distribution, "
                 "and piping losses — **not** the liquid filtration operating gauge. "
-                "Typical MMF air scour: **~0.1–0.25 bar**; lobe PD blowers rarely exceed **~0.9 bar** total ΔP."
+                "Typical MMF air scour: **~"
+                f"{format_value(0.1, 'pressure_bar', unit_system, 2)}–"
+                f"{format_value(0.25, 'pressure_bar', unit_system, 2)}**; "
+                "lobe PD blowers rarely exceed **~"
+                f"{format_value(0.9, 'pressure_bar', unit_system, 2)}** total ΔP."
             ),
         )
         out["blower_eta"]           = st.number_input("Blower isentropic efficiency", value=0.70,
@@ -993,13 +1303,26 @@ def render_sidebar(
 
         st.markdown("**Nozzles & supports**")
         out["default_rating"]  = st.selectbox("Flange rating", FLANGE_RATINGS, index=1, key="default_rating")
-        out["nozzle_stub_len"] = st.number_input("Nozzle stub length (mm)", value=350, step=50, key="nozzle_stub_len")
+        _lbl_nstub = f"Nozzle stub length ({unit_label('length_mm', unit_system)})"
+        out["nozzle_stub_len"] = int(round(st.number_input(
+            _lbl_nstub,
+            value=float(display_value(350.0, "length_mm", unit_system)),
+            step=float(display_value(50.0, "length_mm", unit_system)),
+            key="nozzle_stub_len",
+        )))
         out["strainer_mat"]    = st.selectbox("Strainer material", list(STRAINER_WEIGHT_KG.keys()), index=0, key="strainer_mat")
-        out["air_header_dn"]   = st.number_input("Air scour header DN (mm)", value=200, step=50, key="ah_dn")
+        _lbl_ahdn = f"Air scour header DN ({unit_label('length_mm', unit_system)})"
+        out["air_header_dn"]   = int(round(st.number_input(
+            _lbl_ahdn,
+            value=float(display_value(200.0, "length_mm", unit_system)),
+            step=float(display_value(50.0, "length_mm", unit_system)),
+            key="ah_dn",
+        )))
         out["manhole_dn"]      = st.selectbox("Manhole size", list(MANHOLE_WEIGHT_KG.keys()), index=0, key="manhole_dn")
         out["n_manholes"]      = int(st.number_input("No. of manholes", value=1, min_value=0, step=1, key="n_manholes"))
+        _mh_span = format_value(7.5, "length_m", unit_system, 1)
         st.caption(
-            "Rule of thumb: **one manhole per ~7–8 m** of cylindrical shell for access; "
+            f"Rule of thumb: **one manhole per ~{_mh_span}** of cylindrical shell for access; "
             "the Mechanical tab shows a recommended count from the computed shell length."
         )
         out["support_type"]    = st.selectbox("Support type", SUPPORT_TYPES, key="sup_t")
@@ -1008,8 +1331,18 @@ def render_sidebar(
             _def_sh = display_value(0.8, "length_m", unit_system)
             _stp_sh = display_value(0.05, "length_m", unit_system)
             out["saddle_h"]             = st.number_input(_lbl_sh, value=_def_sh, step=_stp_sh, key="sad_h")
-            out["base_plate_t"]         = st.number_input("Base plate t (mm)", value=20.0, step=2.0, key="sad_bp")
-            out["gusset_t"]             = st.number_input("Gusset t (mm)", value=12.0, step=2.0, key="sad_gt")
+            out["base_plate_t"]         = st.number_input(
+                f"Base plate t ({unit_label('length_mm', unit_system)})",
+                value=float(display_value(20.0, "length_mm", unit_system)),
+                step=float(display_value(2.0, "length_mm", unit_system)),
+                key="sad_bp",
+            )
+            out["gusset_t"]             = st.number_input(
+                f"Gusset t ({unit_label('length_mm', unit_system)})",
+                value=float(display_value(12.0, "length_mm", unit_system)),
+                step=float(display_value(2.0, "length_mm", unit_system)),
+                key="sad_gt",
+            )
             out["saddle_contact_angle"] = st.number_input("Saddle contact angle (°)", value=120.0,
                                                            step=15.0, min_value=90.0, max_value=180.0, key="sad_ang")
             out["leg_h"] = 1.2; out["leg_section"] = 150.0
@@ -1018,46 +1351,41 @@ def render_sidebar(
             _def_lh = display_value(1.2, "length_m", unit_system)
             _stp_lh = display_value(0.1, "length_m", unit_system)
             out["leg_h"]                = st.number_input(_lbl_lh, value=_def_lh, step=_stp_lh, key="leg_h")
-            out["leg_section"]          = st.number_input("Leg section (mm)", value=150.0, step=25.0, key="leg_s")
-            out["base_plate_t"]         = st.number_input("Base plate t (mm)", value=20.0, step=2.0, key="leg_bp")
-            out["gusset_t"]             = st.number_input("Gusset t (mm)", value=12.0, step=2.0, key="leg_gt")
+            out["leg_section"]          = st.number_input(
+                f"Leg section ({unit_label('length_mm', unit_system)})",
+                value=float(display_value(150.0, "length_mm", unit_system)),
+                step=float(display_value(25.0, "length_mm", unit_system)),
+                key="leg_s",
+            )
+            out["base_plate_t"]         = st.number_input(
+                f"Base plate t ({unit_label('length_mm', unit_system)})",
+                value=float(display_value(20.0, "length_mm", unit_system)),
+                step=float(display_value(2.0, "length_mm", unit_system)),
+                key="leg_bp",
+            )
+            out["gusset_t"]             = st.number_input(
+                f"Gusset t ({unit_label('length_mm', unit_system)})",
+                value=float(display_value(12.0, "length_mm", unit_system)),
+                step=float(display_value(2.0, "length_mm", unit_system)),
+                key="leg_gt",
+            )
             out["saddle_h"] = 0.8; out["saddle_contact_angle"] = 120.0
 
     # ── Tab 5: Econ ───────────────────────────────────────────────────────
     with econ_tab:
-        st.markdown("**Pump hydraulics**")
-        out["np_slot_dp"]     = st.number_input(
-            f"Strainer nozzle plate ΔP at design LV ({unit_label('pressure_bar', unit_system)})",
-            value=0.02, step=float(display_value(0.005, "pressure_bar", unit_system)),
-            min_value=0.0, format="%.3f", key="np_slot")
-        out["p_residual"]     = st.number_input(
-            f"Required downstream pressure ({unit_label('pressure_bar', unit_system)} g)",
-            value=2.50, step=float(display_value(0.25, "pressure_bar", unit_system)),
-            min_value=0.0, key="p_res")
-        out["dp_inlet_pipe"]  = st.number_input(
-            f"Inlet piping losses ({unit_label('pressure_bar', unit_system)})", value=0.30,
-            step=float(display_value(0.05, "pressure_bar", unit_system)),
-            min_value=0.0, key="dp_in")
-        out["dp_dist"]        = st.number_input(
-            f"Inlet distributor ΔP ({unit_label('pressure_bar', unit_system)})", value=0.02,
-            step=float(display_value(0.01, "pressure_bar", unit_system)),
-            min_value=0.0, key="dp_dist")
-        out["dp_outlet_pipe"] = st.number_input(
-            f"Outlet piping losses ({unit_label('pressure_bar', unit_system)})", value=0.20,
-            step=float(display_value(0.05, "pressure_bar", unit_system)),
-            min_value=0.0, key="dp_out")
-        _lbl_sth = f"Static elevation head ({unit_label('pressure_mwc', unit_system)})"
-        out["static_head"]    = st.number_input(_lbl_sth, value=0.0,
-            step=float(display_value(0.5, "pressure_mwc", unit_system)), key="stat_h")
-
-        st.markdown("**Efficiencies**")
-        out["pump_eta"]    = st.number_input("Filtration pump η", value=0.75, step=0.01,
-                                              min_value=0.30, max_value=0.95, key="pump_e")
-        out["bw_pump_eta"] = st.number_input("BW pump η", value=0.72, step=0.01,
-                                              min_value=0.30, max_value=0.95, key="bwp_e")
-        out["motor_eta"]   = st.number_input("Motor η (all motors)", value=0.95, step=0.01,
-                                              min_value=0.70, max_value=0.99, key="mot_e")
-
+        inject_anchor("mmf-anchor-sb-econ")
+        st.caption(
+            "**💰 Econ** sidebar = tariffs, intervals, financial knobs; main **Economics** tab = **results**."
+        )
+        st.markdown("**Economics inputs**")
+        st.caption(
+            "These values feed **compute** → results on the main **Economics** tab. "
+            "**Feed path hydraulics** and **pump/motor η** are on **Pumps & power** → **1 · Hydraulics & plant configuration**."
+        )
+        st.caption(
+            "**Media / nozzle intervals:** **OPEX inputs** below set **levelized** annual replacement cost in engineering OPEX; "
+            "**Financial lifecycle** further down sets **discrete cash-event** years for the full cash-flow model (can match or differ)."
+        )
         st.markdown("**Energy economics**")
         out["elec_tariff"] = st.number_input("Electricity tariff (USD/kWh)", value=0.10,
                                               step=0.01, min_value=0.01, key="elec_t")
@@ -1068,11 +1396,39 @@ def render_sidebar(
         out["design_life_years"]         = st.number_input("Design life (years)", value=20, step=1, min_value=5, key="des_life")
         out["discount_rate"]             = st.number_input("Discount rate (%)", value=5.0, step=0.5, min_value=0.0, key="disc_rate")
         out["currency"]                  = st.selectbox("Currency", ["USD","EUR","GBP","SAR","AED"], key="currency")
-        out["steel_cost_usd_kg"]         = st.number_input("Steel cost (USD/kg)", value=3.5, step=0.1, key="st_cost")
-        out["erection_usd_vessel"]       = st.number_input("Erection cost (USD/vessel)", value=50000.0, step=5000.0, key="erect_usd")
+        out["steel_cost_usd_kg"]         = st.number_input(
+            f"Steel cost (USD/{unit_label('cost_usd_per_kg', unit_system)})",
+            value=float(display_value(3.5, "cost_usd_per_kg", unit_system)),
+            step=float(display_value(0.1, "cost_usd_per_kg", unit_system)),
+            key="st_cost",
+        )
+        _per_kg = unit_label("cost_usd_per_kg", unit_system)
+        out["erection_usd_per_kg_steel"] = st.number_input(
+            f"Erection ({_per_kg} installed steel)",
+            value=float(display_value(0.625, "cost_usd_per_kg", unit_system)),
+            step=float(display_value(0.05, "cost_usd_per_kg", unit_system)),
+            min_value=0.0,
+            key="erect_usd_kg",
+            help="Applied to **dry installed steel mass per vessel** (shell, heads, supports, nozzles, internals).",
+        )
+        out["labor_usd_per_kg_steel"] = st.number_input(
+            f"Field construction labor ({_per_kg} installed steel)",
+            value=float(display_value(0.25, "cost_usd_per_kg", unit_system)),
+            step=float(display_value(0.05, "cost_usd_per_kg", unit_system)),
+            min_value=0.0,
+            key="labor_st_kg",
+            help="Rigging / fit-up / alignment labor indexed to installed steel; set **0** if included in an all-in steel rate.",
+        )
         out["piping_usd_vessel"]         = st.number_input("Piping cost (USD/vessel)", value=80000.0, step=5000.0, key="pip_usd")
         out["instrumentation_usd_vessel"]= st.number_input("Instrumentation (USD/vessel)", value=30000.0, step=5000.0, key="instr_usd")
-        out["civil_usd_vessel"]          = st.number_input("Civil works (USD/vessel)", value=40000.0, step=5000.0, key="civil_usd")
+        out["civil_usd_per_kg_working"] = st.number_input(
+            f"Civil works ({_per_kg} operating weight)",
+            value=float(display_value(0.10, "cost_usd_per_kg", unit_system)),
+            step=float(display_value(0.01, "cost_usd_per_kg", unit_system)),
+            min_value=0.0,
+            key="civil_w_kg",
+            help="Foundations, plinths, sumps, access — scaled by **operating weight** (water + media + steel + lining in service) per vessel.",
+        )
         out["engineering_pct"]           = st.number_input("Engineering (%)", value=12.0, step=1.0, min_value=0.0, key="eng_pct")
         out["contingency_pct"]           = st.number_input("Contingency (%)", value=10.0, step=1.0, min_value=0.0, key="cont_pct")
 
@@ -1084,10 +1440,19 @@ def render_sidebar(
         out["nozzle_replace_years"]  = st.number_input("Nozzle replacement interval (years)", value=10.0, step=1.0, key="noz_int")
         out["nozzle_unit_cost"]      = st.number_input("Nozzle unit cost (USD/nozzle)", value=15.0, step=1.0, key="noz_cost")
         out["labour_usd_filter_yr"]  = st.number_input("Labour (USD/filter/year)", value=5000.0, step=500.0, key="lab_usd")
-        out["chemical_cost_m3"]      = st.number_input("Chemical cost (USD/m³ treated)", value=0.005,
-                                                        step=0.001, format="%.3f", key="chem_m3")
+        out["chemical_cost_m3"]      = st.number_input(
+            f"Chemical cost (USD/{unit_label('cost_usd_per_m3', unit_system)} treated)",
+            value=float(display_value(0.005, "cost_usd_per_m3", unit_system)),
+            step=float(display_value(0.001, "cost_usd_per_m3", unit_system)),
+            format="%.4f",
+            key="chem_m3",
+        )
 
         st.markdown("**Financial lifecycle (NPV · IRR · replacements)**")
+        st.caption(
+            "**Design life** (above) drives LCOW / simple NPV on the Economics tab; **project life** here is the "
+            "cash-flow horizon (often the same, or longer for concessions). **Discount rate** applies to both views."
+        )
         out["project_life_years"] = int(st.number_input(
             "Project life for cash flow (years)",
             value=int(out.get("design_life_years", 20)),
@@ -1153,9 +1518,18 @@ def render_sidebar(
                 st.session_state["grid_co2"] = 0.70
         with _gp4:
             st.caption("Presets set the field →")
-        out["grid_intensity"]       = st.number_input("Grid intensity (kgCO₂/kWh)", value=0.45, step=0.01, key="grid_co2")
-        out["steel_carbon_kg"]      = st.number_input("Steel embodied carbon (kgCO₂/kg)", value=1.85, step=0.05, key="st_co2")
-        out["concrete_carbon_kg"]   = st.number_input("Concrete embodied carbon (kgCO₂/kg)", value=0.13, step=0.01, key="con_co2")
+        out["grid_intensity"]       = st.number_input(
+            f"Grid intensity ({unit_label('co2_kg_per_kwh', unit_system)})",
+            value=0.45, step=0.01, key="grid_co2",
+        )
+        out["steel_carbon_kg"]      = st.number_input(
+            f"Steel embodied carbon ({unit_label('co2_per_kg_material', unit_system)})",
+            value=1.85, step=0.05, key="st_co2",
+        )
+        out["concrete_carbon_kg"]   = st.number_input(
+            f"Concrete embodied carbon ({unit_label('co2_per_kg_material', unit_system)})",
+            value=0.13, step=0.01, key="con_co2",
+        )
         _CARBON_DEFAULTS = {
             "Gravel": 0.004, "Gravel (2–3 mm)": 0.004, "Gravel (2-3 mm)": 0.004,
             "Fine sand": 0.006, "Fine sand (extra)": 0.006,
@@ -1180,6 +1554,8 @@ def render_sidebar(
                 key=f"carbon_{_mt.replace(' ', '_')}",
             )
         out["media_co2"] = _media_co2
+
+    merge_feed_hydraulics_into_out(out, unit_system)
 
     # ── Convert display-unit inputs back to SI before returning ───────────
     out = convert_inputs(out, unit_system)

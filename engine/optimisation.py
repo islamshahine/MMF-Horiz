@@ -91,21 +91,36 @@ def constraint_check(
 
     lv = _lv_n_scenario(computed, "N")
     details["lv_n_m_h"] = lv
+    avg_a = float(computed.get("avg_area", 0.0) or 0.0)
     if not (lv == lv):  # NaN
         violations.append("lv_missing")
     else:
         base = computed.get("base") or []
+        worst_v = float("-inf")
+        worst_cap = 0.0
+        worst_name = ""
         for b in base:
             if b.get("is_support"):
                 continue
             area = float(b.get("Area", 0.0))
             if area <= 1e-12:
                 continue
-            v_layer = lv * (float(computed.get("avg_area", 0.0) or 0.0) / area) if area > 0 else float("nan")
+            v_layer = lv * (avg_a / area) if area > 0 else float("nan")
             cap = layer_lv_cap_m_h(b, inputs_fallback=inputs)
+            if v_layer > worst_v:
+                worst_v = v_layer
+                worst_cap = cap
+                worst_name = str(b.get("Type", "Media"))
             if v_layer > cap + _REL:
                 violations.append("lv_exceeds_threshold")
+                details["lv_limiting_layer"] = str(b.get("Type", "Media"))
+                details["lv_limiting_m_h"] = round(float(v_layer), 3)
+                details["lv_limiting_cap_m_h"] = round(float(cap), 3)
                 break
+        if worst_v > float("-inf"):
+            details["lv_worst_layer"] = worst_name
+            details["lv_worst_m_h"] = round(worst_v, 3)
+            details["lv_worst_cap_m_h"] = round(worst_cap, 3)
 
     eb = _min_ebct_minutes_n(computed)
     details["min_ebct_min"] = eb
@@ -223,17 +238,62 @@ def optimise_design(
 
     feasible = [r for r in rows if r["feasible"]]
     feasible.sort(key=lambda r: float(r["metrics"][mkey]))
+    top = feasible[: max(1, int(top_k))]
 
     return {
         "objective": objective,
-        "top": feasible[: max(1, int(top_k))],
+        "top": top,
+        "ranked": top,
+        "best": top[0] if top else None,
+        "all": rows,
         "evaluated": len(rows),
         "feasible_count": len(feasible),
+        "n_evaluated": len(rows),
+        "n_feasible": len(feasible),
+        "pareto_capex_opex": pareto_front_min2(
+            feasible, "total_capex_usd", "total_opex_usd_yr",
+        ),
     }
+
+
+def pareto_front_min2(
+    feasible_rows: List[Dict[str, Any]],
+    key_a: str,
+    key_b: str,
+) -> List[Dict[str, Any]]:
+    """
+    Non-dominated subset for two **minimize** metrics on ``row["metrics"]``.
+
+    Row *i* is dominated if another feasible row has both metrics ≤ *i*'s with at least one strict.
+    """
+    rows = [r for r in feasible_rows if r.get("feasible")]
+    if len(rows) < 2:
+        return list(rows)
+
+    def mget(r: Dict[str, Any], k: str) -> float:
+        return float((r.get("metrics") or {}).get(k, 0.0))
+
+    nd: List[Dict[str, Any]] = []
+    for r in rows:
+        a, b = mget(r, key_a), mget(r, key_b)
+        dominated = False
+        for o in rows:
+            if o is r:
+                continue
+            oa, ob = mget(o, key_a), mget(o, key_b)
+            if (oa <= a and ob <= b) and (oa < a or ob < b):
+                dominated = True
+                break
+        if not dominated:
+            nd.append(r)
+    nd.sort(key=
+        lambda r: (mget(r, key_a), mget(r, key_b)))
+    return nd
 
 
 __all__ = [
     "constraint_check",
     "evaluate_candidate",
     "optimise_design",
+    "pareto_front_min2",
 ]

@@ -1,6 +1,7 @@
 """engine/pdf_report.py — PDF generation via ReportLab Platypus.
 Exports: PDF_OK (bool), build_pdf(inputs, computed, sections, unit_system) -> bytes.
-sections keys: process, water, media, dp, vessel, bw_hyd, bw_equip, energy, financial.
+sections keys: process, water, media, dp, vessel, bw_hyd, bw_equip, energy, financial,
+                design_basis.
 No Streamlit imports — pure Python only.
 """
 import io
@@ -45,6 +46,12 @@ def build_pdf(
     """Build PDF. Returns raw bytes for st.download_button."""
     if not PDF_OK:
         raise RuntimeError("Install reportlab: pip install reportlab")
+    from engine.design_basis_report import (
+        collector_summary_rows,
+        design_basis_meta_rows,
+        plain_text,
+        traceability_table_rows,
+    )
     from engine.units import format_value as _fmt
 
     def fv(si, qty, dec=2):
@@ -106,10 +113,11 @@ def build_pdf(
         _h("B3 · Media Configuration")
         _dunit = _ulbl("length_m", unit_system)
         _rhou = _ulbl("density_kg_m3", unit_system)
-        _add([["Media", "Sup.", f"Depth ({_dunit})", "d10 (mm)", "CU", "ε₀", f"ρp ({_rhou})"]] +
+        _d10u = _ulbl("length_mm", unit_system)
+        _add([["Media", "Sup.", f"Depth ({_dunit})", f"d10 ({_d10u})", "CU", "ε₀", f"ρp ({_rhou})"]] +
              [[b["Type"], "✓" if b.get("is_support") else "",
                _fmt(float(b["Depth"]), "length_m", unit_system, 3),
-               f"{b['d10']:.2f}", f"{b['cu']:.2f}",
+               _fmt(float(b["d10"]), "length_mm", unit_system, 2), f"{b['cu']:.2f}",
                f"{b.get('epsilon0', 0):.3f}",
                _fmt(float(b["rho_p_eff"]), "density_kg_m3", unit_system, 0)]
               for b in computed.get("base", [])], w0=35*mm)
@@ -132,8 +140,12 @@ def build_pdf(
               ["End geometry",computed.get("end_geometry","")],
               ["Material",computed.get("material_name","")],
               ["Design pressure", fv(inputs["design_pressure"], "pressure_bar", 2) + " g"],
-              ["Shell t_req/nom",f"{mc.get('t_shell_min_mm',0):.2f}/{mc.get('t_shell_design_mm',0)} mm"],
-              ["Head  t_req/nom",f"{mc.get('t_head_min_mm',0):.2f}/{mc.get('t_head_design_mm',0)} mm"]])
+              ["Shell t_req/nom",
+               f"{_fmt(float(mc.get('t_shell_min_mm',0)), 'length_mm', unit_system, 2)} / "
+               f"{_fmt(float(mc.get('t_shell_design_mm',0)), 'length_mm', unit_system, 2)}"],
+              ["Head  t_req/nom",
+               f"{_fmt(float(mc.get('t_head_min_mm',0)), 'length_mm', unit_system, 2)} / "
+               f"{_fmt(float(mc.get('t_head_design_mm',0)), 'length_mm', unit_system, 2)}"]])
 
     if sections.get("bw_hyd"):
         bwc=computed.get("bw_col",{})
@@ -184,6 +196,40 @@ def build_pdf(
                 [str(r.get("year", "")), ",".join(r.get("events", [])), f"{r.get('replacement_spend_usd', 0):,.0f}"]
                 for r in _rs[:20]
             ])
+
+    if sections.get("design_basis"):
+        basis = computed.get("design_basis") or {}
+        _h("G · Design Basis & Traceability")
+        _add(design_basis_meta_rows(basis), w0=45 * mm)
+        if basis.get("assumptions"):
+            _h("Assumptions")
+            for item in basis["assumptions"]:
+                story.append(Paragraph(f"• {plain_text(item)}", stl["Normal"]))
+            story.append(Spacer(1, 2 * mm))
+        if basis.get("limits_and_criteria"):
+            _h("Limits & criteria")
+            for item in basis["limits_and_criteria"]:
+                story.append(Paragraph(f"• {plain_text(item)}", stl["Normal"]))
+            story.append(Spacer(1, 2 * mm))
+        _trace = traceability_table_rows(basis)
+        if len(_trace) > 1:
+            _h("Output traceability")
+            _add(_trace, w0=42 * mm)
+        _col = basis.get("collector") or {}
+        if _col:
+            _h("Collector model summary")
+            _add(collector_summary_rows(_col), w0=50 * mm)
+            _chk = list(_col.get("design_checklist") or [])
+            if _chk:
+                _h("Collector design checklist")
+                for line in _chk[:12]:
+                    story.append(Paragraph(f"• {plain_text(line)}", stl["Normal"]))
+                story.append(Spacer(1, 2 * mm))
+        if basis.get("exclusions"):
+            _h("Exclusions (not modelled)")
+            for item in basis["exclusions"]:
+                story.append(Paragraph(f"• {plain_text(item)}", stl["Normal"]))
+            story.append(Spacer(1, 2 * mm))
 
     story += [Spacer(1,6*mm), HRFlowable(width="100%", thickness=0.5, color=_BLUE),
               Paragraph(f"{eg} · AQUASIGHT™ · {dn} Rev {rv} · {_date.today()}",

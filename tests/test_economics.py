@@ -8,11 +8,14 @@ Reference calculations
 CRF(8 %, 20 y):
   i = 0.08,  CRF = 0.08 × 1.08²⁰ / (1.08²⁰ − 1) = 0.101852  ✓
 
-CAPEX (all costs are per-vessel × n_vessels):
-  steel_cost = weight × steel_cost_usd_kg × n_vessels
-             = 500 000 × 3.5 × 2 = 3 500 000 USD
-  direct = steel + erection×2 + piping×2 + instr×2 + civil×2
-         = 3 500 000 + 400 000 + 300 000 + 200 000 + 240 000 = 4 640 000 USD
+CAPEX (weight-based erection, labor, civil):
+  steel_cost = 500 000 kg/vessel × 3.5 USD/kg × 2 = 3 500 000 USD
+  erection   = 0.4 USD/kg × 500 000 × 2 = 400 000 USD
+  labor      = 0 USD/kg × steel → 0
+  piping     = 150 000 × 2 = 300 000 USD
+  instr      = 100 000 × 2 = 200 000 USD
+  civil      = 0.2 USD/kg(op) × 600 000 kg(op)/vessel × 2 = 240 000 USD
+  direct = 3 500 000 + 400 000 + 0 + 300 000 + 200 000 + 240 000 = 4 640 000 USD
   engineering  = direct × 0.10 = 464 000 USD
   contingency  = (direct + eng) × 0.05 = 5 104 000 × 0.05 = 255 200 USD
   total_capex  = 4 640 000 + 464 000 + 255 200 = 5 359 200 USD
@@ -54,10 +57,17 @@ from engine.economics import (
 
 def _capex(**kwargs):
     defaults = dict(
-        weight_total_kg=500_000, n_vessels=2, steel_cost_usd_kg=3.5,
-        erection_usd=200_000, piping_usd=150_000,
-        instrumentation_usd=100_000, civil_usd=120_000,
-        engineering_pct=10.0, contingency_pct=5.0,
+        weight_total_kg=500_000,
+        working_weight_kg=600_000,
+        n_vessels=2,
+        steel_cost_usd_kg=3.5,
+        erection_usd_per_kg_steel=0.4,
+        labor_usd_per_kg_steel=0.0,
+        piping_usd=150_000,
+        instrumentation_usd=100_000,
+        civil_usd_per_kg_working=0.2,
+        engineering_pct=10.0,
+        contingency_pct=5.0,
     )
     defaults.update(kwargs)
     return capex_breakdown(**defaults)
@@ -175,7 +185,7 @@ class TestCapexBreakdown:
 
     def test_direct_installed_value(self):
         """
-        direct = steel(3.5M) + erection(400k) + piping(300k)
+        direct = steel(3.5M) + erection(400k) + labor(0) + piping(300k)
                + instrumentation(200k) + civil(240k) = 4 640 000 USD.
         """
         r = _capex()
@@ -224,7 +234,7 @@ class TestCapexBreakdown:
     def test_all_output_keys_present(self):
         """All expected keys must appear in the result dict."""
         r = _capex()
-        for key in ["steel_cost_usd", "erection_usd", "piping_usd",
+        for key in ["steel_cost_usd", "erection_usd", "labor_usd", "piping_usd",
                     "instrumentation_usd", "civil_usd",
                     "direct_installed_usd", "engineering_usd",
                     "contingency_usd", "total_capex_usd",

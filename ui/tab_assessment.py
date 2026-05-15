@@ -1,17 +1,61 @@
 """ui/tab_assessment.py — Assessment tab for AQUASIGHT™ MMF."""
-import copy
-
 import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 
-from engine.compute import compute_all
 from engine.sensitivity import OUTPUT_DEFS, run_sensitivity, tornado_narrative
 from engine.thresholds import layer_ebct_floor_min, layer_lv_cap_m_h
 from ui.helpers import dv, fmt, ulbl
+from ui.scroll_markers import inject_anchor
+
+_SENS_OUTPUT_QTY = {
+    "lv": "velocity_m_h",
+    "ebct": "time_min",
+    "dp": "pressure_bar",
+}
+
+
+def _robustness_display_df(rob_rows: list) -> "pd.DataFrame":
+    """Format compute ``rob_rows`` (SI ``lv_m_h``) for the current unit system."""
+    import pandas as pd
+
+    recs = []
+    _lv_col = f"Filtration rate ({ulbl('velocity_m_h')})"
+    for row in rob_rows or []:
+        r = dict(row)
+        lv_si = r.pop("lv_m_h", None)
+        r.pop("Filtration rate", None)
+        if lv_si is None:
+            r[_lv_col] = "—"
+        else:
+            r[_lv_col] = fmt(float(lv_si), "velocity_m_h", 2)
+        recs.append(r)
+    cols = ["Scenario", _lv_col, "Hydraulic status", "EBCT status", "Overall"]
+    if not recs:
+        return pd.DataFrame(columns=cols)
+    return pd.DataFrame(recs)[cols]
+
+
+def _sensitivity_output_labels() -> dict[str, str]:
+    return {
+        "lv": f"Peak LV ({ulbl('velocity_m_h')})",
+        "ebct": f"Min EBCT ({ulbl('time_min')})",
+        "capex": "Total CAPEX (M USD)",
+        "dp": f"Dirty media ΔP ({ulbl('pressure_bar')})",
+    }
+
+
+def _fmt_sens_value(out_key: str, si_val: float) -> str:
+    if out_key == "capex":
+        return f"{si_val:.4g} M USD"
+    qty = _SENS_OUTPUT_QTY.get(out_key)
+    if qty:
+        return fmt(si_val, qty, 4)
+    return f"{si_val:.4g}"
 
 
 def render_tab_assessment(inputs: dict, computed: dict):
+    inject_anchor("mmf-anchor-main-assessment")
     overall_risk    = computed["overall_risk"]
     risk_color      = computed["risk_color"]
     risk_border     = computed["risk_border"]
@@ -39,6 +83,7 @@ def render_tab_assessment(inputs: dict, computed: dict):
     redundancy         = inputs["redundancy"]
     hydraulic_assist   = int(inputs.get("hydraulic_assist", 0))
     corrosion          = inputs["corrosion"]
+    velocity_threshold = float(inputs.get("velocity_threshold") or 12.0)
 
     st.subheader("Process assessment")
 
@@ -87,7 +132,7 @@ def render_tab_assessment(inputs: dict, computed: dict):
         "Stable = all parameters within envelope. "
         "Marginal = one advisory. Sensitive = one warning. Critical = critical violation."
     )
-    _rob_df = pd.DataFrame(rob_rows)
+    _rob_df = _robustness_display_df(rob_rows)
 
     def _color_overall(val):
         colors = {
@@ -119,10 +164,18 @@ def render_tab_assessment(inputs: dict, computed: dict):
 
     with st.expander("EBCT violations", expanded=bool(all_ebct_issues)):
         if all_ebct_issues:
+            _ebct_df = pd.DataFrame(
+                all_ebct_issues,
+                columns=["Scenario", "Layer", "Severity", "ebct_min"],
+            )
+            _ebct_df[f"EBCT ({ulbl('time_min')})"] = _ebct_df["ebct_min"].apply(
+                lambda v: fmt(float(v), "time_min", 2)
+            )
             st.dataframe(
-                pd.DataFrame(all_ebct_issues,
-                             columns=["Scenario", "Layer", "Severity", "EBCT (min)"]),
-                use_container_width=True, hide_index=True)
+                _ebct_df.drop(columns=["ebct_min"]),
+                use_container_width=True,
+                hide_index=True,
+            )
         else:
             st.success("No EBCT violations across any scenario.")
 
@@ -136,14 +189,18 @@ def render_tab_assessment(inputs: dict, computed: dict):
         if L.get("is_support"):
             _thr_rows.append({
                 "Layer": L.get("Type", ""),
-                "Max LV": "— (support)",
-                "Min EBCT": "— (support)",
+                f"Max LV ({ulbl('velocity_m_h')})": "— (support)",
+                f"Min EBCT ({ulbl('time_min')})": "— (support)",
             })
         else:
             _thr_rows.append({
                 "Layer": L.get("Type", ""),
-                "Max LV": fmt(layer_lv_cap_m_h(L, inputs_fallback=inputs), "velocity_m_h", 2),
-                "Min EBCT": f"{layer_ebct_floor_min(L, inputs_fallback=inputs):.1f} min",
+                f"Max LV ({ulbl('velocity_m_h')})": fmt(
+                    layer_lv_cap_m_h(L, inputs_fallback=inputs), "velocity_m_h", 2
+                ),
+                f"Min EBCT ({ulbl('time_min')})": fmt(
+                    layer_ebct_floor_min(L, inputs_fallback=inputs), "time_min", 1
+                ),
             })
     st.markdown("**Per-layer LV / EBCT setpoints**")
     st.dataframe(pd.DataFrame(_thr_rows), use_container_width=True, hide_index=True)
@@ -179,83 +236,19 @@ def render_tab_assessment(inputs: dict, computed: dict):
 
     st.divider()
 
-    # ── Design sweep: n_filters vs N-scenario LV (optimisation roadmap MVP) ─
-    with st.expander("Design sweep — filters per stream vs N-scenario LV", expanded=False):
-        st.caption(
-            "Vary **total physical filters / stream** (`n_filters`). "
-            "Sidebar **Standby filters (physical / stream)** is **held constant** for every row. "
-            "Each row runs full **compute_all**; results do not change sidebar values."
+    with st.expander(
+        "Filter-count study — hydraulics, ranking & apply to sidebar",
+        expanded=False,
+    ):
+        from ui.design_optim_ui import render_design_optimisation_panel
+
+        render_design_optimisation_panel(
+            inputs,
+            n_filters=int(n_filters),
+            velocity_threshold=float(velocity_threshold),
+            hydraulic_assist=int(hydraulic_assist),
+            redundancy=int(redundancy),
         )
-        st.info(
-            "**N-scenario LV** always uses **design N = physical − standby** active paths per stream — "
-            "the same basis as the **Filtration** table row **Scenario N** (there, **Active filters** = design N). "
-            "So with **1 spare**, sweep **physical 17** → design **16** (LV **11.33**); sweep **physical 16** → design **15** "
-            "(LV **12.08**), which matches **Scenario N−1** on a 17+1 bank, **not** Scenario N."
-        )
-        _nf_cur = int(n_filters)
-        _red = int(redundancy)
-        _ha_sw = int(hydraulic_assist)
-        _nf_min = max(_red + 1, 1)
-        _c1, _c2, _c3 = st.columns(3)
-        with _c1:
-            _nf_lo = st.number_input(
-                "From n_filters",
-                min_value=_nf_min,
-                max_value=80,
-                value=_nf_cur,
-                key="_nf_sweep_lo",
-            )
-        with _c2:
-            _nf_hi = st.number_input(
-                "To n_filters",
-                min_value=_nf_min,
-                max_value=80,
-                value=min(_nf_cur + 8, 80),
-                key="_nf_sweep_hi",
-            )
-        with _c3:
-            _run_sweep = st.button("Run sweep", key="_nf_sweep_run", use_container_width=True)
-        if int(_nf_hi) < int(_nf_lo):
-            st.error("**To** must be greater than or equal to **From**.")
-        elif _run_sweep:
-            _span = int(_nf_hi) - int(_nf_lo) + 1
-            if _span > 48:
-                st.warning(
-                    f"This sweep runs **{_span}** full models — expect a short wait."
-                )
-            _lv_hdr = f"LV — N scenario ({ulbl('velocity_m_h')})"
-            _thr_hdr = f"Threshold ({ulbl('velocity_m_h')})"
-            _rows = []
-            with st.spinner(f"Running {_span} scenarios…"):
-                for _nf in range(int(_nf_lo), int(_nf_hi) + 1):
-                    _inp = copy.deepcopy(inputs)
-                    _inp["n_filters"] = _nf
-                    _n_des_row = _nf - _ha_sw
-                    try:
-                        _comp = compute_all(_inp)
-                        _fc = _comp.get("filt_cycles") or {}
-                        _lv_si = float((_fc.get("N") or {}).get("lv_m_h", 0.0))
-                        _ok = _lv_si <= float(velocity_threshold)
-                        _rows.append({
-                            "Physical / stream": _nf,
-                            "Design N / stream": _n_des_row,
-                            _lv_hdr: fmt(_lv_si, "velocity_m_h", 2),
-                            _thr_hdr: fmt(float(velocity_threshold), "velocity_m_h", 2),
-                            "Within envelope": "Yes" if _ok else "No",
-                        })
-                    except Exception as _ex:
-                        _rows.append({
-                            "Physical / stream": _nf,
-                            "Design N / stream": _n_des_row,
-                            _lv_hdr: "—",
-                            _thr_hdr: fmt(float(velocity_threshold), "velocity_m_h", 2),
-                            "Within envelope": f"Error: {_ex!s}"[:120],
-                        })
-            st.dataframe(
-                pd.DataFrame(_rows),
-                use_container_width=True,
-                hide_index=True,
-            )
 
     st.divider()
 
@@ -269,7 +262,7 @@ def render_tab_assessment(inputs: dict, computed: dict):
     with st.expander("What each output metric means (tornado Y-axis context)", expanded=False):
         for _od in OUTPUT_DEFS:
             st.markdown(f"**{_od['label']}**  \n{_od.get('description', '—')}")
-    _out_labels = {od["key"]: od["label"] for od in OUTPUT_DEFS}
+    _out_labels = _sensitivity_output_labels()
     _out_desc = {od["key"]: od.get("description", "") for od in OUTPUT_DEFS}
     _sens_col1, _sens_col2 = st.columns([2, 1])
     with _sens_col1:
@@ -292,8 +285,14 @@ def render_tab_assessment(inputs: dict, computed: dict):
         _params  = [r["param"]          for r in _rows]
         _lo_dev  = [r["lo"]  - r["base"] for r in _rows]
         _hi_dev  = [r["hi"]  - r["base"] for r in _rows]
-        _lo_lbls = [f"{r['lo_label']}  ({r['lo']:.3g})"  for r in _rows]
-        _hi_lbls = [f"{r['hi_label']}  ({r['hi']:.3g})"  for r in _rows]
+        _lo_lbls = [
+            f"{r['lo_label']}  ({_fmt_sens_value(_sel_out, float(r['lo']))})"
+            for r in _rows
+        ]
+        _hi_lbls = [
+            f"{r['hi_label']}  ({_fmt_sens_value(_sel_out, float(r['hi']))})"
+            for r in _rows
+        ]
         _fig = go.Figure()
         _fig.add_trace(go.Bar(
             y=_params, x=_lo_dev, orientation="h", name="Low input",
@@ -305,11 +304,11 @@ def render_tab_assessment(inputs: dict, computed: dict):
             marker_color="#27ae60",
             customdata=_hi_lbls, hovertemplate="%{y}: %{customdata}<extra></extra>",
         ))
-        _base_val = _rows[0]["base"] if _rows else 0
+        _base_val = float(_rows[0]["base"]) if _rows else 0.0
         _fig.update_layout(
             barmode="relative",
             title=dict(text=f"Sensitivity — {_out_labels[_sel_out]}  "
-                            f"(base = {_base_val:.4g})", x=0.01),
+                            f"(base = {_fmt_sens_value(_sel_out, _base_val)})", x=0.01),
             xaxis_title=f"Deviation from base  [{_out_labels[_sel_out]}]",
             yaxis=dict(autorange="reversed"),
             height=max(300, 60 + 40 * len(_params)),

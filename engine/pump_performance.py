@@ -564,10 +564,8 @@ def build_pump_performance_package(
         p_blower_motor_kw=p_blower_motor,
     )
 
-    e_p_dol, e_b_dol, e_tot_dol = _cycle_energy_from_steps(
-        steps,
+    _cycle_energy_kw = dict(
         filter_area_m2=float(avg_area),
-        philosophy="DOL",
         q_bw_design_m3h=q_bw_design,
         bw_head_mwc=float(bw_head_mwc),
         rho_bw=float(rho_bw),
@@ -575,16 +573,11 @@ def build_pump_performance_package(
         eta_m=float(motor_eta),
         p_blower_motor_kw=p_blower_motor,
     )
+    e_p_dol, e_b_dol, e_tot_dol = _cycle_energy_from_steps(
+        steps, philosophy="DOL", **_cycle_energy_kw,
+    )
     e_p_vfd, e_b_vfd, e_tot_vfd = _cycle_energy_from_steps(
-        steps,
-        filter_area_m2=float(avg_area),
-        philosophy="VFD",
-        q_bw_design_m3h=q_bw_design,
-        bw_head_mwc=float(bw_head_mwc),
-        rho_bw=float(rho_bw),
-        eta_p=float(bw_pump_eta),
-        eta_m=float(motor_eta),
-        p_blower_motor_kw=p_blower_motor,
+        steps, philosophy="VFD", **_cycle_energy_kw,
     )
 
     n_total = max(1, int(streams) * int(n_filters))

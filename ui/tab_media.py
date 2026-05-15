@@ -8,9 +8,11 @@ from ui.helpers import (
     fmt, ulbl, dv, pressure_drop_layers_display_frames,
     geo_volumes_display_rows, media_properties_display_df,
 )
+from ui.scroll_markers import inject_anchor
 
 
 def render_tab_media(inputs: dict, computed: dict):
+    inject_anchor("mmf-anchor-main-media")
     geo_rows   = computed["geo_rows"]
     base       = computed["base"]
     bw_dp      = computed["bw_dp"]
@@ -38,6 +40,39 @@ def render_tab_media(inputs: dict, computed: dict):
     _layers_disp_df, _layers_clog_df = pressure_drop_layers_display_frames(bw_dp["layers"])
 
     st.subheader("Media design")
+    st.caption(
+        "**Results** from **🧱 Media** sidebar (nozzle plate, layers, **M_max / α / calibration**). "
+        "Edit inputs there; **💧 Filtration** tab shows the same hydraulics in scenario form."
+    )
+
+    from ui.nozzle_catalogue_ui import render_nozzle_catalogue_media_panel
+    render_nozzle_catalogue_media_panel(st.session_state.get("unit_system", "metric"))
+
+    with st.expander("0 · Media fill budget (indicative)", expanded=False):
+        from engine.media_pricing import estimate_media_inventory_budget, REGION_FACTOR
+
+        _reg = st.selectbox(
+            "Region factor",
+            options=sorted(REGION_FACTOR.keys()),
+            format_func=lambda k: k.replace("_", " ").title(),
+            index=sorted(REGION_FACTOR.keys()).index("global"),
+            key="media_budget_region",
+        )
+        _bud = estimate_media_inventory_budget(
+            base_layers=base,
+            n_filters=n_filters,
+            streams=streams,
+            inputs=inputs,
+            region=_reg,
+        )
+        st.caption(_bud["disclaimer"])
+        st.metric("Plant-wide fill (order-of-magnitude USD)", f"${_bud['total_fill_usd']:,.0f}")
+        if _bud["lines"]:
+            st.dataframe(
+                pd.DataFrame(_bud["lines"]),
+                use_container_width=True,
+                hide_index=True,
+            )
 
     with st.expander("1 · Geometric volumes", expanded=True):
         _geo_recs, _geo_cols = geo_volumes_display_rows(geo_rows)
@@ -52,11 +87,9 @@ def render_tab_media(inputs: dict, computed: dict):
 
     with st.expander("3 · Pressure drop — clean/moderate/dirty (all scenarios)", expanded=True):
         st.caption(
-            f"Clean ΔP: Ergun equation on virgin bed.  "
-            f"Moderate = 50% loaded · Dirty = 100% loaded — cake model (Ruth): "
-            f"ΔP_cake = α × μ × LV × M.  "
+            f"Same Ergun + Ruth cake as **💧 Filtration**; **per-layer** tables below.  "
             f"α ({bw_dp['alpha_source']}) = "
-            f"{bw_dp['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg  |  "
+            f"{bw_dp['alpha_used_m_kg']/1e9:.1f} {ulbl('alpha_m_kg')}  |  "
             f"M_max = {fmt(_sl_eff, 'loading_kg_m2', 2)}  |  "
             f"Feed: ρ={fmt(rho_feed, 'density_kg_m3', 1)}, μ={fmt(mu_feed * 1000.0, 'viscosity_cp', 4)}"
         )
@@ -118,7 +151,9 @@ def render_tab_media(inputs: dict, computed: dict):
             total_mass += mt
             inv_rows.append({
                 "Media":            b["Type"],
-                "d10/CU":           f"{b['d10']}/{b['cu']}",
+                f"d10 ({ulbl('length_mm')}) / CU": (
+                    f"{dv(float(b['d10']), 'length_mm'):.2f}/{b['cu']:.2f}"
+                ),
                 f"Vol/filter ({ulbl('volume_m3')})":  round(dv(b["Vol"], 'volume_m3'), 4),
                 f"Mass/filter ({ulbl('mass_kg')})":   round(dv(mf, 'mass_kg')),
                 f"Total mass ({ulbl('mass_kg')})":    round(dv(mt, 'mass_kg')),

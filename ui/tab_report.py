@@ -1,10 +1,14 @@
 """ui/tab_report.py — Report tab for AQUASIGHT™ MMF."""
 import streamlit as st
 from ui.helpers import fmt, ulbl, dv, fmt_bar_mwc
-from engine.project_io import (
-    inputs_to_json, json_to_inputs, get_widget_state_map, default_filename,
+from engine.design_basis_report import (
+    collector_summary_rows,
+    design_basis_meta_rows,
+    plain_text,
+    traceability_table_rows,
 )
 from engine.pdf_report import build_pdf, PDF_OK as _PDF_OK
+from ui.scroll_markers import inject_anchor
 
 try:
     from docx import Document as _DocxDocument
@@ -15,6 +19,7 @@ except ImportError:
 
 
 def render_tab_report(inputs: dict, computed: dict):
+    inject_anchor("mmf-anchor-main-report")
     wt_body       = computed["wt_body"]
     w_noz         = computed["w_noz"]
     wt_np         = computed["wt_np"]
@@ -87,36 +92,10 @@ def render_tab_report(inputs: dict, computed: dict):
                    + wt_int["weight_internals_kg"])
     _has_lining = lining_result["protection_type"] != "None"
 
-    # ── Project Save / Load ──────────────────────────────────────────────────
-    with st.expander("💾 Project Save / Load", expanded=False):
-        io_c1, io_c2 = st.columns(2)
-        with io_c1:
-            st.markdown("**Save current project**")
-            _json_str  = inputs_to_json(inputs)
-            _fname     = default_filename(inputs.get("project_name", "project"),
-                                          inputs.get("doc_number", ""))
-            st.download_button(
-                label="⬇ Download project JSON",
-                data=_json_str,
-                file_name=_fname,
-                mime="application/json",
-                use_container_width=True,
-            )
-            st.caption("Saves all inputs. Load the file in a future session to restore.")
-        with io_c2:
-            st.markdown("**Load project from file**")
-            _uploaded = st.file_uploader("Upload .mmf.json", type=["json"],
-                                          label_visibility="collapsed")
-            if _uploaded is not None:
-                try:
-                    _loaded  = json_to_inputs(_uploaded.read().decode("utf-8"))
-                    _wgt_map = get_widget_state_map(_loaded)
-                    for _wk, _wv in _wgt_map.items():
-                        st.session_state[_wk] = _wv
-                    st.success("Project loaded — refreshing…")
-                    st.rerun()
-                except Exception as _err:
-                    st.error(f"Load failed: {_err}")
+    st.caption(
+        "Project **Save / Save as / Load** and **New project** sit **under the title**, above **Quick jump**, "
+        "in the results stack (full width when the input column is hidden)."
+    )
     st.divider()
 
     st.markdown("### Report builder")
@@ -159,10 +138,53 @@ def render_tab_report(inputs: dict, computed: dict):
         s_hyd_prof = st.checkbox("Hydraulic head profile", value=True, key="rs_hyd")
         s_energy   = st.checkbox("Energy & OPEX",          value=True, key="rs_energy")
         s_financial = st.checkbox("Lifecycle financial (NPV / cash flow)", value=True, key="rs_fin")
-        st.markdown("**G · Post-treatment**")
+        s_design_basis = st.checkbox(
+            "Design basis & traceability",
+            value=True,
+            key="rs_design_basis",
+            help="Assumptions, limits, output traceability, collector summary (also in JSON export).",
+        )
+        st.markdown("**H · Post-treatment**")
         s_cart     = st.checkbox("Cartridge filter",       value=True, key="rs_cart")
 
     st.divider()
+
+    _basis = computed.get("design_basis") or {}
+    with st.expander("Design basis & traceability (JSON export)", expanded=False):
+        st.caption(
+            f"Assumptions, limits, and output traceability for enterprise review. "
+            f"Reference: **{_basis.get('doc_reference', 'AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md')}**"
+        )
+        if _basis.get("assumptions"):
+            st.markdown("**Assumptions**")
+            for _a in _basis["assumptions"]:
+                st.markdown(f"- {_a}")
+        if _basis.get("limits_and_criteria"):
+            st.markdown("**Limits & criteria**")
+            for _lim in _basis["limits_and_criteria"]:
+                st.markdown(f"- {_lim}")
+        _col = _basis.get("collector") or {}
+        if _col:
+            _dist = _col.get("distribution") or {}
+            st.markdown(
+                f"**Collector distribution:** {_dist.get('iterations', '—')} iterations · "
+                f"{'converged' if _dist.get('converged') else 'not converged'} · "
+                f"residual {_dist.get('residual_rel', '—')}"
+            )
+        import json
+
+        _basis_json = json.dumps(
+            {"inputs": inputs, "design_basis": _basis},
+            indent=2,
+            default=str,
+        )
+        st.download_button(
+            "⬇️ Download design basis JSON",
+            data=_basis_json,
+            file_name=f"{doc_number}_design_basis.json",
+            mime="application/json",
+            key="dl_design_basis_json",
+        )
 
     def _build_docx() -> bytes:
         import io as _io
@@ -227,14 +249,14 @@ def render_tab_report(inputs: dict, computed: dict):
             _sec("Media Configuration")
             _m_hdr = (
                 "Media", "Support",
-                f"Depth ({ulbl('length_m')})", "d10 (mm)", "CU", "ε₀",
+                f"Depth ({ulbl('length_m')})", f"d10 ({ulbl('length_mm')})", "CU", "ε₀",
                 f"ρp,eff ({ulbl('density_kg_m3')})", "ψ",
                 f"Vol ({ulbl('volume_m3')})",
             )
             _m_rows = [_m_hdr] + [
                 (b["Type"],
                  "✓" if b.get("is_support") else "",
-                 f"{dv(b['Depth'], 'length_m'):.3f}", f"{b['d10']:.2f}", f"{b['cu']:.2f}",
+                 f"{dv(b['Depth'], 'length_m'):.3f}", fmt(float(b["d10"]), "length_mm", 2), f"{b['cu']:.2f}",
                  f"{b.get('epsilon0', 0):.3f}", f"{dv(b['rho_p_eff'], 'density_kg_m3'):.0f}",
                  f"{b.get('psi', '—')}", f"{dv(b['Vol'], 'volume_m3'):.4f}",
                 ) for b in base]
@@ -250,7 +272,7 @@ def render_tab_report(inputs: dict, computed: dict):
                 ("BW trigger setpoint",   fmt(dp_trigger_bar, "pressure_bar", 2)),
                 ("Superficial LV (N)",    fmt(bw_dp["u_m_h"], "velocity_m_h", 2)),
                 ("Specific resistance α",
-                 f"{filt_cycles['N']['alpha_used_m_kg']/1e9:.1f} × 10⁹ m/kg  "
+                 f"{filt_cycles['N']['alpha_used_m_kg']/1e9:.1f} {ulbl('alpha_m_kg')} "
                  f"({filt_cycles['N']['alpha_source']})"),
             ])
 
@@ -276,10 +298,10 @@ def render_tab_report(inputs: dict, computed: dict):
                 ("Material",                 material_name),
                 ("Design pressure",          fmt(design_pressure, "pressure_bar", 2) + " g"),
                 ("Corrosion allowance",      fmt(corrosion, "length_mm", 1)),
-                ("Shell t_required",         f"{mech['t_shell_min_mm']:.2f} mm"),
-                ("Shell t_design",           f"{mech['t_shell_design_mm']} mm"),
-                ("Head t_required",          f"{mech['t_head_min_mm']:.2f} mm"),
-                ("Head t_design",            f"{mech['t_head_design_mm']} mm"),
+                ("Shell t_required",         fmt(float(mech["t_shell_min_mm"]), "length_mm", 2)),
+                ("Shell t_design",           fmt(float(mech["t_shell_design_mm"]), "length_mm", 2)),
+                ("Head t_required",          fmt(float(mech["t_head_min_mm"]), "length_mm", 2)),
+                ("Head t_design",            fmt(float(mech["t_head_design_mm"]), "length_mm", 2)),
                 ("Shell radiography",        f"{shell_radio}  (E={mech['shell_E']:.2f})"),
                 ("Head radiography",         f"{head_radio}  (E={mech['head_E']:.2f})"),
             ])
@@ -290,7 +312,8 @@ def render_tab_report(inputs: dict, computed: dict):
                 ("Plate height",
                  fmt(nozzle_plate_h, "length_m", 3)),
                 ("Plate t_min / t_design",
-                 f"{wt_np['t_min_mm']:.2f} / {wt_np['t_design_mm']} mm"),
+                 f"{dv(float(wt_np['t_min_mm']), 'length_mm'):.2f} / "
+                 f"{dv(float(wt_np['t_design_mm']), 'length_mm'):.2f} {ulbl('length_mm')}"),
                 ("Nozzle density",         f"{dv(np_density, 'quantity_per_m2'):.0f} {ulbl('quantity_per_m2')}"),
                 ("Nozzle bore",            fmt(np_bore_dia, "length_mm", 1)),
                 ("Total nozzles",          f"{wt_np['n_bores']}"),
@@ -350,14 +373,17 @@ def render_tab_report(inputs: dict, computed: dict):
             ) or "—"
             _sp_sd = _sd.get("saddle_spacings_m") or []
             _sp_txt = (
-                " / ".join(f"{float(s) * 1000:.0f} mm" for s in _sp_sd)
+                " / ".join(
+                    f"{dv(float(s), 'length_m'):.2f} {ulbl('length_m')}"
+                    for s in _sp_sd
+                )
                 if _sp_sd else "—"
             )
             _tbl([
                 ("Saddle spacing factor α",
                  f"{_sd['alpha']:.2f}"),
                 ("Saddle positions (from left T/L)",
-                 f"{_pos_txt} m"),
+                 _pos_txt),
                 ("Centre-to-centre spacings",
                  _sp_txt),
                 ("Reaction per saddle",       fmt(_sd["reaction_t"], "mass_t", 3)),
@@ -502,6 +528,35 @@ def render_tab_report(inputs: dict, computed: dict):
                  f"USD {cart_result['annual_cost_usd']:,.0f}"),
             ])
 
+        if s_design_basis and _basis:
+            _sec("Design Basis & Traceability")
+            _tbl(design_basis_meta_rows(_basis))
+            if _basis.get("assumptions"):
+                _h("Assumptions", 3)
+                for _a in _basis["assumptions"]:
+                    doc.add_paragraph(plain_text(_a), style="List Bullet")
+            if _basis.get("limits_and_criteria"):
+                _h("Limits & criteria", 3)
+                for _lim in _basis["limits_and_criteria"]:
+                    doc.add_paragraph(plain_text(_lim), style="List Bullet")
+            _tr = traceability_table_rows(_basis)
+            if len(_tr) > 1:
+                _h("Output traceability", 3)
+                _tbl(_tr, cols=tuple(_tr[0]))
+            _col = _basis.get("collector") or {}
+            if _col:
+                _h("Collector model summary", 3)
+                _tbl([(r[0], r[1]) for r in collector_summary_rows(_col)])
+                _chk = list(_col.get("design_checklist") or [])
+                if _chk:
+                    _h("Collector design checklist", 3)
+                    for _line in _chk[:12]:
+                        doc.add_paragraph(plain_text(_line), style="List Bullet")
+            if _basis.get("exclusions"):
+                _h("Exclusions (not modelled)", 3)
+                for _ex in _basis["exclusions"]:
+                    doc.add_paragraph(plain_text(_ex), style="List Bullet")
+
         doc.add_page_break()
         _h("Sign-off & Revision Record")
         _tbl([
@@ -529,7 +584,7 @@ def render_tab_report(inputs: dict, computed: dict):
         s_process, s_water, s_media, s_dp, s_cycle,
         s_vessel, s_nzpl, s_wt_empty, s_wt_oper, s_saddle,
         s_bw_hyd, s_bw_equip, s_lining and _has_lining,
-        s_hyd_prof, s_energy, s_financial, s_cart,
+        s_hyd_prof, s_energy, s_financial, s_design_basis, s_cart,
     ])
     st.caption(
         f"{_n_sections} section(s) selected + Identification & Sign-off (always included)")
@@ -552,6 +607,7 @@ def render_tab_report(inputs: dict, computed: dict):
                 "process": s_process, "water": s_water, "media": s_media,
                 "dp": s_dp, "vessel": s_vessel, "bw_hyd": s_bw_hyd,
                 "bw_equip": s_bw_equip, "energy": s_energy, "financial": s_financial,
+                "design_basis": s_design_basis,
             }
             st.download_button(
                 label="⬇️  Download PDF report (.pdf)",
@@ -599,13 +655,13 @@ def render_tab_report(inputs: dict, computed: dict):
     if s_media:
         st.markdown("### B3 · Media Configuration")
         _med_hdr = (
-            f"| Media | Sup. | Depth ({ulbl('length_m')}) | d10 (mm) | CU | ε₀ | "
+            f"| Media | Sup. | Depth ({ulbl('length_m')}) | d10 ({ulbl('length_mm')}) | CU | ε₀ | "
             f"ρp,eff ({ulbl('density_kg_m3')}) | ψ |"
         )
         _med_sep = "|---|---|---|---|---|---|---|---|"
         _med_rows = "\n".join(
             f"| {b['Type']} | {'✓' if b.get('is_support') else ''} "
-            f"| {dv(b['Depth'], 'length_m'):.3f} | {b['d10']:.2f} | {b['cu']:.2f} "
+            f"| {dv(b['Depth'], 'length_m'):.3f} | {dv(float(b['d10']), 'length_mm'):.2f} | {b['cu']:.2f} "
             f"| {b.get('epsilon0', 0):.3f} | {dv(b['rho_p_eff'], 'density_kg_m3'):.0f} "
             f"| {b.get('psi', '—')} |"
             for b in base
@@ -635,8 +691,8 @@ def render_tab_report(inputs: dict, computed: dict):
 | End geometry | {end_geometry} |
 | Material | {material_name} |
 | Design pressure | {fmt(design_pressure, 'pressure_bar', 2)} gauge |
-| Shell t_req / t_design | {mech['t_shell_min_mm']:.2f} / {mech['t_shell_design_mm']} mm |
-| Head t_req / t_design | {mech['t_head_min_mm']:.2f} / {mech['t_head_design_mm']} mm |
+| Shell t_req / t_design | {dv(float(mech['t_shell_min_mm']), 'length_mm'):.2f} / {dv(float(mech['t_shell_design_mm']), 'length_mm'):.2f} {ulbl('length_mm')} |
+| Head t_req / t_design | {dv(float(mech['t_head_min_mm']), 'length_mm'):.2f} / {dv(float(mech['t_head_design_mm']), 'length_mm'):.2f} {ulbl('length_mm')} |
 """)
 
     if s_wt_empty:
@@ -675,7 +731,10 @@ def render_tab_report(inputs: dict, computed: dict):
         _pos2_txt = ", ".join(fmt(float(p), "length_m", 3) for p in _pos2) or "—"
         _sp2 = _sd2.get("saddle_spacings_m") or []
         _sp2_txt = (
-            " / ".join(f"{float(s) * 1000:.0f} mm" for s in _sp2)
+            " / ".join(
+                f"{dv(float(s), 'length_m'):.2f} {ulbl('length_m')}"
+                for s in _sp2
+            )
             if _sp2 else "—"
         )
         st.markdown("### C5 · Saddle Design")

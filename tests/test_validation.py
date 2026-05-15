@@ -170,6 +170,25 @@ class TestValidateInputs:
         assert r["valid"] is False
         assert any("collector_h" in e for e in r["errors"])
 
+    def test_geometry_errors_use_metric_units_by_default(self):
+        b = _base()
+        b["nominal_id"] = 5.5
+        b["total_length"] = 5.0
+        r = validate_inputs(b, unit_system="metric")
+        assert r["unit_system"] == "metric"
+        joined = " ".join(r["errors"])
+        assert " m" in joined or "m " in joined
+
+    def test_geometry_errors_use_imperial_when_requested(self):
+        b = _base()
+        b["nozzle_plate_h"] = 2.0
+        b["collector_h"] = 1.0
+        r = validate_inputs(b, unit_system="imperial")
+        assert r["unit_system"] == "imperial"
+        joined = " ".join(r["errors"])
+        assert "ft" in joined
+        assert " m, SI" not in joined
+
 
 class TestComputeAllValidationHook:
     def test_input_validation_always_present(self):
