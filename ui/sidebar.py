@@ -1203,7 +1203,8 @@ def render_sidebar(
                      "as the combined-phase table on the Backwash tab (not CFD).",
             ))
             st.caption(
-                "Blower sizing uses the **solved** rate. Switch to manual to type your own air rate."
+                "Solver picks the **minimum** air-equivalent rate that meets the target "
+                "(minimum screening blower kW at fixed ΔP/η). Blower sizing uses that rate."
             )
         else:
             out["air_scour_target_expansion_pct"] = float(

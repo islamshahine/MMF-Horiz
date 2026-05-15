@@ -305,6 +305,9 @@ def test_air_scour_auto_expansion_solve():
     assert "combined_superficial_m_h" in sol
     assert 5.0 <= sol["expansion_at_velocity_pct"] <= 16.0
     assert r["bw_hyd"]["air_scour_rate_m_h"] == pytest.approx(sol["velocity_m_h"], rel=0.02)
+    assert sol.get("objective") == "min_air_equivalent_at_target_expansion"
+    assert "p_blower_motor_kw" in sol
+    assert float(sol["p_blower_motor_kw"]) >= 0.0
 
 
 def test_hydraulic_standby_n_plus_one_bank_and_timeline():

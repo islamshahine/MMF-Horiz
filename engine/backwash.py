@@ -307,7 +307,10 @@ def solve_equivalent_velocity_for_target_expansion_pct(
     ``u_air_equivalent`` only.  This is still a single-phase surrogate, not CFD.
 
     Returns the **smallest** air-equivalent velocity that reaches the target
-    (first crossing when scanning upward), then refines by bisection.
+    (first crossing when scanning upward), then refines by bisection on the
+    lower boundary.  For monotone expansion vs. ``u_air``, this is the
+    **minimum** air rate — and at fixed blower ΔP/efficiency, the **minimum**
+    screening mass flow / shaft power for that target expansion.
     """
     tgt = float(target_expansion_pct)
     u_w = max(0.0, float(low_rate_water_m_h))

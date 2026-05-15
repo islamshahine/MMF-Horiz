@@ -558,14 +558,24 @@ def render_tab_backwash(inputs: dict, computed: dict):
             _nm_txt = fmt(_nm, "air_flux_nm3_m2h", 2) if isinstance(_nm, (int, float)) else "—"
             _ew = air_scour_solve.get("expansion_water_only_pct", "—")
             _dair = air_scour_solve.get("expansion_increment_from_air_pct", "—")
+            _mot_auto = air_scour_solve.get("p_blower_motor_kw")
+            _mot_s = (
+                f" Thermo blower motor **{fmt(float(_mot_auto), 'power_kw', 1)}** "
+                f"(minimum air rate for this target at current ΔP/η)."
+                if isinstance(_mot_auto, (int, float)) and float(_mot_auto) >= 0
+                else ""
+            )
             st.success(
                 f"**Auto-sized air scour** — target **{air_scour_solve['target_expansion_pct']:.1f} %** net expansion "
                 f"at **{fmt(float(air_scour_solve.get('low_rate_water_m_h', 0)), 'velocity_m_h', 1)}** water + air.  "
                 f"Air equivalent **{fmt(float(bw_hyd.get('air_scour_rate_m_h', 0)), 'velocity_m_h', 2)}** "
                 f"({ulbl('velocity_m_h')})  (~**{_nm_txt}** @ 0 °C, 1 atm).  "
                 f"R–Z split: water-only **{_ew} %** · increment from air **{_dair} %** · total **{air_scour_solve['expansion_at_velocity_pct']:.1f} %**."
+                f"{_mot_s}"
                 + ("" if air_scour_solve.get("ok") else "  ⚠️ Target not reached within solver scan limit.")
             )
+            if air_scour_solve.get("blower_kw_note"):
+                st.caption(air_scour_solve["blower_kw_note"])
             st.caption(air_scour_solve.get("note", ""))
         st.table(pd.DataFrame([
             ["Governing BW flow",

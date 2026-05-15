@@ -769,6 +769,22 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
                 "cost_usd_yr": round((_e_tot_old + _d_e) * _tariff, 0),
             }
 
+        if air_scour_solve is not None:
+            _pm = float(bw_sizing.get("p_blower_motor_kw") or 0.0)
+            _ps = float(bw_sizing.get("p_blower_shaft_kw") or 0.0)
+            air_scour_solve = {
+                **air_scour_solve,
+                "objective": "min_air_equivalent_at_target_expansion",
+                "p_blower_motor_kw": round(_pm, 2),
+                "p_blower_shaft_kw": round(_ps, 2),
+                "blower_kw_note": (
+                    "Air-equivalent velocity is the **smallest** that meets the target net expansion "
+                    "(bisection on the R–Z stack). For the ideal-gas blower model at fixed ΔP and "
+                    "efficiencies, mass flow scales with that rate — so this screening case is the "
+                    "**minimum motor kW** for the chosen target."
+                ),
+            }
+
         pump_perf = build_pump_performance_package(
             inputs=_work,
             hyd_prof=hyd_prof,
