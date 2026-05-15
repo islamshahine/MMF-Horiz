@@ -112,6 +112,7 @@ def analyse_collector_performance(
     air_header_dn_mm: int,
     air_scour_rate_m_h: float,
     nominal_id_m: float,
+    collector_velocity_risk: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """Return findings, recommendations, and a 0–100 performance score."""
     findings: list[dict[str, str]] = []
@@ -214,6 +215,11 @@ def analyse_collector_performance(
         recommendations.append(
             "Collector elevation is low relative to vessel ID — confirm lateral coverage and carryover during air step."
         )
+
+    _vr = collector_velocity_risk or {}
+    if _vr.get("active"):
+        _pen = max(0, 100 - int(_vr.get("severity_score", 100) or 100))
+        score -= min(24, _pen // 2)
 
     if not recommendations and not findings:
         recommendations.append("Collector height, freeboard, and nozzle schedule are within typical screening limits.")

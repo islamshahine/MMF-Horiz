@@ -3,6 +3,54 @@
 from engine.collector_intelligence import analyse_collector_performance
 
 
+def test_collector_intel_velocity_risk_penalty_reduces_score():
+    """Internal distributor advisory score should reduce collector_intel performance score."""
+    base = analyse_collector_performance(
+        bw_col={
+            "status": "OK",
+            "freeboard_m": 0.5,
+            "min_freeboard_m": 0.1,
+            "max_safe_bw_m_h": 40.0,
+            "proposed_bw_m_h": 30.0,
+            "collector_h_m": 4.0,
+            "media_loss_risk": False,
+        },
+        bw_hyd={"bw_lv_actual_m_h": 30.0},
+        nozzle_sched=[
+            {"Service": "Filtrate outlet", "Velocity (m/s)": 2.0},
+            {"Service": "Backwash inlet", "Velocity (m/s)": 2.1},
+        ],
+        air_header_dn_mm=250,
+        air_scour_rate_m_h=50.0,
+        nominal_id_m=5.5,
+    )
+    stressed = analyse_collector_performance(
+        bw_col={
+            "status": "OK",
+            "freeboard_m": 0.5,
+            "min_freeboard_m": 0.1,
+            "max_safe_bw_m_h": 40.0,
+            "proposed_bw_m_h": 30.0,
+            "collector_h_m": 4.0,
+            "media_loss_risk": False,
+        },
+        bw_hyd={"bw_lv_actual_m_h": 30.0},
+        nozzle_sched=[
+            {"Service": "Filtrate outlet", "Velocity (m/s)": 2.0},
+            {"Service": "Backwash inlet", "Velocity (m/s)": 2.1},
+        ],
+        air_header_dn_mm=250,
+        air_scour_rate_m_h=50.0,
+        nominal_id_m=5.5,
+        collector_velocity_risk={
+            "active": True,
+            "severity_score": 60,
+            "findings": [],
+        },
+    )
+    assert stressed["score"] < base["score"]
+
+
 def test_collector_intel_ok_case():
     out = analyse_collector_performance(
         bw_col={

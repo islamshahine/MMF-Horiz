@@ -38,6 +38,7 @@ from engine.thresholds import (
 from engine.uncertainty import cycle_uncertainty_by_scenario
 from engine.uncertainty_economics import lcow_envelope_from_cycle_uncertainty
 from engine.collector_intelligence import analyse_collector_performance
+from engine.collector_velocity_risk import analyse_collector_velocity_risk
 from engine.collector_hydraulics import compute_collector_hydraulics, distribution_solver_converged
 from engine.collector_geometry import enrich_collector_design_advisory
 from engine.design_basis import build_design_basis
@@ -1189,6 +1190,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
 
         env_structural = compute_environment_structural(_work)
 
+        collector_velocity_risk = analyse_collector_velocity_risk(collector_hyd)
+
         collector_intel = analyse_collector_performance(
             bw_col=bw_col,
             bw_hyd=bw_hyd,
@@ -1196,6 +1199,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             air_header_dn_mm=int(air_header_dn),
             air_scour_rate_m_h=float(air_scour_rate),
             nominal_id_m=float(nominal_id),
+            collector_velocity_risk=collector_velocity_risk,
         )
 
         collector_cfd_bundle = None
@@ -1248,6 +1252,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             # backwash
             "bw_hyd": bw_hyd, "bw_col": bw_col, "bw_exp": bw_exp, "bw_seq": bw_seq,
             "collector_intel": collector_intel,
+            "collector_velocity_risk": collector_velocity_risk,
             "collector_hyd": collector_hyd,
             "collector_cfd_bundle": collector_cfd_bundle,
             "maldistribution_factor_user": _mal_user,

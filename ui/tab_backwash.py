@@ -103,7 +103,9 @@ def render_tab_backwash(inputs: dict, computed: dict):
                 st.caption(
                     "Quick checks on **bed freeboard** and **BW velocity**, plus **vessel-wall nozzle** "
                     "velocities from §4 (not the internal collector header/laterals). "
-                    "For distributor geometry and lateral hydraulics, use **Collector hydraulics** below."
+                    "For distributor geometry and lateral hydraulics, use **Collector hydraulics** below. "
+                    "**Internal** header/lateral/orifice jets — **Velocity & erosion screening** expander "
+                    "inside Collector hydraulics."
                 )
                 st.metric("Collector performance score", f"{_ci.get('score', 0)}/100 — {_ci.get('grade', '—')}")
                 _peaks = summarize_nozzle_schedule_velocities(computed.get("nozzle_sched") or [])
@@ -313,6 +315,52 @@ def render_tab_backwash(inputs: dict, computed: dict):
                         st.warning(_msg)
                     else:
                         st.info(_msg)
+                _vrisk = computed.get("collector_velocity_risk") or {}
+                if _vrisk.get("active"):
+                    with st.expander(
+                        "Velocity & erosion screening (internal distributor, advisory)",
+                        expanded=False,
+                    ):
+                        st.caption(
+                            localize_engine_message(
+                                str(_vrisk.get("method", ""))
+                                + " — **advisory heuristics** on 1D model velocities; not wear-rate CFD."
+                            )
+                        )
+                        v1, v2 = st.columns(2)
+                        v1.metric(
+                            "Advisory score",
+                            f"{int(_vrisk.get('severity_score', 0))}/100",
+                            delta=str(_vrisk.get("grade", "")),
+                            delta_color="inverse"
+                            if int(_vrisk.get("severity_score", 100) or 100) < 70
+                            else "off",
+                        )
+                        v2.metric(
+                            "Peak opening / slot " + f"({ulbl('velocity_m_s')})",
+                            fmt(_vrisk.get("orifice_velocity_max_m_s", 0), "velocity_m_s", 2),
+                            delta=f"imbalance {_vrisk.get('flow_imbalance_pct', 0):.1f}%",
+                            delta_color="off",
+                        )
+                        _hs = list(_vrisk.get("hotspots") or [])
+                        if _hs:
+                            st.markdown("**Hotspots** (peaks + top holes from 1B network)")
+                            _df_h = pd.DataFrame(_hs)
+                            st.dataframe(_df_h, use_container_width=True, hide_index=True)
+                        for _vf in _vrisk.get("findings") or []:
+                            _topic = str(_vf.get("topic", ""))
+                            _sev = str(_vf.get("severity", "advisory"))
+                            _msg = localize_engine_message(
+                                f"**{_topic}:** {_vf.get('detail', '')}"
+                            )
+                            if _sev == "warning":
+                                st.warning(_msg)
+                            else:
+                                st.info(_msg)
+                        if _vrisk.get("plugging_hint"):
+                            st.info(localize_engine_message(str(_vrisk["plugging_hint"])))
+                        if _vrisk.get("sand_carryover_hint"):
+                            st.warning(localize_engine_message(str(_vrisk["sand_carryover_hint"])))
                 for _rec in _ch.get("recommendations") or []:
                     st.markdown(f"- {localize_engine_message(str(_rec))}")
                 with st.expander("1A/1B regression benchmarks", expanded=False):
