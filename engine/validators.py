@@ -72,6 +72,7 @@ REFERENCE_FALLBACK_INPUTS: dict[str, Any] = {
     "bw_timeline_stagger": "feasibility_trains",
     "bw_schedule_horizon_days": 7,
     "collector_header_feed_mode": "one_end",
+    "collector_tee_loss_enable": False,
     "nozzle_catalogue_id": "",
     "bw_cycles_day": 1,
     "bw_s_drain": 10, "bw_s_air": 1, "bw_s_airw": 5,

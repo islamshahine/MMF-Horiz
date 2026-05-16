@@ -308,8 +308,9 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         q_per_filter = (total_flow / streams) / _n_hyd if _n_hyd > 0 else 0.0
 
         _q_bw_est = max(bw_velocity * avg_area, 2.0 * q_per_filter)
-        collector_hyd = compute_collector_hydraulics(
-            q_bw_m3h=_q_bw_est,
+        from engine.collector_manifold import K_TEE_BRANCH_DEFAULT
+
+        _col_kwargs = dict(
             filter_area_m2=avg_area,
             cyl_len_m=cyl_len,
             nominal_id_m=float(nominal_id),
@@ -334,6 +335,15 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             discharge_coefficient=float(_work.get("lateral_discharge_cd", 0.62) or 0.62),
             rho_water=rho_bw,
             header_feed_mode=str(_work.get("collector_header_feed_mode", "one_end") or "one_end"),
+            k_tee_branch=(
+                K_TEE_BRANCH_DEFAULT
+                if bool(_work.get("collector_tee_loss_enable", False))
+                else 0.0
+            ),
+        )
+        collector_hyd = compute_collector_hydraulics(
+            q_bw_m3h=_q_bw_est,
+            **_col_kwargs,
         )
         _mal_calc = float(collector_hyd.get("maldistribution_factor_calc", 1.0) or 1.0)
         _mal = max(1.0, min(2.0, _mal_calc if _use_mal_calc else _mal_user))
@@ -1192,6 +1202,28 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
 
         collector_velocity_risk = analyse_collector_velocity_risk(collector_hyd)
 
+        collector_bw_envelope = None
+        collector_staged_orifices = None
+        if bool(_work.get("collector_bw_envelope_enable", False)) and _q_bw_est > 1e-6:
+            from engine.collector_envelope import build_collector_bw_flow_envelope
+
+            collector_bw_envelope = build_collector_bw_flow_envelope(
+                compute_kwargs=_col_kwargs,
+                reference_q_bw_m3h=float(_q_bw_est),
+                n_points=int(_work.get("collector_bw_envelope_n_points", 7) or 7),
+                q_low_frac=float(_work.get("collector_bw_envelope_q_low_frac", 0.55) or 0.55),
+                q_high_frac=float(_work.get("collector_bw_envelope_q_high_frac", 1.15) or 1.15),
+            )
+
+        _sg = int(_work.get("collector_staged_orifice_groups", 0) or 0)
+        if _sg >= 2 and _sg <= 4:
+            from engine.collector_staged_orifices import recommend_staged_orifice_schedule
+
+            collector_staged_orifices = recommend_staged_orifice_schedule(
+                collector_hyd,
+                n_groups=_sg,
+            )
+
         collector_intel = analyse_collector_performance(
             bw_col=bw_col,
             bw_hyd=bw_hyd,
@@ -1253,6 +1285,8 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             "bw_hyd": bw_hyd, "bw_col": bw_col, "bw_exp": bw_exp, "bw_seq": bw_seq,
             "collector_intel": collector_intel,
             "collector_velocity_risk": collector_velocity_risk,
+            "collector_bw_envelope": collector_bw_envelope,
+            "collector_staged_orifices": collector_staged_orifices,
             "collector_hyd": collector_hyd,
             "collector_cfd_bundle": collector_cfd_bundle,
             "maldistribution_factor_user": _mal_user,

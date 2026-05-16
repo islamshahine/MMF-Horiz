@@ -72,6 +72,16 @@ def test_build_cfd_export_accepts_legacy_ui_label():
     data, fname, mime = build_cfd_export_bytes(bundle, "JSON (full BC bundle)")
     assert b"orifice_network" in data
     assert fname.endswith(".json")
+def test_tee_loss_increases_lateral_imbalance():
+    kw = _base_kw()
+    off = compute_collector_hydraulics(**kw, k_tee_branch=0.0)
+    on = compute_collector_hydraulics(**kw, k_tee_branch=1.5)
+    assert off["tee_loss_enabled"] is False
+    assert on["tee_loss_enabled"] is True
+    assert on["flow_imbalance_pct"] >= off["flow_imbalance_pct"]
+    assert float(on.get("tee_loss_total_kpa", 0) or 0) > 0.0
+
+
 def test_one_end_solver_converges():
     pos = [2.0, 4.0, 6.0, 8.0]
     segs = [2.0, 2.0, 2.0, 2.0]

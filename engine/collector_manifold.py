@@ -17,6 +17,15 @@ from engine.collector_hydraulics import (
 )
 
 _HEADER_FEED_MODES = frozenset({"one_end", "dual_end"})
+# Branch tee K (velocity-head form) — screening default when tee loss is enabled.
+K_TEE_BRANCH_DEFAULT = 1.5
+
+
+def tee_branch_head_loss_m(k_tee: float, v_header_m_s: float) -> float:
+    """Local loss Δh = K·V²/(2g) at a lateral takeoff (m water column)."""
+    if k_tee <= 0 or v_header_m_s <= 0:
+        return 0.0
+    return float(k_tee) * (v_header_m_s ** 2) / (2.0 * GRAVITY)
 
 
 def solve_lateral_distribution_one_end(
@@ -31,6 +40,7 @@ def solve_lateral_distribution_one_end(
     friction_factor: float,
     headloss_factor: float,
     rho: float,
+    k_tee_branch: float = 0.0,
     max_iter: int = _MAX_DIST_ITER,
     tol_rel: float = _DIST_TOL_REL,
 ) -> tuple[list[float], int, float, bool]:
@@ -46,6 +56,7 @@ def solve_lateral_distribution_one_end(
     f = max(0.008, min(0.08, float(friction_factor)))
     hl = max(0.5, float(headloss_factor))
     rho = max(800.0, float(rho))
+    k_tee = max(0.0, float(k_tee_branch))
     d_header = max(0.02, float(d_header_m))
     d_lat = max(0.01, float(d_lat_m))
     l_lat = max(0.01, float(l_lat_m))
@@ -65,6 +76,8 @@ def solve_lateral_distribution_one_end(
             v_header = q_rem / (math.pi * (d_header / 2.0) ** 2) if q_rem > 0 else 0.0
             v_seg = 0.5 * (v_header + v_header_prev)
             cum_dp += _darcy_head_m(f=f, length_m=seg_len, diameter_m=d_header, velocity_m_s=v_seg) * hl * rho * GRAVITY
+            if k_tee > 0:
+                cum_dp += tee_branch_head_loss_m(k_tee, v_header) * rho * GRAVITY
             v_lat = q_lat[i] / (math.pi * (d_lat / 2.0) ** 2) if q_lat[i] > 0 else 0.0
             dp_lat = _darcy_head_m(f=f, length_m=l_lat, diameter_m=d_lat, velocity_m_s=v_lat) * hl * rho * GRAVITY
             p_drive.append(max(1.0, q_total_m3_s * rho * GRAVITY * 0.01 - cum_dp - dp_lat))
@@ -103,6 +116,7 @@ def solve_lateral_distribution_dual_end(
     friction_factor: float,
     headloss_factor: float,
     rho: float,
+    k_tee_branch: float = 0.0,
 ) -> tuple[list[float], int, float, bool, dict[str, Any]]:
     """
     Dual-end header: left group fed from x=0, right group from x=L; balance split at centre.
@@ -121,6 +135,7 @@ def solve_lateral_distribution_dual_end(
             friction_factor=friction_factor,
             headloss_factor=headloss_factor,
             rho=rho,
+            k_tee_branch=k_tee_branch,
         )
         meta["mode"] = "degenerate_one_end"
         return q1, it, res, ok, meta
@@ -156,6 +171,7 @@ def solve_lateral_distribution_dual_end(
             friction_factor=friction_factor,
             headloss_factor=headloss_factor,
             rho=rho,
+            k_tee_branch=k_tee_branch,
         )
         q_lat_r, it_r, res_r, ok_r = solve_lateral_distribution_one_end(
             q_total_m3_s=max(0.0, q_total_m3_s - q_left),
@@ -168,6 +184,7 @@ def solve_lateral_distribution_dual_end(
             friction_factor=friction_factor,
             headloss_factor=headloss_factor,
             rho=rho,
+            k_tee_branch=k_tee_branch,
         )
         q_mean_l = q_left / max(len(left_idx), 1)
         q_mean_r = (q_total_m3_s - q_left) / max(len(right_idx), 1)

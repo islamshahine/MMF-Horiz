@@ -134,6 +134,7 @@ def compute_collector_hydraulics(
     rho_water: float = 1000.0,
     friction_factor: float = _F_DARCY_DEFAULT,
     header_feed_mode: str = "one_end",
+    k_tee_branch: float = 0.0,
 ) -> dict[str, Any]:
     """
   Estimate lateral flow imbalance and a maldistribution factor from a 1D header + lateral model.
@@ -254,15 +255,18 @@ def compute_collector_hydraulics(
         positions = [cyl_len_m * (i + 1) / (n_lat + 1) for i in range(n_lat)]
 
     from engine.collector_manifold import (
+        K_TEE_BRANCH_DEFAULT,
         _segment_lengths,
         build_orifice_network,
         compare_feed_modes,
         normalize_header_feed_mode,
         solve_lateral_distribution_dual_end,
         solve_lateral_distribution_one_end,
+        tee_branch_head_loss_m,
     )
 
     feed_mode = normalize_header_feed_mode(header_feed_mode)
+    k_tee = max(0.0, float(k_tee_branch))
     seg_lens = _segment_lengths(positions, cyl_len_m)
     _solve_kw = dict(
         q_total_m3_s=q_total,
@@ -275,6 +279,7 @@ def compute_collector_hydraulics(
         friction_factor=f,
         headloss_factor=_hl_f,
         rho=rho,
+        k_tee_branch=k_tee,
     )
     q_lat_one, it_one, res_one, conv_one = solve_lateral_distribution_one_end(**_solve_kw)
     dual_meta: dict[str, Any] = {}
@@ -310,6 +315,7 @@ def compute_collector_hydraulics(
     profile: list[dict[str, Any]] = []
     q_rem = q_total
     cum_dp_pa = 0.0
+    tee_loss_total_pa = 0.0
     v_header_prev = 0.0
     header_v_max = 0.0
     orf_v_max = 0.0
@@ -324,6 +330,10 @@ def compute_collector_hydraulics(
         v_seg = 0.5 * (v_header + v_header_prev)
         hf_seg = _darcy_head_m(f=f, length_m=seg_len, diameter_m=d_header, velocity_m_s=v_seg) * _hl_f
         cum_dp_pa += hf_seg * rho * GRAVITY
+        hf_tee = tee_branch_head_loss_m(k_tee, v_header) if k_tee > 0 else 0.0
+        tee_loss_pa = hf_tee * rho * GRAVITY
+        tee_loss_total_pa += tee_loss_pa
+        cum_dp_pa += tee_loss_pa
 
         v_lat = q_i / (math.pi * (d_lat / 2.0) ** 2) if q_i > 0 else 0.0
         hf_lat = _darcy_head_m(f=f, length_m=l_lat, diameter_m=d_lat, velocity_m_s=v_lat) * _hl_f
@@ -340,6 +350,7 @@ def compute_collector_hydraulics(
             "lateral_flow_m3h": round(q_i * 3600.0, 2),
             "lateral_velocity_m_s": round(v_lat, 3),
             "orifice_velocity_m_s": round(v_orf, 3),
+            "tee_loss_kpa": round(tee_loss_pa / 1000.0, 4),
             "cumulative_header_loss_kpa": round(cum_dp_pa / 1000.0, 3),
         })
         q_rem = max(0.0, q_rem - q_i)
@@ -380,9 +391,15 @@ def compute_collector_hydraulics(
         if feed_mode == "dual_end"
         else "1D Darcy-Weisbach + orifice discharge (one-end header feed)"
     )
+    if k_tee > 0:
+        _method += f"; branch tee K={k_tee:g} (Δh=K·V²/2g per lateral)"
 
     return {
         "method": _method,
+        "tee_loss_enabled": k_tee > 0,
+        "k_tee_branch": round(k_tee, 3) if k_tee > 0 else 0.0,
+        "k_tee_branch_default": K_TEE_BRANCH_DEFAULT,
+        "tee_loss_total_kpa": round(tee_loss_total_pa / 1000.0, 3),
         "header_feed_mode": feed_mode,
         "dual_end_meta": dual_meta,
         "feed_mode_comparison": feed_cmp,

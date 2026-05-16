@@ -817,7 +817,10 @@ def render_sidebar(
                         "Use calculated maldistribution (1D collector model)",
                         value=bool(st.session_state.get("use_calculated_maldistribution", False)),
                         key="use_calculated_maldistribution",
-                        help="When enabled, Ergun / cake use max(lateral Q)/mean(Q) from BW → inlet feed / outlet collector inputs.",
+                        help=(
+                            "When enabled, Ergun / cake use max(lateral Q)/mean(Q) from the 1D collector solve "
+                            "(🔄 BW sidebar → Collector / underdrain). Results: Backwash → Collector design (1D)."
+                        ),
                     )
                     out["maldistribution_factor"] = st.number_input(
                         "Maldistribution factor (≥1) — manual",
@@ -867,10 +870,15 @@ def render_sidebar(
     with bw_tab:
         inject_anchor("mmf-anchor-sb-bw")
         st.caption(
-            "**BW** — collector, velocities, **air scour** mode, **step times**, equipment (blower ΔP, BW head, supports). "
-            "**Expansion tables, sequence, timeline, feasibility:** main **🔄 Backwash** tab."
+            "**Inputs** for backwash duty (plant), **internal collector / underdrain (1D)**, and optional screening studies. "
+            "**Charts & advisories:** main **🔄 Backwash** tab — plant block first, then **Collector design (1D)**."
         )
-        st.markdown("**BW hydraulics**")
+        st.markdown("### Backwash duty (plant)")
+        st.caption(
+            "Bed elevation, **BW velocity**, **air scour**, step times, blower/pump head, and timeline — "
+            "not lateral perforation detail (see **Collector / underdrain** below)."
+        )
+        st.markdown("**Bed & BW hydraulics**")
         from engine.collector_geometry import max_collector_centerline_height_m
         from ui.nozzle_header_sync import linked_collector_header_id_si, user_nozzle_schedule
 
@@ -963,14 +971,221 @@ def render_sidebar(
         _stp_bwv = display_value(5.0, "velocity_m_h", unit_system)
         out["bw_velocity"]    = st.number_input(_lbl_bwv, value=_def_bwv, step=_stp_bwv, key="bw_velocity")
 
+        _lbl_aw = f"③ Air + low-rate water — superficial water ({unit_label('velocity_m_h', unit_system)})"
+        _def_aw = display_value(12.5, "velocity_m_h", unit_system)
+        out["airwater_step_water_m_h"] = st.number_input(
+            _lbl_aw,
+            value=_def_aw,
+            step=_stp_bwv,
+            min_value=0.0,
+            key="airwater_step_water_m_h",
+            help="Fixed water leg during the air+water step. Auto air-scour sizing solves the **air** "
+                 "equivalent for target expansion at (this rate + air).",
+        )
+
+        out["air_scour_mode"] = st.radio(
+            "Air scour sizing",
+            options=["manual", "auto_expansion"],
+            format_func=lambda m: (
+                "Manual air scour rate (m³/m²·h)"
+                if m == "manual"
+                else "Auto — target net bed expansion (%)"
+            ),
+            horizontal=True,
+            key="air_scour_mode_sel",
+        )
+        if out["air_scour_mode"] == "auto_expansion":
+            out["air_scour_target_expansion_pct"] = float(st.number_input(
+                "Target net bed expansion (air scour surrogate) (%)",
+                value=20.0,
+                min_value=0.0, max_value=80.0, step=1.0,
+                key="air_scour_target_expansion_pct",
+                help="Engine solves equivalent superficial velocity using the same Richardson–Zaki stack "
+                     "as the combined-phase table on the Backwash tab (not CFD).",
+            ))
+            st.caption(
+                "Solver picks the **minimum** air-equivalent rate that meets the target "
+                "(minimum screening blower kW at fixed ΔP/η). Blower sizing uses that rate."
+            )
+        else:
+            out["air_scour_target_expansion_pct"] = float(
+                st.session_state.get("air_scour_target_expansion_pct", 20.0)
+            )
+
+        _manual_air_disabled = out["air_scour_mode"] == "auto_expansion"
+        _lbl_asr = f"Air scour rate ({unit_label('velocity_m_h', unit_system)})"
+        _def_asr = display_value(55.0, "velocity_m_h", unit_system)
+        out["air_scour_rate"] = st.number_input(
+            _lbl_asr,
+            value=_def_asr,
+            step=_stp_bwv,
+            key="air_scour_rate",
+            disabled=_manual_air_disabled,
+            help=(
+                "Ignored while Auto expansion is selected — rate comes from the solver."
+                if _manual_air_disabled else None
+            ),
+        )
+
+        st.markdown("**BW sequence & equipment**")
+        out["bw_cycles_day"]  = int(st.number_input("BW cycles / filter / day", value=1, min_value=1, key="bw_cycles_day"))
+        out["dp_trigger_bar"] = st.number_input(
+            f"BW initiation ΔP setpoint ({unit_label('pressure_bar', unit_system)})", value=1.0,
+            step=float(display_value(0.1, "pressure_bar", unit_system)),
+            min_value=float(display_value(0.01, "pressure_bar", unit_system)), key="dp_trig")
+        out["bw_s_drain"]  = st.number_input("① Gravity drain (min)",       value=10, step=1, min_value=0, key="bws1")
+        out["bw_s_air"]    = st.number_input("② Air scour only (min)",       value=1,  step=1, min_value=0, key="bws2")
+        out["bw_s_airw"]   = st.number_input("③ Air + low-rate water (min)", value=5,  step=1, min_value=0, key="bws3")
+        out["bw_s_hw"]     = st.number_input("④ High-rate water flush (min)",value=10, step=1, min_value=0, key="bws4")
+        out["bw_s_settle"] = st.number_input("⑤ Settling (min)",             value=2,  step=1, min_value=0, key="bws5")
+        out["bw_s_fill"]   = st.number_input("⑥ Fill & rinse (min)",         value=10, step=1, min_value=0, key="bws6")
+        out["bw_total_min"] = (out["bw_s_drain"] + out["bw_s_air"] + out["bw_s_airw"]
+                               + out["bw_s_hw"] + out["bw_s_settle"] + out["bw_s_fill"])
+        st.metric("Total BW duration", f"{out['bw_total_min']} min")
+        out["bw_schedule_horizon_days"] = int(
+            st.selectbox(
+                "Duty chart horizon (days)",
+                options=[1, 3, 7, 14],
+                index=2,
+                key="bw_schedule_horizon_days_sel",
+                help="Multi-day Gantt on Backwash tab · scheduling aid only (not DCS).",
+            )
+        )
+        out["bw_timeline_stagger"] = st.radio(
+            "Duty chart stagger (Backwash tab)",
+            options=["feasibility_trains", "optimized_trains", "uniform"],
+            format_func=lambda x: {
+                "feasibility_trains": "Feasibility BW trains (recommended)",
+                "optimized_trains": "Optimized trains (scheduling aid)",
+                "uniform": "Uniform (legacy comparison)",
+            }[x],
+            horizontal=False,
+            key="bw_timeline_stagger_sel",
+        )
+
+        st.markdown("**Equipment sizing**")
+        out["vessel_pressure_bar"]  = st.number_input(
+            f"Vessel operating pressure ({unit_label('pressure_bar', unit_system)} g)",
+            value=2.0, step=float(display_value(0.5, "pressure_bar", unit_system)),
+            min_value=0.0, key="ves_press")
+        st.caption(
+            "Used for **Nm³/h ↔ in-situ air volume** conversion only — **not** blower discharge pressure."
+        )
+        out["blower_air_delta_p_bar"] = st.number_input(
+            f"Air scour blower ΔP — air side ({unit_label('pressure_bar', unit_system)} g)",
+            value=float(display_value(0.15, "pressure_bar", unit_system)),
+            step=float(display_value(0.02, "pressure_bar", unit_system)),
+            min_value=0.0,
+            max_value=float(display_value(1.2, "pressure_bar", unit_system)),
+            key="blower_air_dp",
+            help=(
+                "**Beyond** the hydrostatic column (submergence). Covers sparger, distribution, "
+                "and piping losses — **not** the liquid filtration operating gauge. "
+                "Typical MMF air scour: **~"
+                f"{format_value(0.1, 'pressure_bar', unit_system, 2)}–"
+                f"{format_value(0.25, 'pressure_bar', unit_system, 2)}**; "
+                "lobe PD blowers rarely exceed **~"
+                f"{format_value(0.9, 'pressure_bar', unit_system, 2)}** total ΔP."
+            ),
+        )
+        out["blower_eta"]           = st.number_input("Blower isentropic efficiency", value=0.70,
+                                                        step=0.01, min_value=0.30, max_value=0.95, key="blower_eta")
+        _lbl_blowt = f"Blower inlet air temperature ({unit_label('temperature_c', unit_system)})"
+        _def_blowt = display_value(30.0, "temperature_c", unit_system)
+        out["blower_inlet_temp_c"]  = st.number_input(_lbl_blowt, value=_def_blowt,
+                                                        step=5.0, min_value=float(display_value(-10.0, "temperature_c", unit_system)),
+                                                        max_value=float(display_value(60.0, "temperature_c", unit_system)), key="blower_t")
+        out["tank_sf"]              = st.number_input("BW tank safety factor", value=1.5,
+                                                        step=0.1, min_value=1.0, max_value=3.0, key="tank_sf")
+        _lbl_bwh = f"BW pump total head ({unit_label('pressure_mwc', unit_system)})"
+        _def_bwh = display_value(15.0, "pressure_mwc", unit_system)
+        _stp_bwh = display_value(1.0, "pressure_mwc", unit_system)
+        out["bw_head_mwc"]          = st.number_input(_lbl_bwh, value=_def_bwh,
+                                                        step=_stp_bwh, min_value=float(display_value(1.0, "pressure_mwc", unit_system)), key="bw_hd")
+
+        st.markdown("**Nozzles & supports**")
+        out["default_rating"]  = st.selectbox("Flange rating", FLANGE_RATINGS, index=1, key="default_rating")
+        _lbl_nstub = f"Nozzle stub length ({unit_label('length_mm', unit_system)})"
+        out["nozzle_stub_len"] = int(round(st.number_input(
+            _lbl_nstub,
+            value=float(display_value(350.0, "length_mm", unit_system)),
+            step=float(display_value(50.0, "length_mm", unit_system)),
+            key="nozzle_stub_len",
+        )))
+        out["strainer_mat"]    = st.selectbox("Strainer material", list(STRAINER_WEIGHT_KG.keys()), index=0, key="strainer_mat")
+        _lbl_ahdn = f"Air scour header DN ({unit_label('length_mm', unit_system)})"
+        out["air_header_dn"]   = int(round(st.number_input(
+            _lbl_ahdn,
+            value=float(display_value(200.0, "length_mm", unit_system)),
+            step=float(display_value(50.0, "length_mm", unit_system)),
+            key="ah_dn",
+        )))
+        out["manhole_dn"]      = st.selectbox("Manhole size", list(MANHOLE_WEIGHT_KG.keys()), index=0, key="manhole_dn")
+        out["n_manholes"]      = int(st.number_input("No. of manholes", value=1, min_value=0, step=1, key="n_manholes"))
+        _mh_span = format_value(7.5, "length_m", unit_system, 1)
+        st.caption(
+            f"Rule of thumb: **one manhole per ~{_mh_span}** of cylindrical shell for access; "
+            "the Mechanical tab shows a recommended count from the computed shell length."
+        )
+        out["support_type"]    = st.selectbox("Support type", SUPPORT_TYPES, key="sup_t")
+        if "Saddle" in out["support_type"]:
+            _lbl_sh = f"Saddle height ({unit_label('length_m', unit_system)})"
+            _def_sh = display_value(0.8, "length_m", unit_system)
+            _stp_sh = display_value(0.05, "length_m", unit_system)
+            out["saddle_h"]             = st.number_input(_lbl_sh, value=_def_sh, step=_stp_sh, key="sad_h")
+            out["base_plate_t"]         = st.number_input(
+                f"Base plate t ({unit_label('length_mm', unit_system)})",
+                value=float(display_value(20.0, "length_mm", unit_system)),
+                step=float(display_value(2.0, "length_mm", unit_system)),
+                key="sad_bp",
+            )
+            out["gusset_t"]             = st.number_input(
+                f"Gusset t ({unit_label('length_mm', unit_system)})",
+                value=float(display_value(12.0, "length_mm", unit_system)),
+                step=float(display_value(2.0, "length_mm", unit_system)),
+                key="sad_gt",
+            )
+            out["saddle_contact_angle"] = st.number_input("Saddle contact angle (°)", value=120.0,
+                                                           step=15.0, min_value=90.0, max_value=180.0, key="sad_ang")
+            out["leg_h"] = 1.2; out["leg_section"] = 150.0
+        else:
+            _lbl_lh = f"Leg height ({unit_label('length_m', unit_system)})"
+            _def_lh = display_value(1.2, "length_m", unit_system)
+            _stp_lh = display_value(0.1, "length_m", unit_system)
+            out["leg_h"]                = st.number_input(_lbl_lh, value=_def_lh, step=_stp_lh, key="leg_h")
+            out["leg_section"]          = st.number_input(
+                f"Leg section ({unit_label('length_mm', unit_system)})",
+                value=float(display_value(150.0, "length_mm", unit_system)),
+                step=float(display_value(25.0, "length_mm", unit_system)),
+                key="leg_s",
+            )
+            out["base_plate_t"]         = st.number_input(
+                f"Base plate t ({unit_label('length_mm', unit_system)})",
+                value=float(display_value(20.0, "length_mm", unit_system)),
+                step=float(display_value(2.0, "length_mm", unit_system)),
+                key="leg_bp",
+            )
+            out["gusset_t"]             = st.number_input(
+                f"Gusset t ({unit_label('length_mm', unit_system)})",
+                value=float(display_value(12.0, "length_mm", unit_system)),
+                step=float(display_value(2.0, "length_mm", unit_system)),
+                key="leg_gt",
+            )
+            out["saddle_h"] = 0.8; out["saddle_contact_angle"] = 120.0
+
+        st.divider()
+        st.markdown("### Collector / underdrain (1D)")
+        st.caption(
+            "Internal **header + lateral + perforation** model (not vessel §4 nozzles). "
+            "Results and plots: Backwash → **Collector design (1D)**."
+        )
         with st.expander(
-            "Inlet feed / BW outlet collector — 1D hydraulic model (optional)",
+            "Sizes, material & optimization",
             expanded=False,
         ):
             st.caption(
-                "**Inlet feed / BW outlet collector** (not a bottom underdrain). Set sizes and material below; "
-                "use **Re-optimize** when you change diameters or alloy. Not CFD — enable **Use calculated** "
-                "maldistribution in Media → Advanced calibration to drive ΔP."
+                "**Inlet feed / BW outlet collector** (not a bottom underdrain). "
+                "Enable **Use calculated maldistribution** in **Media → Advanced calibration** to feed ΔP from this model."
             )
             st.markdown("**Sizes & hydraulics**")
             _lbl_chid = f"Header internal diameter ({unit_label('length_m', unit_system)})"
@@ -1000,6 +1215,16 @@ def render_sidebar(
                 horizontal=True,
                 key="collector_header_feed_mode_sel",
                 help="Dual-end uses a split-header balance — screening only, not CFD.",
+            )
+            out["collector_tee_loss_enable"] = st.checkbox(
+                "Branch tee losses (K=1.5 per lateral)",
+                value=bool(st.session_state.get("collector_tee_loss_enable", False)),
+                key="collector_tee_loss_enable",
+                help=(
+                    "Adds local loss Δh = K·V_header²/(2g) at each lateral takeoff in the 1D "
+                    "distribution solve (screening). Increases downstream maldistribution vs "
+                    "pipe friction alone — not 3D tee CFD."
+                ),
             )
             out["n_bw_laterals"] = int(st.number_input(
                 "Number of BW laterals along vessel length", value=4, min_value=1, max_value=24, step=1,
@@ -1170,207 +1395,81 @@ def render_sidebar(
                 on_click=run_collector_optimization_from_session,
             )
 
-        _lbl_aw = f"③ Air + low-rate water — superficial water ({unit_label('velocity_m_h', unit_system)})"
-        _def_aw = display_value(12.5, "velocity_m_h", unit_system)
-        out["airwater_step_water_m_h"] = st.number_input(
-            _lbl_aw,
-            value=_def_aw,
-            step=_stp_bwv,
-            min_value=0.0,
-            key="airwater_step_water_m_h",
-            help="Fixed water leg during the air+water step. Auto air-scour sizing solves the **air** "
-                 "equivalent for target expansion at (this rate + air).",
-        )
-
-        out["air_scour_mode"] = st.radio(
-            "Air scour sizing",
-            options=["manual", "auto_expansion"],
-            format_func=lambda m: (
-                "Manual air scour rate (m³/m²·h)"
-                if m == "manual"
-                else "Auto — target net bed expansion (%)"
-            ),
-            horizontal=True,
-            key="air_scour_mode_sel",
-        )
-        if out["air_scour_mode"] == "auto_expansion":
-            out["air_scour_target_expansion_pct"] = float(st.number_input(
-                "Target net bed expansion (air scour surrogate) (%)",
-                value=20.0,
-                min_value=0.0, max_value=80.0, step=1.0,
-                key="air_scour_target_expansion_pct",
-                help="Engine solves equivalent superficial velocity using the same Richardson–Zaki stack "
-                     "as the combined-phase table on the Backwash tab (not CFD).",
+        with st.expander(
+            "Optional — collector studies (extra runtime)",
+            expanded=False,
+        ):
+            st.caption(
+                "Screening tools on top of the 1D model — not required for a basic BW sizing run."
+            )
+            st.markdown("**Optional — collector flow study (1D)**")
+            out["collector_bw_envelope_enable"] = st.checkbox(
+                "Compute BW-flow sweep vs imbalance / velocities",
+                value=bool(st.session_state.get("collector_bw_envelope_enable", False)),
+                key="collector_bw_envelope_enable",
+                help=(
+                    "Runs the 1D collector model several times at scaled total BW flow (same geometry). "
+                    "For optioneering only; each sweep adds extra work to each compute_all run."
+                ),
+            )
+            _env_dis = not out["collector_bw_envelope_enable"]
+            _e1, _e2 = st.columns(2)
+            with _e1:
+                out["collector_bw_envelope_n_points"] = int(st.number_input(
+                    "Sweep base points (3–25)",
+                    value=int(st.session_state.get("collector_bw_envelope_n_points", 7)),
+                    min_value=3,
+                    max_value=25,
+                    step=1,
+                    key="collector_bw_envelope_n_points",
+                    disabled=_env_dis,
+                ))
+            with _e2:
+                out["collector_bw_envelope_q_low_frac"] = float(st.number_input(
+                    "Low flow / design",
+                    value=float(st.session_state.get("collector_bw_envelope_q_low_frac", 0.55)),
+                    min_value=0.05,
+                    max_value=0.98,
+                    step=0.05,
+                    format="%.2f",
+                    key="collector_bw_envelope_q_low_frac",
+                    disabled=_env_dis,
+                ))
+            out["collector_bw_envelope_q_high_frac"] = float(st.number_input(
+                "High flow / design",
+                value=float(st.session_state.get("collector_bw_envelope_q_high_frac", 1.15)),
+                min_value=1.02,
+                max_value=1.80,
+                step=0.05,
+                format="%.2f",
+                key="collector_bw_envelope_q_high_frac",
+                disabled=_env_dis,
             ))
             st.caption(
-                "Solver picks the **minimum** air-equivalent rate that meets the target "
-                "(minimum screening blower kW at fixed ΔP/η). Blower sizing uses that rate."
-            )
-        else:
-            out["air_scour_target_expansion_pct"] = float(
-                st.session_state.get("air_scour_target_expansion_pct", 20.0)
+                "Design-point BW flow is always included. "
+                "Feasible = converged distribution and imbalance ≤ 55% (screening cap)."
             )
 
-        _manual_air_disabled = out["air_scour_mode"] == "auto_expansion"
-        _lbl_asr = f"Air scour rate ({unit_label('velocity_m_h', unit_system)})"
-        _def_asr = display_value(55.0, "velocity_m_h", unit_system)
-        out["air_scour_rate"] = st.number_input(
-            _lbl_asr,
-            value=_def_asr,
-            step=_stp_bwv,
-            key="air_scour_rate",
-            disabled=_manual_air_disabled,
-            help=(
-                "Ignored while Auto expansion is selected — rate comes from the solver."
-                if _manual_air_disabled else None
-            ),
-        )
-
-        st.markdown("**BW sequence**")
-        out["bw_cycles_day"]  = int(st.number_input("BW cycles / filter / day", value=1, min_value=1, key="bw_cycles_day"))
-        out["dp_trigger_bar"] = st.number_input(
-            f"BW initiation ΔP setpoint ({unit_label('pressure_bar', unit_system)})", value=1.0,
-            step=float(display_value(0.1, "pressure_bar", unit_system)),
-            min_value=float(display_value(0.01, "pressure_bar", unit_system)), key="dp_trig")
-        out["bw_s_drain"]  = st.number_input("① Gravity drain (min)",       value=10, step=1, min_value=0, key="bws1")
-        out["bw_s_air"]    = st.number_input("② Air scour only (min)",       value=1,  step=1, min_value=0, key="bws2")
-        out["bw_s_airw"]   = st.number_input("③ Air + low-rate water (min)", value=5,  step=1, min_value=0, key="bws3")
-        out["bw_s_hw"]     = st.number_input("④ High-rate water flush (min)",value=10, step=1, min_value=0, key="bws4")
-        out["bw_s_settle"] = st.number_input("⑤ Settling (min)",             value=2,  step=1, min_value=0, key="bws5")
-        out["bw_s_fill"]   = st.number_input("⑥ Fill & rinse (min)",         value=10, step=1, min_value=0, key="bws6")
-        out["bw_total_min"] = (out["bw_s_drain"] + out["bw_s_air"] + out["bw_s_airw"]
-                               + out["bw_s_hw"] + out["bw_s_settle"] + out["bw_s_fill"])
-        st.metric("Total BW duration", f"{out['bw_total_min']} min")
-        out["bw_schedule_horizon_days"] = int(
-            st.selectbox(
-                "Duty chart horizon (days)",
-                options=[1, 3, 7, 14],
-                index=2,
-                key="bw_schedule_horizon_days_sel",
-                help="Multi-day Gantt on Backwash tab · scheduling aid only (not DCS).",
+            st.markdown("**Optional — perforation staging (advisory)**")
+            _staged_opts = [0, 2, 3, 4]
+            _prev_sg = st.session_state.get("collector_staged_orifice_groups_sel", 0)
+            if _prev_sg not in _staged_opts:
+                _prev_sg = 0
+            _staged_idx = _staged_opts.index(int(_prev_sg))
+            out["collector_staged_orifice_groups"] = st.selectbox(
+                "Staged perforation Ø bands per lateral",
+                options=_staged_opts,
+                index=_staged_idx,
+                format_func=lambda x: (
+                    "Off"
+                    if x == 0
+                    else f"{x} contiguous Ø bands (drill schedule)"
+                ),
+                key="collector_staged_orifice_groups_sel",
+                help=(
+                    "Advisory drill table from frozen per-hole flows — does not re-run the 1B solver."
+                ),
             )
-        )
-        out["bw_timeline_stagger"] = st.radio(
-            "Duty chart stagger (Backwash tab)",
-            options=["feasibility_trains", "optimized_trains", "uniform"],
-            format_func=lambda x: {
-                "feasibility_trains": "Feasibility BW trains (recommended)",
-                "optimized_trains": "Optimized trains (scheduling aid)",
-                "uniform": "Uniform (legacy comparison)",
-            }[x],
-            horizontal=False,
-            key="bw_timeline_stagger_sel",
-        )
-
-        st.markdown("**Equipment sizing**")
-        out["vessel_pressure_bar"]  = st.number_input(
-            f"Vessel operating pressure ({unit_label('pressure_bar', unit_system)} g)",
-            value=2.0, step=float(display_value(0.5, "pressure_bar", unit_system)),
-            min_value=0.0, key="ves_press")
-        st.caption(
-            "Used for **Nm³/h ↔ in-situ air volume** conversion only — **not** blower discharge pressure."
-        )
-        out["blower_air_delta_p_bar"] = st.number_input(
-            f"Air scour blower ΔP — air side ({unit_label('pressure_bar', unit_system)} g)",
-            value=float(display_value(0.15, "pressure_bar", unit_system)),
-            step=float(display_value(0.02, "pressure_bar", unit_system)),
-            min_value=0.0,
-            max_value=float(display_value(1.2, "pressure_bar", unit_system)),
-            key="blower_air_dp",
-            help=(
-                "**Beyond** the hydrostatic column (submergence). Covers sparger, distribution, "
-                "and piping losses — **not** the liquid filtration operating gauge. "
-                "Typical MMF air scour: **~"
-                f"{format_value(0.1, 'pressure_bar', unit_system, 2)}–"
-                f"{format_value(0.25, 'pressure_bar', unit_system, 2)}**; "
-                "lobe PD blowers rarely exceed **~"
-                f"{format_value(0.9, 'pressure_bar', unit_system, 2)}** total ΔP."
-            ),
-        )
-        out["blower_eta"]           = st.number_input("Blower isentropic efficiency", value=0.70,
-                                                        step=0.01, min_value=0.30, max_value=0.95, key="blower_eta")
-        _lbl_blowt = f"Blower inlet air temperature ({unit_label('temperature_c', unit_system)})"
-        _def_blowt = display_value(30.0, "temperature_c", unit_system)
-        out["blower_inlet_temp_c"]  = st.number_input(_lbl_blowt, value=_def_blowt,
-                                                        step=5.0, min_value=float(display_value(-10.0, "temperature_c", unit_system)),
-                                                        max_value=float(display_value(60.0, "temperature_c", unit_system)), key="blower_t")
-        out["tank_sf"]              = st.number_input("BW tank safety factor", value=1.5,
-                                                        step=0.1, min_value=1.0, max_value=3.0, key="tank_sf")
-        _lbl_bwh = f"BW pump total head ({unit_label('pressure_mwc', unit_system)})"
-        _def_bwh = display_value(15.0, "pressure_mwc", unit_system)
-        _stp_bwh = display_value(1.0, "pressure_mwc", unit_system)
-        out["bw_head_mwc"]          = st.number_input(_lbl_bwh, value=_def_bwh,
-                                                        step=_stp_bwh, min_value=float(display_value(1.0, "pressure_mwc", unit_system)), key="bw_hd")
-
-        st.markdown("**Nozzles & supports**")
-        out["default_rating"]  = st.selectbox("Flange rating", FLANGE_RATINGS, index=1, key="default_rating")
-        _lbl_nstub = f"Nozzle stub length ({unit_label('length_mm', unit_system)})"
-        out["nozzle_stub_len"] = int(round(st.number_input(
-            _lbl_nstub,
-            value=float(display_value(350.0, "length_mm", unit_system)),
-            step=float(display_value(50.0, "length_mm", unit_system)),
-            key="nozzle_stub_len",
-        )))
-        out["strainer_mat"]    = st.selectbox("Strainer material", list(STRAINER_WEIGHT_KG.keys()), index=0, key="strainer_mat")
-        _lbl_ahdn = f"Air scour header DN ({unit_label('length_mm', unit_system)})"
-        out["air_header_dn"]   = int(round(st.number_input(
-            _lbl_ahdn,
-            value=float(display_value(200.0, "length_mm", unit_system)),
-            step=float(display_value(50.0, "length_mm", unit_system)),
-            key="ah_dn",
-        )))
-        out["manhole_dn"]      = st.selectbox("Manhole size", list(MANHOLE_WEIGHT_KG.keys()), index=0, key="manhole_dn")
-        out["n_manholes"]      = int(st.number_input("No. of manholes", value=1, min_value=0, step=1, key="n_manholes"))
-        _mh_span = format_value(7.5, "length_m", unit_system, 1)
-        st.caption(
-            f"Rule of thumb: **one manhole per ~{_mh_span}** of cylindrical shell for access; "
-            "the Mechanical tab shows a recommended count from the computed shell length."
-        )
-        out["support_type"]    = st.selectbox("Support type", SUPPORT_TYPES, key="sup_t")
-        if "Saddle" in out["support_type"]:
-            _lbl_sh = f"Saddle height ({unit_label('length_m', unit_system)})"
-            _def_sh = display_value(0.8, "length_m", unit_system)
-            _stp_sh = display_value(0.05, "length_m", unit_system)
-            out["saddle_h"]             = st.number_input(_lbl_sh, value=_def_sh, step=_stp_sh, key="sad_h")
-            out["base_plate_t"]         = st.number_input(
-                f"Base plate t ({unit_label('length_mm', unit_system)})",
-                value=float(display_value(20.0, "length_mm", unit_system)),
-                step=float(display_value(2.0, "length_mm", unit_system)),
-                key="sad_bp",
-            )
-            out["gusset_t"]             = st.number_input(
-                f"Gusset t ({unit_label('length_mm', unit_system)})",
-                value=float(display_value(12.0, "length_mm", unit_system)),
-                step=float(display_value(2.0, "length_mm", unit_system)),
-                key="sad_gt",
-            )
-            out["saddle_contact_angle"] = st.number_input("Saddle contact angle (°)", value=120.0,
-                                                           step=15.0, min_value=90.0, max_value=180.0, key="sad_ang")
-            out["leg_h"] = 1.2; out["leg_section"] = 150.0
-        else:
-            _lbl_lh = f"Leg height ({unit_label('length_m', unit_system)})"
-            _def_lh = display_value(1.2, "length_m", unit_system)
-            _stp_lh = display_value(0.1, "length_m", unit_system)
-            out["leg_h"]                = st.number_input(_lbl_lh, value=_def_lh, step=_stp_lh, key="leg_h")
-            out["leg_section"]          = st.number_input(
-                f"Leg section ({unit_label('length_mm', unit_system)})",
-                value=float(display_value(150.0, "length_mm", unit_system)),
-                step=float(display_value(25.0, "length_mm", unit_system)),
-                key="leg_s",
-            )
-            out["base_plate_t"]         = st.number_input(
-                f"Base plate t ({unit_label('length_mm', unit_system)})",
-                value=float(display_value(20.0, "length_mm", unit_system)),
-                step=float(display_value(2.0, "length_mm", unit_system)),
-                key="leg_bp",
-            )
-            out["gusset_t"]             = st.number_input(
-                f"Gusset t ({unit_label('length_mm', unit_system)})",
-                value=float(display_value(12.0, "length_mm", unit_system)),
-                step=float(display_value(2.0, "length_mm", unit_system)),
-                key="leg_gt",
-            )
-            out["saddle_h"] = 0.8; out["saddle_contact_angle"] = 120.0
 
     # ── Tab 5: Econ ───────────────────────────────────────────────────────
     with econ_tab:
