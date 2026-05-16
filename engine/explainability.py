@@ -162,6 +162,19 @@ METRIC_REGISTRY: Dict[str, MetricExplanation] = {
         ),
         "§5 BW scheduler",
     ),
+    "operating_envelope_n": MetricExplanation(
+        "operating_envelope_n",
+        "Operating envelope — N scenario point",
+        "Plant LV = Q/ā ; EBCT_min = min_layer(V_layer/Q)×60 ; classified vs layer caps/floors",
+        (
+            MetricContributor("LV (N)", "computed.operating_envelope.scenario_points[0].lv_m_h", "m/h"),
+            MetricContributor("EBCT min (N)", "computed.operating_envelope.scenario_points[0].ebct_min_min", "min"),
+            MetricContributor("Region", "computed.operating_envelope.scenario_points[0].region", "stable|marginal|elevated|critical"),
+            MetricContributor("LV cap ref", "computed.operating_envelope.lv_cap_reference_m_h", "m/h"),
+            MetricContributor("EBCT floor ref", "computed.operating_envelope.ebct_floor_reference_min", "min"),
+        ),
+        "§3.23 Operating envelope",
+    ),
     "collector_flow_imbalance": MetricExplanation(
         "collector_flow_imbalance",
         "Collector flow imbalance",

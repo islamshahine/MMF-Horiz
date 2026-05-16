@@ -94,6 +94,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
             "dp_dirty",
             "cycle_expected_h",
             "cycle_uncertainty_spread",
+            "operating_envelope_n",
         ],
     )
 
@@ -396,6 +397,111 @@ def render_tab_filtration(inputs: dict, computed: dict):
                         )
                 except ImportError:
                     pass
+
+    _op_env = computed.get("operating_envelope") or {}
+    if _op_env.get("enabled"):
+        with st.expander("Operating envelope — LV × EBCT feasibility map", expanded=False):
+            st.caption(_op_env.get("note", ""))
+            _pts = [p for p in (_op_env.get("scenario_points") or []) if p.get("lv_m_h") is not None]
+            if _pts:
+                _labels = [p["scenario"] for p in _pts]
+                _idx = st.select_slider(
+                    "Highlight redundancy scenario",
+                    options=list(range(len(_pts))),
+                    format_func=lambda i: _labels[i],
+                    key="operating_envelope_scenario_idx",
+                )
+                _sel = _pts[_idx]
+                c1, c2, c3 = st.columns(3)
+                c1.metric(
+                    f"LV — {_sel['scenario']} ({ulbl('velocity_m_h')})",
+                    fmt(_sel["lv_m_h"], "velocity_m_h", 2),
+                )
+                c2.metric(
+                    f"Min EBCT — {_sel['scenario']} ({ulbl('time_min')})",
+                    fmt(_sel["ebct_min_min"], "time_min", 2),
+                )
+                c3.metric("Envelope class", str(_sel.get("region", "—")).title())
+                try:
+                    import plotly.graph_objects as go
+
+                    _lv_ax = [dv(v, "velocity_m_h") for v in _op_env["lv_axis_m_h"]]
+                    _eb_ax = [dv(v, "time_min") for v in _op_env["ebct_axis_min"]]
+                    _z = _op_env.get("severity_rank_matrix") or []
+                    _fig_env = go.Figure(
+                        data=go.Heatmap(
+                            x=_lv_ax,
+                            y=_eb_ax,
+                            z=_z,
+                            zmin=0,
+                            zmax=3,
+                            colorscale=[
+                                [0.0, "#1a7a1a"],
+                                [0.24, "#1a7a1a"],
+                                [0.25, "#b8860b"],
+                                [0.49, "#b8860b"],
+                                [0.50, "#cc5500"],
+                                [0.74, "#cc5500"],
+                                [0.75, "#cc2222"],
+                                [1.0, "#cc2222"],
+                            ],
+                            colorbar=dict(
+                                title="Class",
+                                tickvals=[0, 1, 2, 3],
+                                ticktext=["Stable", "Marginal", "Elevated", "Critical"],
+                            ),
+                            hovertemplate=(
+                                f"LV %{{x:.2f}} {ulbl('velocity_m_h')}<br>"
+                                f"EBCT %{{y:.2f}} {ulbl('time_min')}<br>"
+                                "%{customdata}<extra></extra>"
+                            ),
+                            customdata=[
+                                [_op_env["region_matrix"][j][i] for i in range(len(_lv_ax))]
+                                for j in range(len(_eb_ax))
+                            ],
+                        )
+                    )
+                    _fig_env.add_trace(
+                        go.Scatter(
+                            x=[dv(p["lv_m_h"], "velocity_m_h") for p in _pts],
+                            y=[dv(p["ebct_min_min"], "time_min") for p in _pts],
+                            mode="markers+text",
+                            text=[p["scenario"] for p in _pts],
+                            textposition="top center",
+                            marker=dict(
+                                size=[14 if i == _idx else 9 for i in range(len(_pts))],
+                                color=[
+                                    "#ffffff" if i == _idx else "#94a3b8"
+                                    for i in range(len(_pts))
+                                ],
+                                line=dict(width=2, color="#0f172a"),
+                            ),
+                            name="Scenarios",
+                        )
+                    )
+                    _fig_env.update_layout(
+                        title=f"Operating envelope ({ulbl('velocity_m_h')} vs {ulbl('time_min')})",
+                        xaxis_title=ulbl("velocity_m_h"),
+                        yaxis_title=f"Min layer EBCT ({ulbl('time_min')})",
+                        height=420,
+                        margin=dict(t=48, b=48),
+                        showlegend=False,
+                    )
+                    st.plotly_chart(_fig_env, use_container_width=True, key="operating_envelope_heatmap")
+                except ImportError:
+                    st.info("Install **plotly** for the operating envelope heatmap.")
+                _stab = sum(
+                    1
+                    for row in (_op_env.get("region_matrix") or [])
+                    for c in row
+                    if c == "stable"
+                )
+                _tot = sum(len(row) for row in (_op_env.get("region_matrix") or [])) or 1
+                st.caption(
+                    f"Reference caps: LV ≤ {fmt(_op_env.get('lv_cap_reference_m_h'), 'velocity_m_h', 2)} · "
+                    f"EBCT ≥ {fmt(_op_env.get('ebct_floor_reference_min'), 'time_min', 2)} · "
+                    f"Grid stable cells ≈ {100 * _stab / _tot:.0f}% (screening only)."
+                )
 
     st.divider()
     m1, m2, m3, m4 = st.columns(4)

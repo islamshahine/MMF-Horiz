@@ -20,7 +20,7 @@
 10. [Quick reference — correlations](#10-quick-reference--correlations)
 11. [Development priorities — reconciled view](#11-development-priorities--reconciled-view-vs-external-roadmap) *(end of §11: **Shipped deltas (2026-05)**)*
 
-**Also in §3:** multi-case compare (**§3.15**), CFD BC export (**§3.16**), collector schematic (**§3.17**), pressurized underdrain catalogue (**§3.18**), explainability registry (**§3.19**), lifecycle degradation curves (**§3.20**), design basis traceability v1.1 (**§3.21**), spatial hydraulic distribution — spec (**§3.22**).
+**Also in §3:** multi-case compare (**§3.15**), CFD BC export (**§3.16**), collector schematic (**§3.17**), pressurized underdrain catalogue (**§3.18**), explainability registry (**§3.19**), lifecycle degradation curves (**§3.20**), design basis traceability v1.1 (**§3.21**), spatial hydraulic distribution — spec (**§3.22**), operating envelope map (**§3.23**).
 
 ## 1. Platform philosophy
 
@@ -565,6 +565,25 @@ Move from **average** nozzle-plate quantities (density → count → open area %
 
 ---
 
+### 3.23 Operating envelope map (`engine/operating_envelope.py`) — **Delivered (Phase 4 A2)**
+
+Post-compute in `app.py` (before `build_design_basis` so traceability can resolve paths).
+
+| Block | Contents |
+|-------|----------|
+| Method | `lv_ebct_grid_v1` — 2D grid of plant LV vs hypothetical min EBCT; per-layer threshold checks (`lv_severity_classify`, `ebct_severity_classify`) |
+| `lv_axis_m_h`, `ebct_axis_min` | SI grid axes |
+| `region_matrix` | `stable` \| `marginal` \| `elevated` \| `critical` per cell |
+| `severity_rank_matrix` | 0–3 numeric mirror for charts |
+| `scenario_points[]` | `N`, `N−1`, … from `load_data`: actual `lv_m_h`, `ebct_min_min`, `region`, `worst_layer` |
+| Governance | `ASM-ENV-01`; explainability id `operating_envelope_n`; `TRC-*` for N region |
+
+**UI:** Filtration tab expander — Plotly heatmap + scenario slider (N → N−k).
+
+**Limits:** Screening map only — grid cells decouple LV and EBCT; not RTD, breakthrough, or guarantee of uniform bed utilisation.
+
+---
+
 ## 4. Assessment & decision logic
 
 ### 4.1 Per-layer severity (`compute.py`)
@@ -744,7 +763,7 @@ These let experienced users tune models without forking code:
 | **Traceability / explainability** | **Delivered** | `METRIC_REGISTRY` + contributor panels (Filtration / Backwash) |
 | **Lifecycle degradation** | **Delivered** | Economics expander §7 — advisory sawtooth curves |
 | **Uncertainty bands on charts** | **Backlog (B4)** | `cycle_uncertainty` exists; shaded Plotly regions not wired |
-| **Operating envelope chart** | **Backlog (A2)** | LV × EBCT feasibility map; optional N→N−1 animation — `operating_envelope.py` |
+| **Operating envelope chart** | **Delivered (A2)** | `operating_envelope.py`; Filtration heatmap + scenario slider |
 | **Design-to-target inverse UX** | **Backlog (A3)** | Targets: ΔP, LCOW, Q_BW → ranked candidates + Apply |
 | **Spatial loading heatmap** | **Backlog (A4)** | §3.22 spec — `spatial_distribution` post-compute |
 | **Media life narrative** | **Backlog** | Link cycle → replacement → OPEX in one caption block |
@@ -953,7 +972,7 @@ Statements the platform should *not* overclaim:
 
 | ID | Item | Engine / UI | `computed[]` key | Status |
 |----|------|-------------|------------------|--------|
-| **A2** | Operating envelope map | `operating_envelope.py`; Filtration or Assessment heatmap | `operating_envelope` | **Backlog** |
+| **A2** | Operating envelope map | `operating_envelope.py`; Filtration heatmap | `operating_envelope` | **Done** |
 | **A3** | Design-to-target inverse | `design_targets.py` or extend `optimisation.py`; Assessment expander | `design_targets` | **Backlog** |
 | **A4** | Spatial hydraulic distribution | `spatial_distribution.py`; Mechanical/Backwash heatmap | `spatial_distribution` | **Spec §3.22** |
 
@@ -1046,7 +1065,7 @@ Steps 1–4 from external prompt are good; map to **existing** sidebar keys:
 | Multi-design workspace | Medium | Medium | **Done** — library 20, run 12 |
 | Uncertainty → economics | Medium | Medium | **Done** — `cycle_economics` |
 | Lifecycle degradation curves | Medium | High | **Done (advisory)** |
-| Operating envelope map (A2) | High | Medium | **Next** |
+| Operating envelope map (A2) | High | Medium | **Done** |
 | Design-to-target inverse (A3) | High | Medium | **Next** |
 | Spatial distribution (A4) | High | High | **After A2/A3** — §3.22 |
 
@@ -1097,7 +1116,8 @@ Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.
 
 | Topic | Summary |
 |-------|---------|
-| **§3.22 spatial spec** | Voronoi service area + lumped local velocity — **spec only**; links to `collector_nozzle_plate` stagger layout; Phase 4 **A4**. |
+| **Operating envelope (A2)** | `operating_envelope.py`; LV×EBCT heatmap; scenario slider; `ASM-ENV-01`. |
+| **§3.22 spatial spec** | Voronoi service area + lumped local velocity — **spec only**; Phase 4 **A4**. |
 | **§8 / §11 refresh** | Delivered vs backlog columns; Phase 4 decision intelligence (A2/A3/A4); updated AI assistant prompt. |
 | **Air scour** | `auto_expansion` finds **minimum** air-equivalent superficial velocity for target net expansion; after `bw_system_sizing`, **`air_scour_solve`** includes motor/shaft blower kW and objective; Compare **B** mirrors sidebar air-scour mode widgets. |
 | **Multi-case compare** | Library **20**, run **12**, UI pages of **4** columns; full CSV export. |

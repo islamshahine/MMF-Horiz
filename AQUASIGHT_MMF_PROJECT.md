@@ -471,7 +471,7 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 
 | # | Topic | Notes |
 |---|--------|--------|
-| 1 | **Phase 4 A2 — Operating envelope map** | LV × EBCT feasibility; optional N−1 animation — see **§F** |
+| 1 | **Phase 4 A2 — Operating envelope map** | **Done** — `operating_envelope.py`, Filtration heatmap, scenario slider |
 | 2 | **Phase 4 A3 — Design-to-target inverse** | Targets: ΔP, LCOW, Q_BW → ranked candidates + Apply (extends grid optimiser) |
 | 3 | **Phase 4 A4 — Spatial distribution** | §3.22 spec — Voronoi loading on nozzle plate |
 | 4 | **MILP / gradient global optimiser** | Grid ranker + Pareto delivered; MILP/DCS **Tier C** |
@@ -495,7 +495,7 @@ Phases **0–3** delivered (design basis, explainability, catalogue, compare sca
 
 | ID | Feature | Engine (planned) | `computed[]` | UI owner | Status |
 |----|---------|------------------|--------------|----------|--------|
-| **A2** | Operating envelope map (LV × EBCT, severity regions) | `operating_envelope.py` | `operating_envelope` | Filtration or Assessment | Backlog |
+| **A2** | Operating envelope map (LV × EBCT, severity regions) | `operating_envelope.py` | `operating_envelope` | Filtration tab expander | **Done** |
 | **A3** | Design-to-target inverse (ΔP, LCOW, Q_BW) | `design_targets.py` or `optimisation.py` | `design_targets` | Assessment — Apply patches | Backlog |
 | **A4** | Spatial hydraulic distribution (Voronoi loading) | `spatial_distribution.py` | `spatial_distribution` | Mechanical / Backwash | **Spec only** (§3.22) |
 

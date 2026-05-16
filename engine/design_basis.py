@@ -117,6 +117,14 @@ def _build_assumptions_catalog(inputs: dict, computed: dict) -> List[dict[str, A
             "category": "Fouling",
             "text": "Fouling workflow (if used) is advisory only — not auto-applied to design duty.",
         },
+        {
+            "id": "ASM-ENV-01",
+            "category": "Process / envelope",
+            "text": (
+                "Operating envelope map (LV × EBCT): 2D screening grid vs per-layer thresholds; "
+                "scenario markers from load_data — not RTD or effluent guarantee."
+            ),
+        },
     ]
     if ch:
         rows.append({
@@ -292,6 +300,17 @@ def _build_traceability(inputs: dict, computed: dict) -> List[dict[str, Any]]:
         doc_section="§4 Cycle uncertainty",
         assumption_ids=["ASM-MEDIA-01", "ASM-MEDIA-02"],
     )
+    _env = computed.get("operating_envelope") or {}
+    if _env.get("enabled") and (_env.get("scenario_points") or []):
+        add(
+            "Envelope region (N)",
+            "operating_envelope_region_n",
+            "computed.operating_envelope.scenario_points[0].region",
+            unit="—",
+            source="computed",
+            doc_section="§3.23 Operating envelope",
+            assumption_ids=["ASM-ENV-01"],
+        )
     add(
         "BW velocity",
         "bw_velocity",

@@ -149,7 +149,9 @@ computed = compute_all_cached(_inputs_for_compute, _COMPUTE_CACHE_VERSION)
 from engine.design_basis import build_design_basis
 from engine.explainability import build_explainability_index
 from engine.lifecycle_degradation import build_lifecycle_degradation
+from engine.operating_envelope import build_operating_envelope
 
+computed["operating_envelope"] = build_operating_envelope(_inputs_for_compute, computed)
 computed["design_basis"] = build_design_basis(_inputs_for_compute, computed)
 computed["explainability"] = build_explainability_index(_inputs_for_compute, computed)
 computed["lifecycle_degradation"] = build_lifecycle_degradation(_inputs_for_compute, computed)
