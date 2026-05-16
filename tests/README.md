@@ -40,6 +40,7 @@ tests/
   test_collector_staged_orifices.py  Staged orifice advisory
   test_bw_scheduler.py           BW scheduler v2 (stream-aware, peak windows)
   test_operating_envelope.py     LV × EBCT feasibility grid (Phase 4 A2)
+  test_design_targets.py         Design-to-target caps + grid search (Phase 4 A3)
   test_uncertainty.py            Cycle uncertainty envelopes
   test_uncertainty_economics.py  LCOW band from cycle spread
   test_sensitivity.py            OAT tornado narrative

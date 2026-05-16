@@ -20,7 +20,7 @@
 10. [Quick reference — correlations](#10-quick-reference--correlations)
 11. [Development priorities — reconciled view](#11-development-priorities--reconciled-view-vs-external-roadmap) *(end of §11: **Shipped deltas (2026-05)**)*
 
-**Also in §3:** multi-case compare (**§3.15**), CFD BC export (**§3.16**), collector schematic (**§3.17**), pressurized underdrain catalogue (**§3.18**), explainability registry (**§3.19**), lifecycle degradation curves (**§3.20**), design basis traceability v1.1 (**§3.21**), spatial hydraulic distribution — spec (**§3.22**), operating envelope map (**§3.23**).
+**Also in §3:** multi-case compare (**§3.15**), CFD BC export (**§3.16**), collector schematic (**§3.17**), pressurized underdrain catalogue (**§3.18**), explainability registry (**§3.19**), lifecycle degradation curves (**§3.20**), design basis traceability v1.1 (**§3.21**), spatial hydraulic distribution — spec (**§3.22**), operating envelope map (**§3.23**), design-to-target search (**§3.24**).
 
 ## 1. Platform philosophy
 
@@ -584,6 +584,21 @@ Post-compute in `app.py` (before `build_design_basis` so traceability can resolv
 
 ---
 
+### 3.24 Design-to-target search (`engine/design_targets.py`) — **Delivered (Phase 4 A3)**
+
+| Block | Contents |
+|-------|----------|
+| Method | Grid over `n_filters` × optional `nominal_id` × `bw_velocity`; each row = `compute_all` via `evaluate_candidate` |
+| Targets | `max_dp_dirty_bar`, `max_lcow_usd_m3`, `max_q_bw_m3h`, `max_capex_usd` (any subset) |
+| `computed["design_targets"]` | `baseline` (current design vs caps); `search` filled from Assessment UI session |
+| Ranking | Feasible + `meets_targets` → sort by normalized slack + CAPEX tie-break |
+| UI | Assessment expander — caps, grid, **Run search**, ranked table, **Apply** per row |
+| Governance | `ASM-DTARGET-01`; explainability `design_targets_lcow` |
+
+**Limits:** MVP grid only (no MILP). Dirty ΔP from Ruth/Ergun screening — may exceed trigger; set caps accordingly. Explicit Apply — no auto-write to sidebar.
+
+---
+
 ## 4. Assessment & decision logic
 
 ### 4.1 Per-layer severity (`compute.py`)
@@ -764,7 +779,7 @@ These let experienced users tune models without forking code:
 | **Lifecycle degradation** | **Delivered** | Economics expander §7 — advisory sawtooth curves |
 | **Uncertainty bands on charts** | **Backlog (B4)** | `cycle_uncertainty` exists; shaded Plotly regions not wired |
 | **Operating envelope chart** | **Delivered (A2)** | `operating_envelope.py`; Filtration heatmap + scenario slider |
-| **Design-to-target inverse UX** | **Backlog (A3)** | Targets: ΔP, LCOW, Q_BW → ranked candidates + Apply |
+| **Design-to-target inverse UX** | **Delivered (A3)** | `design_targets.py`; Assessment caps + Apply |
 | **Spatial loading heatmap** | **Backlog (A4)** | §3.22 spec — `spatial_distribution` post-compute |
 | **Media life narrative** | **Backlog** | Link cycle → replacement → OPEX in one caption block |
 | **Client / engineer modes** | **Backlog** | Hide calibration vs expose raw SI |
@@ -973,7 +988,7 @@ Statements the platform should *not* overclaim:
 | ID | Item | Engine / UI | `computed[]` key | Status |
 |----|------|-------------|------------------|--------|
 | **A2** | Operating envelope map | `operating_envelope.py`; Filtration heatmap | `operating_envelope` | **Done** |
-| **A3** | Design-to-target inverse | `design_targets.py` or extend `optimisation.py`; Assessment expander | `design_targets` | **Backlog** |
+| **A3** | Design-to-target inverse | `design_targets.py`; Assessment expander | `design_targets` | **Done** |
 | **A4** | Spatial hydraulic distribution | `spatial_distribution.py`; Mechanical/Backwash heatmap | `spatial_distribution` | **Spec §3.22** |
 
 **Tier B (after A2–A4 or parallel when resourced)**
@@ -1066,7 +1081,7 @@ Steps 1–4 from external prompt are good; map to **existing** sidebar keys:
 | Uncertainty → economics | Medium | Medium | **Done** — `cycle_economics` |
 | Lifecycle degradation curves | Medium | High | **Done (advisory)** |
 | Operating envelope map (A2) | High | Medium | **Done** |
-| Design-to-target inverse (A3) | High | Medium | **Next** |
+| Design-to-target inverse (A3) | High | Medium | **Done** |
 | Spatial distribution (A4) | High | High | **After A2/A3** — §3.22 |
 
 ### 11.8 Implementation checklist (every feature)

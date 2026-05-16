@@ -175,6 +175,18 @@ METRIC_REGISTRY: Dict[str, MetricExplanation] = {
         ),
         "§3.23 Operating envelope",
     ),
+    "design_targets_lcow": MetricExplanation(
+        "design_targets_lcow",
+        "LCOW vs design target",
+        "LCOW = (CAPEX×CRF + OPEX) / annual flow — compared to user cap in Assessment",
+        (
+            MetricContributor("LCOW", "computed.design_targets.baseline.metrics.lcow_usd_m3", "USD/m³"),
+            MetricContributor("Meets targets", "computed.design_targets.baseline.meets_targets", "bool"),
+            MetricContributor("Cap", "computed.design_targets.targets.max_lcow_usd_m3", "USD/m³"),
+            MetricContributor("Econ bench", "computed.econ_bench.lcow", "USD/m³"),
+        ),
+        "§3.24 Design to target",
+    ),
     "collector_flow_imbalance": MetricExplanation(
         "collector_flow_imbalance",
         "Collector flow imbalance",

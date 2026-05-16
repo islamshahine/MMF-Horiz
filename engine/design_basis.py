@@ -125,6 +125,14 @@ def _build_assumptions_catalog(inputs: dict, computed: dict) -> List[dict[str, A
                 "scenario markers from load_data — not RTD or effluent guarantee."
             ),
         },
+        {
+            "id": "ASM-DTARGET-01",
+            "category": "Optimisation",
+            "text": (
+                "Design-to-target search: grid over n_filters / ID / BW velocity via compute_all; "
+                "ranked rows meeting user caps — Apply to sidebar only, not auto-design."
+            ),
+        },
     ]
     if ch:
         rows.append({

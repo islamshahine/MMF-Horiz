@@ -268,6 +268,14 @@ def render_tab_assessment(inputs: dict, computed: dict):
             redundancy=int(redundancy),
         )
 
+    with st.expander(
+        "Design to target — ΔP, LCOW, BW flow, CAPEX",
+        expanded=False,
+    ):
+        from ui.design_targets_ui import render_design_targets_panel
+
+        render_design_targets_panel(inputs, computed)
+
     st.divider()
 
     # ── Sensitivity / Tornado Analysis ───────────────────────────────────────
