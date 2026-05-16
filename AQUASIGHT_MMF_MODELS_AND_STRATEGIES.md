@@ -20,7 +20,7 @@
 10. [Quick reference — correlations](#10-quick-reference--correlations)
 11. [Development priorities — reconciled view](#11-development-priorities--reconciled-view-vs-external-roadmap) *(end of §11: **Shipped deltas (2026-05)**)*
 
-**Also in §3:** multi-case compare (**§3.15**), CFD BC export (**§3.16**), collector schematic (**§3.17**), pressurized underdrain catalogue (**§3.18**), explainability registry (**§3.19**), lifecycle degradation curves (**§3.20**), design basis traceability v1.1 (**§3.21**).
+**Also in §3:** multi-case compare (**§3.15**), CFD BC export (**§3.16**), collector schematic (**§3.17**), pressurized underdrain catalogue (**§3.18**), explainability registry (**§3.19**), lifecycle degradation curves (**§3.20**), design basis traceability v1.1 (**§3.21**), spatial hydraulic distribution — spec (**§3.22**).
 
 ## 1. Platform philosophy
 
@@ -46,10 +46,12 @@
 
 ### 1.3 What it is *not* (yet)
 
-- Biofouling / SDI prediction from first principles (fouling module is empirical advisory).
-- Automatic global optimiser (grid MVP + manual sweeps only).
-- 3D CFD, lateral collector hydraulics, or nozzle manufacturer CFD.
-- Live operations / DCS integration (24 h Gantt is schematic duty, not optimised scheduling).
+- Biofouling / SDI prediction from first principles (fouling module is empirical advisory; 5-step workflow is screening only).
+- MILP / gradient global optimiser or DCS-linked scheduling (grid ranker + heuristic BW scheduler v2 only).
+- In-app CFD solve, 3D manifold FEA, or nozzle-manufacturer CFD validation.
+- **Local hydraulic loading map** on the underdrain plate (geometric stagger exists; Voronoi / per-nozzle loading is **§3.22 — spec only** until Phase 4 A4).
+- **Target-driven inverse design UX** (“LCOW < X → suggest N and ID”) — engine grid exists (`optimisation.py`); dedicated Assessment workflow is Phase 4 A3.
+- Live operations / digital twin (24 h Gantt is schematic duty, not optimised plant control).
 
 ---
 
@@ -487,6 +489,82 @@ Built **after** full `compute_all` in `app.py` (schema **`1.1`**).
 
 ---
 
+### 3.22 Spatial hydraulic distribution — specification (Phase 4 A4, not yet coded)
+
+> **Status (2026-05):** **Specification only** — connects to delivered **geometric** layout in `engine/collector_nozzle_plate.py` (`staggered_plate_layout`, `build_staggered_nozzle_hole_network`). Implementation planned as **post-compute enrichment** (same pattern as `lifecycle_degradation`, `design_basis`).
+
+#### Purpose
+
+Move from **average** nozzle-plate quantities (density → count → open area %) toward **local hydraulic loading** on a 2D plan projection — advisory screening for nozzle optimisation, erosion risk, media utilisation, and CFD export enrichment. **Not** a substitute for 3D bed CFD or manufacturer orifice testing.
+
+#### Scope boundaries
+
+| In scope | Out of scope |
+|----------|----------------|
+| 2D plan view of pressurized underdrain / nozzle plate active area | 3D bed CFD, channeling in media |
+| Voronoi (or equivalent) **service area** per hole centre | Full coupled nozzle ↔ lateral ↔ header network solve |
+| Lumped **approach-flow split** by service area | DCS / real-time spatial sensing |
+| Uniformity index + dead-zone **heuristic** near walls / large spacing | Guarantee of uniform filtration performance |
+
+#### Inputs (reuse existing — no duplicate layout UI)
+
+| Source | Keys / objects |
+|--------|----------------|
+| `computed["collector_nozzle_plate"]` | `holes_xy[]`, `layout_revision`, `n_holes`, `open_area_fraction`, plate dimensions |
+| `inputs` | `nozzle_plate_enable`, BW / filtration flows as needed for velocity basis |
+| Optional flag | `spatial_distribution_enable` (default off until module ships) |
+
+#### Proposed `computed["spatial_distribution"]` (SI)
+
+```json
+{
+  "enabled": true,
+  "layout_revision": 3,
+  "method": "voronoi_lumped_v1",
+  "n_nozzles": 142,
+  "nozzle_xy_m": [[x, y], ...],
+  "nozzle_service_area_m2": [0.012, ...],
+  "nozzle_open_area_m2": [1.2e-5, ...],
+  "nozzle_local_velocity_m_h": [38.2, ...],
+  "nozzle_loading_factor": [1.05, ...],
+  "dead_zone_probability": [0.02, ...],
+  "hydraulic_uniformity_index": 0.91,
+  "max_loading_factor": 1.18,
+  "min_loading_factor": 0.84,
+  "advisory_flags": ["edge_nozzle_high_loading"],
+  "assumption_ids": ["ASM-SPATIAL-001", "ASM-SPATIAL-002"],
+  "note": "2D plan screening; lumped Q split by Voronoi area."
+}
+```
+
+| Field | Definition (v1 screening) |
+|-------|---------------------------|
+| `nozzle_service_area_m2[i]` | Voronoi cell area for hole *i*, clipped to plate **active** rectangle (arc segment or full rectangle per layout mode). |
+| `nozzle_local_velocity_m_h[i]` | `Q_basis × (A_service_i / Σ A_service) / A_open_i` with `Q_basis` = filtration or BW flow through plate (document which in ASM). |
+| `nozzle_loading_factor[i]` | `v_local_i / mean(v_local)` (dimensionless). |
+| `dead_zone_probability[i]` | Heuristic 0–1: elevated near vessel wall clip, spacing > 1.5× pitch, or service area > 2× median. |
+| `hydraulic_uniformity_index` | e.g. `1 − std(loading_factor) / mean(loading_factor)` capped [0, 1]. |
+
+#### Planned engine & integration
+
+| Piece | Location |
+|-------|----------|
+| Core | `engine/spatial_distribution.py` (new) |
+| Hook | `app.py` after `compute_all` + `collector_nozzle_plate` available |
+| Tests | `tests/test_spatial_distribution.py` — uniform grid → ~uniform loading; edge holes flagged |
+| UI owner | **Mechanical** or **Backwash** — plan heatmap of `nozzle_loading_factor`; link to existing stagger plot |
+| CFD | Optional columns on `collector_cfd_export` orifice CSV: `service_area_m2`, `local_velocity_m_h` |
+| Governance | `ASM-SPATIAL-*` in `design_basis`; explainability contributors on uniformity index |
+
+#### Applications
+
+- Nozzle plate **density / pitch** optioneering before fabrication.
+- Cross-check with `collector_intelligence` erosion velocity advisories.
+- **Media utilisation** narrative (advisory): high local loading → earlier cake localisation risk.
+- External CFD: richer per-hole BC table without re-deriving geometry in the mesh tool.
+
+---
+
 ## 4. Assessment & decision logic
 
 ### 4.1 Per-layer severity (`compute.py`)
@@ -618,11 +696,13 @@ These let experienced users tune models without forking code:
 
 ### 6.5 Input gaps (enhancement fodder)
 
-- Fouling engine not wired to “Apply” in main flow (only suggestion).
-- No wizard / design basis document import (JSON only).
-- Limited reverse-solve (“I need LCOW < X → suggest N”).
-- Layer threshold widgets not fully round-tripped in project JSON.
-- **Imperial:** many validators use `format_value` when `unit_system=imperial`; Compare B uses `ui/compare_units.py` on toggle. Some rare branches may still report SI-only strings — see §2.3.
+| Gap | Status |
+|-----|--------|
+| Fouling guided workflow | **Delivered** — `ui/fouling_workflow.py`; Apply buttons for selected suggestions only |
+| Design basis import | JSON project + built basis export; no DBR/P&ID import wizard |
+| **Target-driven inverse design** | **Partial** — `optimise_design` grid + Assessment sweep/Pareto exist; no “target LCOW / ΔP / Q_BW → ranked recommendations” UX (**Phase 4 A3**) |
+| Layer threshold round-trip | Per-layer setpoints in session; not all keys in `project_io` JSON |
+| **Imperial edge cases** | Compare B uses `compare_units.py`; rare SI-only strings in validators — see §2.3 |
 
 ---
 
@@ -656,17 +736,19 @@ These let experienced users tune models without forking code:
 - Status badges in input column — traffic-light summary without opening tabs.
 - Validation banners — errors before tabs when inputs invalid.
 
-### 7.4 Content ideas (richer future)
+### 7.4 Content ideas — delivered vs backlog
 
-| Idea | Value |
-|------|--------|
-| **Design basis panel** | **Delivered (v1.1):** `ASM-*` / `TRC-*` tables on Report + Assessment |
-| **Traceability** | **Delivered:** explainability registry + metric contributor panels |
-| **Uncertainty bands** | Low/avg/high as shaded regions on charts |
-| **Operating envelope chart** | LV vs EBCT feasibility map per scenario |
-| **Media life narrative** | Link cycle duration → replacement interval → OPEX |
-| **Client mode** | Hide calibration knobs; show only outcomes |
-| **Engineer mode** | Expose α, mal-distribution, raw SI in tooltips |
+| Idea | Status | Notes |
+|------|--------|-------|
+| **Design basis panel** | **Delivered** | v1.1 — `ASM-*` / `TRC-*` on Report + Assessment |
+| **Traceability / explainability** | **Delivered** | `METRIC_REGISTRY` + contributor panels (Filtration / Backwash) |
+| **Lifecycle degradation** | **Delivered** | Economics expander §7 — advisory sawtooth curves |
+| **Uncertainty bands on charts** | **Backlog (B4)** | `cycle_uncertainty` exists; shaded Plotly regions not wired |
+| **Operating envelope chart** | **Backlog (A2)** | LV × EBCT feasibility map; optional N→N−1 animation — `operating_envelope.py` |
+| **Design-to-target inverse UX** | **Backlog (A3)** | Targets: ΔP, LCOW, Q_BW → ranked candidates + Apply |
+| **Spatial loading heatmap** | **Backlog (A4)** | §3.22 spec — `spatial_distribution` post-compute |
+| **Media life narrative** | **Backlog** | Link cycle → replacement → OPEX in one caption block |
+| **Client / engineer modes** | **Backlog** | Hide calibration vs expose raw SI |
 
 ### 7.5 Collector schematic presentation
 
@@ -680,69 +762,72 @@ Use these prompts with AI or workshops. Each axis is independent — mix and mat
 
 ### 8.1 Platform / product ideas
 
-| Direction | Description |
-|-----------|-------------|
-| **Design library** | SQLite UI for projects, snapshots, named scenarios (engine exists). |
-| **Multi-case workspace** | **Delivered:** library **20**, run **12**, UI pagination **4**/page (`compare_workspace.py`). |
-| **Requirements traceability** | Link each input to P&ID tag / DBR line item. |
-| **Collaboration** | Comment threads on assessment drivers; revision diff on JSON. |
-| **API-first clients** | ERP / estimating tools POST designs; return PDF + metrics only. |
-| **Digital twin lite** | Import actual LV, ΔP, BW times → recalibrate α and solid loading. |
-| **Regulatory packs** | Pre-built report sections per client (ACWA, SWCC, EU taxonomy). |
+| Direction | Status | Description |
+|-----------|--------|-------------|
+| **Design library** | **Delivered (MVP)** | `engine/project_db.py` + `ui/project_library.py` — SQLite projects / snapshots |
+| **Multi-case workspace** | **Delivered** | Library **20**, run **12**, pagination **4**/page (`compare_workspace.py`) |
+| **Project revision tree** | **Backlog (B3)** | Projects → Cases → Revisions → report hash; diff/export |
+| **Requirements traceability** | **Backlog** | Link inputs to P&ID tag / DBR line item beyond `TRC-*` |
+| **Collaboration** | **Backlog** | Comments on assessment drivers; JSON revision diff |
+| **API-first clients** | **Partial** | FastAPI `POST /compute`; no PDF-only ERP contract |
+| **Digital twin lite** | **Backlog (C4)** | Import ops LV, ΔP, BW times → recalibrate α |
+| **Regulatory packs** | **Backlog** | Client-specific report section templates |
 
 ### 8.2 Core engineering ideas (deeper physics)
 
-| Direction | Description |
-|-----------|-------------|
-| **2D / 1D collector model** | Lateral ΔP, orifice discharge → maldistribution factor from physics. |
-| **Biofouling module** | Algae/bacterial layer growth tied to temperature, chlorine, run time. |
-| **GAC adsorption** | Breakthrough curves for DOC/TOC proxy; mode-dependent EBCT. |
-| **Air scour optimiser** | **MVP delivered:** min air-equivalent rate for target expansion; thermo blower kW on `air_scour_solve`. **Still open:** VFD law, real blower maps, multi-objective vs water scour. |
-| **Dynamic BW scheduler** | MILP: minimise peak concurrent BW given train rules. |
-| **CFD export** | **Delivered (MVP)** — `collector_cfd_export.py` JSON + orifice CSV; `normalize_cfd_export_format()` maps legacy UI labels (e.g. display strings) to internal keys. |
-| **Vertical vessel path** | Second geometry kernel (major fork — high effort). |
+| Direction | Status | Description |
+|-----------|--------|-------------|
+| **1D collector hydraulics (1A/1B/1B+)** | **Delivered** | `collector_hydraulics.py`, manifold, auto maldistribution, CFD BC export |
+| **Spatial nozzle loading (2D plan)** | **Spec (§3.22)** | Voronoi service area + lumped velocity — **Phase 4 A4** |
+| **Biofouling / GAC breakthrough** | **Backlog** | First-principles growth or adsorption curves |
+| **Air scour + blower** | **MVP delivered** | `auto_expansion`, thermo kW; **Backlog (B1):** vendor maps, VFD affinity |
+| **BW scheduler** | **MVP delivered (v2)** | Heuristic stream-aware; **Backlog:** MILP/DCS (C5), peak-tariff v3 (B2) |
+| **CFD export** | **Delivered (MVP)** | JSON + orifice CSV; in-app solve **backlog (C2)** |
+| **Vertical vessel path** | **Backlog** | Second geometry kernel — major fork |
 
 ### 8.3 Content / UX ideas
 
-| Direction | Description |
-|-----------|-------------|
-| **Guided workflows** | “New SWRO train” wizard: flow → water → media template → auto N. |
-| **Explain this number** | LLM tooltip grounded in `computed` JSON + this doc. |
-| **Risk storytelling** | One-page executive summary auto from `overall_risk` + drivers. |
-| **Benchmark positioning** | Radar chart vs `econ_bench` bands per region/year. |
-| **Training mode** | Reference case with locked inputs + quizzes on LV/EBCT. |
+| Direction | Status | Description |
+|-----------|--------|-------------|
+| **Fouling guided workflow** | **Delivered** | 5-step UI + `build_fouling_assessment` |
+| **Explainability panels** | **Delivered** | Metric contributors — not LLM-generated |
+| **Guided “new train” wizard** | **Backlog** | Flow → water → media template → auto N |
+| **Risk storytelling / benchmark radar** | **Backlog** | Executive one-pager; regional econ bands |
+| **Training mode** | **Backlog** | Locked reference case + quizzes |
 
 ### 8.4 Input ideas
 
-| Direction | Description |
-|-----------|-------------|
-| **Import from Excel template** | Column mapping to `inputs` dict. |
-| **P&ID OCR / parser** | Extract N filters, DN, design pressure (aspirational). |
-| **Sliders with constraints** | Drag LV → show immediate severity colour on layer sketch. |
-| **Fouling panel** | SDI/MFI/TSS → apply loading + show confidence interval. |
-| **Unit-aware validation** | Errors in display units. |
-| **Inverse solve** | Target LCOW or ΔP → suggest `n_filters` or `nominal_id`. |
+| Direction | Status | Description |
+|-----------|--------|-------------|
+| **Excel import** | **Backlog** | Column mapping to `inputs` |
+| **P&ID OCR** | **Backlog (C3)** | Aspirational |
+| **Fouling panel** | **Delivered** | SDI/MFI/TSS workflow with Apply pattern |
+| **Design-to-target inverse** | **Backlog (A3)** | LCOW / ΔP / Q_BW targets → ranked design patches |
+| **Unit-aware validation** | **Partial** | Imperial messages in validators; edge cases remain |
 
 ### 8.5 Display ideas
 
-| Direction | Description |
-|-----------|-------------|
-| **Vessel sketch interactivity** | Click layer in drawing → jump to media table row. |
-| **Scenario slider** | Animate N → N−1 → N−2 LV/EBCT in one chart. |
-| **Sankey: energy** | kWh split feed / BW / blower / parasitic. |
-| **Sankey: mass** | TSS capture per layer → cake → BW waste. |
-| **Mobile summary** | Read-only dashboard for site visits. |
-| **Imperial-native reports** | PDF entirely in ft/psi/gpm without SI footnotes. |
+| Direction | Status | Description |
+|-----------|--------|-------------|
+| **Operating envelope map** | **Backlog (A2)** | LV vs EBCT heatmap + severity regions |
+| **Scenario N animation** | **Backlog (A2)** | N → N−1 → N−2 on one chart |
+| **Spatial loading heatmap** | **Backlog (A4)** | Plan view of `nozzle_loading_factor` |
+| **Vessel sketch interactivity** | **Backlog** | Click layer → media row |
+| **Sankey energy/mass** | **Backlog** | kWh and TSS flow diagrams |
+| **Imperial-native PDF** | **Backlog** | Reports without SI footnotes |
 
 ### 8.6 AI-assisted development patterns
 
 When asking Claude/Cursor to extend the platform:
 
-1. State whether the change is **engine**, **UI boundary**, or **display-only**.
-2. Specify if JSON/API must remain SI-compatible.
-3. Ask for a **test** in `test_units.py` or `test_integration.py` with numeric assertion.
-4. Reference the equation section above — avoid duplicate formulas in UI.
-5. For new inputs: require `INPUT_QUANTITY_MAP` + widget map entry in same PR.
+1. Read **`AQUASIGHT_MMF_PROJECT.md`** and this file (**§3**, **§11**).
+2. **Preserve** single `compute_all` physics path; **SI internally only**; no duplicate equations in UI.
+3. **Prefer post-compute enrichment** in `app.py` when core physics is unchanged.
+4. **New features** must attach to `computed[]`; avoid a second calculation path without explicit Phase approval.
+5. State **engine vs UI vs display-only**; require `tests/test_<module>.py` with numeric assertions.
+6. Wire **design basis** (`ASM-*`) + **explainability** for any new published metric.
+7. **Update §3 and §11** in the same PR; report **runtime impact** (ms per `compute_all` or post-hook).
+8. New inputs: `INPUT_QUANTITY_MAP` + `project_io` widget map when persisted.
 
 ---
 
@@ -797,25 +882,26 @@ Statements the platform should *not* overclaim:
 
 > External prompts (e.g. ChatGPT) often align on *direction* but mis-order *dependencies* or underestimate *existing code*. This section is the **repo-informed** sequencing for the next phase. Philosophy unchanged: single SI core, explainable physics, no black-box ML.
 
-### 11.1 What the external roadmap gets right
+### 11.1 What the external roadmap gets right (2026-05)
 
-- **Collector hydraulics** is the largest *physics gap* vs marketing claims (“full hydraulic design”).
-- **`maldistribution_factor` is a calibration knob**, not a model output — replacing it with a derived value (when data exists) is high value.
-- **Cycle uncertainty** should be deterministic envelopes first, not Monte Carlo.
-- **Fouling must stay advisory** — engine exists (`fouling.py`); UX is the gap.
-- **No architecture rewrite** — extend `compute_all`, add `computed` keys, test engine modules.
+- **Single compute core + governance layer** (design basis, explainability, lifecycle) increases credibility without forking physics.
+- **Collector hydraulics** was the largest gap — **1A/1B/1B+** now delivered; remaining gap is **spatial loading** (§3.22) and in-app CFD.
+- **Deterministic uncertainty** before Monte Carlo — **2A delivered** (`cycle_uncertainty`, `cycle_economics`).
+- **Decision intelligence** (envelope maps, target-driven inverse, spatial maps) is the next product shift — not more isolated equations.
+- **No architecture rewrite** — post-compute enrichment + `computed[]` keys.
 
 ### 11.2 What to correct or defer
 
-| External claim | Repo reality |
-|----------------|--------------|
+| External claim | Repo reality (updated) |
+|----------------|------------------------|
 | Doc name `MODELS_AND_LOGIC.md` | Use **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md`** |
-| Collector “no hydraulic model” | **Stale** — **1A/1B** in `collector_hydraulics.py` (1D header/lateral); still **no CFD / 3D manifold** |
-| Fouling “not wired” | **Partially wired** — sidebar expander + Apply M_max; not a guided workflow |
-| Optimisation “future” | **`optimisation.py` + tests exist** — missing Streamlit UX only |
-| 1B before 1A validated | **Risky** — iterative manifold solvers are where “magic” appears; do **1A → 1C → 1B** |
-| Monte Carlo lite in Phase 2 | **Defer** until 2A is used in production; runtime × Streamlit reruns hurts UX |
-| “HIGH” dynamic BW scheduler | **High value, high false-precision risk** — after timeline inputs are stable |
+| Collector “no hydraulic model” | **Stale** — 1A/1B/1B+ delivered; no in-app CFD |
+| Fouling “not wired” | **Stale** — 5-step `fouling_workflow.py` delivered |
+| Optimisation “missing UX” | **Stale** — Assessment grid + Pareto + apply; **missing:** target-driven inverse (A3) |
+| Multi-case “≤4 only” | **Stale** — library 20 / run 12 / pagination |
+| Spatial nozzle loading | **Spec only** — §3.22; geometric stagger delivered |
+| Monte Carlo lite | **Defer (C1)** — envelope preferred for Streamlit UX |
+| MILP BW scheduler | **Defer (C5)** — heuristic v2 delivered |
 
 ### 11.3 Recommended phasing (execution order)
 
@@ -860,6 +946,35 @@ Statements the platform should *not* overclaim:
 | Uncertainty → economics bands | **Done** — `uncertainty_economics.py` → `cycle_economics` |
 | Monte Carlo lite | **Backlog** — optional, behind checkbox |
 | MILP / DCS BW optimiser | **Backlog** — heuristic scheduler only |
+
+#### Phase 4 — Decision intelligence (2026+) — **NEXT**
+
+> **Goal:** Move from “calculator” to **engineering decision platform** without breaking the single `compute_all` path. Recommended build order: **A2 → A3 → A4**.
+
+| ID | Item | Engine / UI | `computed[]` key | Status |
+|----|------|-------------|------------------|--------|
+| **A2** | Operating envelope map | `operating_envelope.py`; Filtration or Assessment heatmap | `operating_envelope` | **Backlog** |
+| **A3** | Design-to-target inverse | `design_targets.py` or extend `optimisation.py`; Assessment expander | `design_targets` | **Backlog** |
+| **A4** | Spatial hydraulic distribution | `spatial_distribution.py`; Mechanical/Backwash heatmap | `spatial_distribution` | **Spec §3.22** |
+
+**Tier B (after A2–A4 or parallel when resourced)**
+
+| ID | Item | Status |
+|----|------|--------|
+| **B1** | Real blower maps (vendor curves, VFD affinity) | Backlog |
+| **B2** | BW scheduler v3 (peak tariff, maintenance windows) | Backlog |
+| **B3** | Project revision tree on SQLite | Backlog |
+| **B4** | Shaded uncertainty bands on Filtration charts | Backlog |
+
+**Tier C (defer — document only)**
+
+| ID | Item |
+|----|------|
+| **C1** | Monte Carlo lite |
+| **C2** | In-app CFD / 3D manifold |
+| **C3** | P&ID OCR |
+| **C4** | Digital twin lite |
+| **C5** | MILP / gradient optimiser + DCS scheduler |
 
 ### 11.4 Priority 1 — collector package (refined)
 
@@ -921,16 +1036,19 @@ Steps 1–4 from external prompt are good; map to **existing** sidebar keys:
 
 **Never** auto-write `n_filters` or `bw_velocity` without explicit Apply.
 
-### 11.7 Secondary pipeline — honest priority ranks
+### 11.7 Secondary pipeline — honest priority ranks (updated)
 
-| Item | Value | Effort | Rank |
-|------|-------|--------|------|
-| Optimisation UI + Pareto rank | High | Medium | **P1** (with Phase 1) |
-| Design basis / traceability | High (enterprise) | Medium | **P1–2** |
-| Dynamic BW scheduler | High | High | **P2–3** |
-| Multi-design (>2) | Medium | Medium | **Done** — library 20, run 12, pagination |
+| Item | Value | Effort | Status |
+|------|-------|--------|--------|
+| Optimisation UI + Pareto rank | High | Medium | **Done** — Assessment expander |
+| Design basis / traceability v1.1 | High | Medium | **Done** |
+| Dynamic BW scheduler v2 | High | High | **Done (MVP)** |
+| Multi-design workspace | Medium | Medium | **Done** — library 20, run 12 |
 | Uncertainty → economics | Medium | Medium | **Done** — `cycle_economics` |
-| Media ageing curves | Medium | High | **Done (advisory)** — `lifecycle_degradation` |
+| Lifecycle degradation curves | Medium | High | **Done (advisory)** |
+| Operating envelope map (A2) | High | Medium | **Next** |
+| Design-to-target inverse (A3) | High | Medium | **Next** |
+| Spatial distribution (A4) | High | High | **After A2/A3** — §3.22 |
 
 ### 11.8 Implementation checklist (every feature)
 
@@ -944,22 +1062,43 @@ Steps 1–4 from external prompt are good; map to **existing** sidebar keys:
 ### 11.9 Prompt to use with AI assistants
 
 ```text
-You are extending AQUASIGHT MMF. Read AQUASIGHT_MMF_PROJECT.md and
-AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md §11.
+You are extending AQUASIGHT MMF.
 
-Implement [FEATURE] following Phase [N]. Do not duplicate Ergun/Ruth in UI.
-Propose: engine module, computed keys, inputs added, tests, tab placement,
-assumptions, limits, runtime (ms per compute_all call).
+Read:
+- AQUASIGHT_MMF_PROJECT.md
+- AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md (§3 equations, §11 Phase 4)
+
+Rules:
+- Preserve single compute_all physics path
+- SI internally only
+- Do not duplicate equations in UI
+- New features must attach to computed[]
+- Avoid introducing second calculation paths
+- Prefer post-compute enrichment over engine modification when physics is unchanged
+
+Implement [FEATURE] following Phase 4 item [A2|A3|A4|B*|C*].
+
+Return:
+1. Engine module(s)
+2. Inputs added (with INPUT_QUANTITY_MAP / project_io if persisted)
+3. computed[] outputs (SI keys and shapes)
+4. tests/test_<module>.py required
+5. UI owner tab + expander name
+6. assumptions/limits (ASM-* ids) + design_basis + explainability hooks
+7. runtime impact (ms per compute_all or post-hook)
+8. updates required in §3 and §11 documentation
 ```
 
 ---
 
 ### Shipped deltas (2026-05)
 
-Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.15–§3.21, §7.1, §7.5, and §8:
+Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.15–§3.22, §7.1, §7.4–§7.5, §8, and §11 Phase 4:
 
 | Topic | Summary |
 |-------|---------|
+| **§3.22 spatial spec** | Voronoi service area + lumped local velocity — **spec only**; links to `collector_nozzle_plate` stagger layout; Phase 4 **A4**. |
+| **§8 / §11 refresh** | Delivered vs backlog columns; Phase 4 decision intelligence (A2/A3/A4); updated AI assistant prompt. |
 | **Air scour** | `auto_expansion` finds **minimum** air-equivalent superficial velocity for target net expansion; after `bw_system_sizing`, **`air_scour_solve`** includes motor/shaft blower kW and objective; Compare **B** mirrors sidebar air-scour mode widgets. |
 | **Multi-case compare** | Library **20**, run **12**, UI pages of **4** columns; full CSV export. |
 | **Underdrain catalogue** | Pressurized-only (**9** products); salinity strainers; Apply via `on_click`. |
@@ -974,5 +1113,5 @@ Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.
 
 ---
 
-*Document version: 2026-05-16 — §3.15–§3.21, post-compute bundles, catalogue scope, compare scale-up, degradation curves.*
+*Document version: 2026-05-16 (Phase 0) — §3.22 spatial spec, §8 compass refresh, §11 Phase 4 roadmap (A2/A3/A4, Tier B/C).*
 

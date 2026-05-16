@@ -1,6 +1,6 @@
 # AQUASIGHT™ MMF — Project Context Document
 
-> **Purpose:** Share this file with Claude.ai chat to discuss enhancements, new features, or design decisions with full project context. For **equations, models, input/display philosophy, and enhancement brainstorming**, see **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md`**. For **unit-system gaps & contributor rules**, see **§ Unit system — architecture, gaps & best practices (2026)**. For **roadmap delivery vs backlog**, see **§ Platform status — accomplished vs remaining (2026)** near the end.
+> **Purpose:** Share this file with Claude.ai chat to discuss enhancements, new features, or design decisions with full project context. For **equations, models, input/display philosophy, and enhancement brainstorming**, see **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md`**. For **unit-system gaps & contributor rules**, see **§ Unit system — architecture, gaps & best practices (2026)**. For **roadmap delivery vs backlog**, see **§ Platform status — accomplished vs remaining (2026)** and **§F Phase 4 roadmap** near the end.
 
 ---
 
@@ -467,24 +467,43 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 
 ---
 
-### E. **Backlog** — not implemented (or not productised)
+### E. **Backlog** — open items (Phases 4+)
 
 | # | Topic | Notes |
 |---|--------|--------|
-| 1 | **Global / automatic optimiser** | No MILP or gradient search; grid ranker + apply-to-sidebar; **2-objective Pareto (CAPEX vs annual OPEX)** on feasible grid rows only. |
-| 2 | **Multi-case comparison** | **Done** — library **20**, compare **2–12**, pagination; A vs B unchanged. |
-| 3 | **Pressurized underdrain catalogue** | **Done** — 9 products; Leopold / collector-drilled **not** in list. |
-| 4 | **BW scheduler** | **Done (MVP)** — multi-day horizon + `optimized_trains` v2; not MILP/DCS. |
-| 5 | **Explainability / design basis / degradation** | **Done** — see §B table above. |
-| 5 | **External media pricing** | **MVP:** user USD/m³ + region factor in `media_pricing.py` + Media tab; no vendor database or API feed. |
-| 6 | **Collector CFD / full manifold** | **1B+ MVP delivered** — dual-end feed, orifice network, external CFD BC export; in-app CFD / 3D still backlog. |
-| 7 | **Air scour auto-tune** | **Done (MVP):** `auto_expansion` solves **minimum** air-equivalent superficial velocity for target net expansion (bisection on R–Z stack); `air_scour_solve` includes `objective`, thermo **`p_blower_motor_kw` / `p_blower_shaft_kw`** (after `bw_system_sizing`); Backwash + sidebar copy; Design **B** on Compare tab has same manual/auto controls. `tests/test_backwash.py`, `test_integration.py`. *(Further: VFD/blower-map multi-objective — backlog.)* |
-| 8 | **Test depth** | **Smoke:** `tests/test_report_drawing_smoke.py`; **Sensitivity:** `tests/test_sensitivity.py` (`run_sensitivity`). **Media / coating:** `tests/test_media.py` (labels + `get_layer_intelligence`); **`tests/test_coating.py`** (areas + lining branches). |
-| 9 | **Uncertainty → economics** | **Done:** `cycle_economics` LCOW band (BW energy scaled from cycle envelope). |
-| 10 | **Monte Carlo lite** | Deferred — envelope (2A) preferred for Streamlit UX. |
+| 1 | **Phase 4 A2 — Operating envelope map** | LV × EBCT feasibility; optional N−1 animation — see **§F** |
+| 2 | **Phase 4 A3 — Design-to-target inverse** | Targets: ΔP, LCOW, Q_BW → ranked candidates + Apply (extends grid optimiser) |
+| 3 | **Phase 4 A4 — Spatial distribution** | §3.22 spec — Voronoi loading on nozzle plate |
+| 4 | **MILP / gradient global optimiser** | Grid ranker + Pareto delivered; MILP/DCS **Tier C** |
+| 5 | **Real blower maps (B1)** | Vendor curves + VFD; beyond adiabatic MVP |
+| 6 | **BW scheduler v3 (B2)** | Peak tariff / maintenance windows |
+| 7 | **Project revision tree (B3)** | Cases / revisions on top of `project_db` |
+| 8 | **Collector in-app CFD (C2)** | External BC export **done**; solve in-app deferred |
+| 9 | **External media pricing API** | MVP: user USD/m³ + region factor only |
+| 10 | **Monte Carlo lite (C1)** | Deferred — deterministic envelope preferred |
+| 11 | **Shaded uncertainty charts (B4)** | Wire `cycle_uncertainty` to Filtration Plotly |
+| 12 | **Optional CI** | GitHub Actions pytest on push |
 
 **Narrative (updated 2026-05-16)**  
-Platform hardening through **design basis v1.1**, **explainability**, **pressurized underdrain catalogue**, **multi-case compare scale-up**, **lifecycle degradation curves**, **BW scheduler v2**, **fouling workflow**, collector **1A/1B+**, and post-compute enrichment in `app.py` is **in repo** (commit `9dc1fa7` on `main`). Remaining leverage: MILP/gradient optimiser, vendor price API feeds, in-app CFD, Monte Carlo lite, optional CI.
+Phases **0–3** delivered (design basis, explainability, catalogue, compare scale-up, lifecycle curves, collector package, fouling workflow). **Next:** Phase **4 — decision intelligence** — see **§F** below. Long-term defer: MILP optimiser, in-app CFD, Monte Carlo lite, digital twin.
+
+---
+
+### F. **Phase 4 roadmap — decision intelligence** (2026+)
+
+> Detailed equations and scope: **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md` §3.22, §11 Phase 4**. Build order: **A2 → A3 → A4**.
+
+| ID | Feature | Engine (planned) | `computed[]` | UI owner | Status |
+|----|---------|------------------|--------------|----------|--------|
+| **A2** | Operating envelope map (LV × EBCT, severity regions) | `operating_envelope.py` | `operating_envelope` | Filtration or Assessment | Backlog |
+| **A3** | Design-to-target inverse (ΔP, LCOW, Q_BW) | `design_targets.py` or `optimisation.py` | `design_targets` | Assessment — Apply patches | Backlog |
+| **A4** | Spatial hydraulic distribution (Voronoi loading) | `spatial_distribution.py` | `spatial_distribution` | Mechanical / Backwash | **Spec only** (§3.22) |
+
+**Tier B:** B1 blower maps · B2 BW scheduler v3 (peak tariff) · B3 project revision tree · B4 shaded uncertainty charts.
+
+**Tier C (defer):** Monte Carlo · in-app CFD · P&ID OCR · digital twin · MILP/DCS optimiser.
+
+**Architecture rule (unchanged):** one `compute_all`; prefer post-compute hooks in `app.py`; register `ASM-*` / explainability for every new metric.
 
 ---
 
@@ -517,7 +536,7 @@ Rows **1–11** match **Section A** (original v2). Rows **12–13** are recent h
 | 21 | **Design basis in reports** — assumptions, traceability, collector block in PDF/Word | `engine/design_basis.py`, `engine/design_basis_report.py`, `ui/tab_report.py` |
 | 22 | **Imperial validation + Compare unit sync** — display-aligned validator messages; Compare B widgets on toggle | `engine/validators.py`, `ui/compare_units.py`, `tests/test_compare_units.py` |
 | 23 | **Auto air scour + screening blower kW** — `air_scour_solve` enrichment; Backwash expander; Compare B air mode | `engine/compute.py`, `engine/backwash.py`, `ui/tab_backwash.py`, `ui/tab_compare.py`, `ui/sidebar.py` |
-| 24 | **Multi-case compare (v1, ≤4)** + **CFD export aliases** — superseded by row **29** for scale-up | `engine/compare_workspace.py`, `engine/collector_cfd_export.py` |
+| 24 | **CFD export aliases** + early compare prototype — compare scale-up in row **29** (library **20**, run **12**) | `engine/collector_cfd_export.py`, `engine/compare_workspace.py` |
 | 25 | **Explainability registry** — METRIC_REGISTRY, contributor panels, plain-value UI | `engine/explainability.py`, `ui/helpers.py`, `app.py`, `tests/test_explainability.py` |
 | 26 | **Design basis v1.1** — ASM/TRC traceability; post-compute; Report/Assessment tables | `engine/design_basis.py`, `design_basis_report.py`, `app.py` |
 | 27 | **Pressurized underdrain catalogue** — 9 products, strainer materials, unified Media sidebar | `nozzle_plate_catalogue.py`, `strainer_materials.py`, `nozzle_catalogue_ui.py`, `collector_nozzle_plate.py` |
