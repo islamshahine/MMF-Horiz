@@ -162,6 +162,30 @@ def cycle_duration_envelope(
         stability = "narrow"
         stability_note = "Narrow cycle band — model inputs are mutually consistent at design TSS."
 
+    from engine.uncertainty_cycle import decompose_cycle_drivers
+
+    driver_decomposition = decompose_cycle_drivers(
+        layers=layers,
+        q_filter_m3h=q_filter_m3h,
+        avg_area_m2=avg_area_m2,
+        solid_loading_kg_m2=solid_loading_kg_m2,
+        captured_density_kg_m3=captured_density_kg_m3,
+        water_temp_c=water_temp_c,
+        rho_water=rho_water,
+        dp_trigger_bar=dp_trigger_bar,
+        alpha_m_kg=alpha_m_kg,
+        layer_areas_m2=layer_areas_m2,
+        maldistribution_factor=_mal,
+        alpha_calibration_factor=_acf,
+        tss_capture_efficiency=_cap,
+        design_tss_mg_l=_tss,
+        expected_h=expected_h,
+        alpha_span=alpha_span,
+        tss_span=tss_span,
+        capture_span=capture_span,
+        mal_span=mal_span,
+    )
+
     return {
         "design_tss_mg_l": _tss,
         "cycle_optimistic_h": round(optimistic_h, 2),
@@ -178,6 +202,7 @@ def cycle_duration_envelope(
             "mal_span": mal_span,
         },
         "method": "deterministic_corner_cases",
+        "driver_decomposition": driver_decomposition,
     }
 
 

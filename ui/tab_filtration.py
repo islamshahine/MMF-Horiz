@@ -308,6 +308,17 @@ def render_tab_filtration(inputs: dict, computed: dict):
             _u_n = _cycle_unc.get("N") or {}
             if _u_n:
                 st.info(_u_n.get("stability_note", ""))
+                _dec = _u_n.get("driver_decomposition") or {}
+                if _dec.get("summary"):
+                    st.caption(_dec["summary"])
+                for _line in _dec.get("narratives") or []:
+                    st.markdown(_line)
+                if _dec.get("drivers"):
+                    st.dataframe(
+                        pd.DataFrame(_dec["drivers"]),
+                        use_container_width=True,
+                        hide_index=True,
+                    )
                 try:
                     import plotly.graph_objects as go
 
@@ -328,7 +339,43 @@ def render_tab_filtration(inputs: dict, computed: dict):
                         height=320,
                         margin=dict(t=48, b=40),
                     )
-                    st.plotly_chart(_fig, use_container_width=True)
+                    st.plotly_chart(_fig, use_container_width=True, key="cycle_unc_band_bar")
+                    _plot = _dec.get("plot") or {}
+                    _labels = _plot.get("driver_labels") or []
+                    _d_opt = _plot.get("delta_optimistic_h") or []
+                    _d_con = _plot.get("delta_conservative_h") or []
+                    if _labels and (_d_opt or _d_con):
+                        _fig2 = go.Figure()
+                        _fig2.add_trace(
+                            go.Bar(
+                                name="Optimistic corner (alone)",
+                                y=_labels,
+                                x=[dv(x, "time_h") if x is not None else 0 for x in _d_opt],
+                                orientation="h",
+                                marker_color="#1a7a1a",
+                            )
+                        )
+                        _fig2.add_trace(
+                            go.Bar(
+                                name="Conservative corner (alone)",
+                                y=_labels,
+                                x=[dv(x, "time_h") if x is not None else 0 for x in _d_con],
+                                orientation="h",
+                                marker_color="#cc5500",
+                            )
+                        )
+                        _fig2.update_layout(
+                            barmode="overlay",
+                            title=f"Driver decomposition — Δ cycle vs expected ({ulbl('time_h')})",
+                            xaxis_title=f"Δ vs expected ({ulbl('time_h')})",
+                            height=max(280, 44 * len(_labels)),
+                            margin=dict(l=160, t=48, b=40),
+                        )
+                        st.plotly_chart(
+                            _fig2,
+                            use_container_width=True,
+                            key="cycle_unc_driver_tornado",
+                        )
                 except ImportError:
                     pass
 
