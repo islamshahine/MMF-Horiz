@@ -191,6 +191,87 @@ def bw_timeline_stagger_label(stagger_model: str | None) -> str:
     return _BW_TIMELINE_STAGGER_LABELS.get(key, key.replace("_", " ").title() or "—")
 
 
+def metric_explain_help(metric_id: str, inputs: dict, computed: dict) -> str:
+    """Tooltip text for metrics (explainability registry)."""
+    from engine.explainability import metric_help_text
+
+    return metric_help_text(metric_id, inputs, computed)
+
+
+def render_metric_explain_panel(
+    inputs: dict,
+    computed: dict,
+    metric_ids: list[str],
+    *,
+    title: str = "How these numbers are built",
+) -> None:
+    """Expandable contributor breakdown for selected metrics."""
+    import streamlit as st
+    from engine.explainability import get_metric_explanation
+
+    with st.expander(title, expanded=False):
+        st.caption(
+            "Deterministic contributors from **inputs** and **computed** — "
+            "scheduling aid / design review only."
+        )
+        for mid in metric_ids:
+            ex = get_metric_explanation(mid, inputs, computed)
+            if not ex:
+                continue
+            st.markdown(f"**{ex['title']}**")
+            st.caption(ex["equation"])
+            for row in ex.get("contributors") or []:
+                st.markdown(
+                    f"- **{row['label']}:** {row['value']} — {row['role']}"
+                )
+            st.caption(f"Reference: {ex.get('doc_section', '')}")
+            st.divider()
+
+
+def bw_timeline_schedule_summary_html(bw_timeline: dict) -> str:
+    """Compact scheduling summary for Backwash duty chart (all stagger modes)."""
+    _tl = bw_timeline or {}
+    _pk = _tl.get("peak_concurrent_bw", "—")
+    _ktr = _tl.get("bw_trains")
+    _ktr_s = str(_ktr) if _ktr is not None else "—"
+    _cap_ok = _tl.get("meets_bw_trains_cap")
+    if _cap_ok is True:
+        _cap_txt = "Yes"
+    elif _cap_ok is False:
+        _cap_txt = "No — review BW trains / cycle"
+    else:
+        _cap_txt = "—"
+    rows = [
+        ("Peak filters in BW", f"<b>{_pk}</b>"),
+        ("Rated BW trains (section 4)", f"<b>{_ktr_s}</b>"),
+        ("Within BW-train cap", f"<b>{_cap_txt}</b>"),
+    ]
+    _opt = _tl.get("optimizer") or {}
+    if str(_tl.get("stagger_model", "")).lower() == "optimized_trains" and _opt:
+        rows.extend([
+            ("Peak (feasibility spacing)", f"<b>{_opt.get('peak_feasibility_spacing', '—')}</b>"),
+            ("Peak reduction (filters)", f"<b>{_opt.get('improvement_filters', 0)}</b>"),
+        ])
+    _pt = _tl.get("peak_time_h") or _opt.get("peak_time_h")
+    if _pt is not None:
+        rows.append(("First peak at", f"<b>{float(_pt):.1f} h</b>"))
+    _pw = _tl.get("peak_windows") or _opt.get("peak_windows") or []
+    if _pw:
+        _w0 = _pw[0]
+        rows.append((
+            "First peak overlap",
+            f"<b>{float(_w0.get('t0_h', 0)):.1f}–{float(_w0.get('t1_h', 0)):.1f} h</b>",
+        ))
+    body = "".join(
+        f"<tr><td>{lbl}</td><td style='text-align:right'>{val}</td></tr>"
+        for lbl, val in rows
+    )
+    return (
+        f"<table style='width:100%;font-size:0.78rem;line-height:1.5;border-collapse:collapse;'>"
+        f"{body}</table>"
+    )
+
+
 def pressure_drop_layers_display_frames(rows: list) -> tuple:
     """
     Convert pressure_drop()['layers'] rows (SI) to display-unit DataFrames.
@@ -619,6 +700,100 @@ def filtration_dp_curve_display_df(rows: list):
             f"M ({ulbl('loading_kg_m2')})": round(dv(m_si, "loading_kg_m2"), 4),
             f"ΔP cake ({ulbl('pressure_bar')})": round(dv(dpc, "pressure_bar"), 4),
             f"ΔP total ({ulbl('pressure_bar')})": round(dv(dpt, "pressure_bar"), 4),
+        })
+    return pd.DataFrame(recs)
+
+
+def _fmt_cycle_h(val: Any) -> str:
+    if val is None:
+        return "—"
+    try:
+        v = float(val)
+        if v != v:
+            return "—"
+    except (TypeError, ValueError):
+        return "—"
+    return fmt(v, "time_h", 2)
+
+
+def staged_orifice_bands_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Staged perforation bands table (advisory drill schedule)."""
+    if not rows:
+        return pd.DataFrame()
+    _d = ulbl("length_mm")
+    recs = []
+    for r in rows:
+        recs.append({
+            "Lateral #": int(r.get("lateral_index", 0) or 0),
+            "Hole from #": int(r.get("hole_index_from", 0) or 0),
+            "Hole to #": int(r.get("hole_index_to", 0) or 0),
+            "Band #": int(r.get("band_index", 0) or 0),
+            f"Baseline Ø ({_d})": fmt(float(r.get("d_mm_baseline", 0)), "length_mm", 1),
+            f"Ideal mean Ø in band ({_d})": fmt(
+                float(r.get("d_mm_ideal_mean_in_band_mm", 0)), "length_mm", 1
+            ),
+            f"Recommended Ø ({_d})": fmt(float(r.get("d_mm_recommended", 0)), "length_mm", 1),
+        })
+    return pd.DataFrame(recs)
+
+
+def staged_orifice_hole_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Per-hole staged perforation detail (advisory)."""
+    if not rows:
+        return pd.DataFrame()
+    _d = ulbl("length_mm")
+    _v = ulbl("velocity_m_s")
+    _q = ulbl("flow_m3h")
+    recs = []
+    for r in rows:
+        recs.append({
+            "Lateral #": int(r.get("lateral_index", 0) or 0),
+            "Hole #": int(r.get("hole_index", 0) or 0),
+            f"Flow ({_q})": fmt(float(r.get("flow_m3h", 0)), "flow_m3h", 3),
+            f"Baseline Ø ({_d})": fmt(float(r.get("d_mm_baseline", 0)), "length_mm", 1),
+            f"Recommended Ø ({_d})": fmt(float(r.get("d_mm_recommended", 0)), "length_mm", 1),
+            f"V baseline ({_v})": fmt(
+                float(r.get("velocity_baseline_m_s", 0)), "velocity_m_s", 2
+            ),
+            f"V after snap ({_v})": fmt(
+                float(r.get("velocity_estimated_after_snap_m_s", 0)), "velocity_m_s", 2
+            ),
+        })
+    return pd.DataFrame(recs)
+
+
+def nozzle_plate_hole_display_df(rows: list[dict[str, Any]]) -> pd.DataFrame:
+    """Nozzle-plate hole network for Backwash §6 (display units)."""
+    if not rows:
+        return pd.DataFrame()
+    recs = []
+    for r in rows:
+        recs.append({
+            "Row (across chord)": int(r.get("lateral_index", 0) or 0),
+            "Hole": int(r.get("hole_index", 0) or 0),
+            f"Station ({ulbl('length_m')})": fmt(float(r.get("station_m", 0)), "length_m", 2),
+            f"Flow ({ulbl('flow_m3h')})": fmt(float(r.get("flow_m3h", 0)), "flow_m3h", 3),
+            f"Velocity ({ulbl('velocity_m_s')})": fmt(float(r.get("velocity_m_s", 0)), "velocity_m_s", 2),
+            f"Ø ({ulbl('length_mm')})": fmt(float(r.get("orifice_d_mm", 0)), "length_mm", 1),
+        })
+    return pd.DataFrame(recs)
+
+
+def cycle_driver_decomposition_display_df(drivers: list[dict[str, Any]]) -> pd.DataFrame:
+    """Human-readable columns for cycle uncertainty driver decomposition."""
+    if not drivers:
+        return pd.DataFrame()
+    _th = ulbl("time_h")
+    recs = []
+    for d in drivers:
+        recs.append({
+            "Driver": str(d.get("driver", "—")),
+            f"Cycle — optimistic only ({_th})": _fmt_cycle_h(d.get("cycle_optimistic_only_h")),
+            f"Cycle — conservative only ({_th})": _fmt_cycle_h(d.get("cycle_conservative_only_h")),
+            f"Δ vs expected — optimistic ({_th})": _fmt_cycle_h(d.get("delta_optimistic_h")),
+            f"Δ vs expected — conservative ({_th})": _fmt_cycle_h(d.get("delta_conservative_h")),
+            f"Swing ({_th})": _fmt_cycle_h(d.get("swing_h")),
+            f"Impact rank (|swing|, {_th})": _fmt_cycle_h(d.get("rank_metric")),
         })
     return pd.DataFrame(recs)
 

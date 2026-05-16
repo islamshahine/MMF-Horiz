@@ -16,7 +16,7 @@ import streamlit as st
 from engine.mechanical import (
     MATERIALS, RADIOGRAPHY_OPTIONS, JOINT_EFFICIENCY,
     STEEL_DENSITY_KG_M3, SUPPORT_TYPES,
-    NOZZLE_DENSITY_MIN, NOZZLE_DENSITY_MAX, NOZZLE_DENSITY_DEFAULT,
+    NOZZLE_DENSITY_DEFAULT,
     STRAINER_WEIGHT_KG, MANHOLE_WEIGHT_KG,
 )
 from engine.coating import (
@@ -124,7 +124,7 @@ else:
             RUBBER_TYPES, EPOXY_TYPES, CERAMIC_TYPES,
             DEFAULT_LABOR_RUBBER_M2, DEFAULT_LABOR_EPOXY_M2, DEFAULT_LABOR_CERAMIC_M2,
             STEEL_DENSITY_KG_M3, FLANGE_RATINGS, STRAINER_WEIGHT_KG, MANHOLE_WEIGHT_KG,
-            SUPPORT_TYPES, NOZZLE_DENSITY_DEFAULT, NOZZLE_DENSITY_MIN, NOZZLE_DENSITY_MAX,
+            SUPPORT_TYPES, NOZZLE_DENSITY_DEFAULT,
             ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS, HOUSING_CAPACITY_OPTIONS,
             DEFAULT_ELEMENTS_PER_HOUSING, SAFETY_FACTOR_CIP, SAFETY_FACTOR_STD,
         )
@@ -146,6 +146,14 @@ _inputs_for_compute = patch_inputs_collector_header_si(
 from ui.compute_cache import _COMPUTE_CACHE_VERSION
 
 computed = compute_all_cached(_inputs_for_compute, _COMPUTE_CACHE_VERSION)
+from engine.design_basis import build_design_basis
+from engine.explainability import build_explainability_index
+from engine.lifecycle_degradation import build_lifecycle_degradation
+
+computed["design_basis"] = build_design_basis(_inputs_for_compute, computed)
+computed["explainability"] = build_explainability_index(_inputs_for_compute, computed)
+computed["lifecycle_degradation"] = build_lifecycle_degradation(_inputs_for_compute, computed)
+st.session_state["mmf_last_computed"] = computed
 
 _INTRO_CAPTION = (
     "**Columns:** Left = inputs, right = results. Each side scrolls independently where your browser supports "

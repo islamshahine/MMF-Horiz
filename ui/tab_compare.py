@@ -299,14 +299,19 @@ def render_tab_compare(inputs: dict, computed: dict) -> None:
 
     st.divider()
     st.markdown("### Design library — multi-case comparison")
-    st.caption(
-        f"Save up to **{4}** named designs (full SI inputs) and compare metrics across "
-        "2–4 cases. Design A/B above remains the quick two-way workflow."
-    )
     from engine.compare_workspace import (
-        MAX_COMPARE_CASES,
+        COMPARE_TABLE_PAGE_SIZE,
+        MAX_COMPARE_SELECTION,
+        MAX_LIBRARY_CASES,
         compare_many_designs,
+        slice_compare_result,
         snapshot_case_inputs,
+    )
+
+    st.caption(
+        f"Save up to **{MAX_LIBRARY_CASES}** named designs; compare **2–{MAX_COMPARE_SELECTION}** "
+        f"at once (table shows **{COMPARE_TABLE_PAGE_SIZE}** cases per page). "
+        "Design A/B above remains the quick two-way workflow."
     )
 
     if "compare_library" not in st.session_state:
@@ -322,8 +327,8 @@ def render_tab_compare(inputs: dict, computed: dict) -> None:
     with lc2:
         if st.button("Save current design", use_container_width=True, key="compare_lib_save"):
             _lib = list(st.session_state["compare_library"])
-            if len(_lib) >= MAX_COMPARE_CASES:
-                st.warning(f"Library full ({MAX_COMPARE_CASES} cases). Remove one first.")
+            if len(_lib) >= MAX_LIBRARY_CASES:
+                st.warning(f"Library full ({MAX_LIBRARY_CASES} cases). Remove one first.")
             else:
                 _lib.append(snapshot_case_inputs(inputs, label=_new_lbl))
                 st.session_state["compare_library"] = _lib
@@ -352,10 +357,10 @@ def render_tab_compare(inputs: dict, computed: dict) -> None:
 
         _pick_labels = [c["label"] for c in _lib]
         _selected = st.multiselect(
-            "Cases to compare (2–4)",
+            f"Cases to compare (2–{MAX_COMPARE_SELECTION})",
             _pick_labels,
-            default=_pick_labels[: min(3, len(_pick_labels))],
-            max_selections=MAX_COMPARE_CASES,
+            default=_pick_labels[: min(4, len(_pick_labels))],
+            max_selections=MAX_COMPARE_SELECTION,
             key="compare_lib_pick",
         )
         if len(_selected) >= 2 and st.button(
@@ -370,26 +375,63 @@ def render_tab_compare(inputs: dict, computed: dict) -> None:
                         _inp = next(c["inputs"] for c in _lib if c["label"] == _lbl)
                         _cases_run.append((_lbl, compute_all(dict(_inp))))
                 st.session_state["compare_multi_result"] = compare_many_designs(_cases_run)
+                st.session_state["compare_multi_page"] = 0
             except Exception as ex:
                 st.error(f"Multi-case comparison failed: {ex}")
                 st.session_state.pop("compare_multi_result", None)
+                st.session_state.pop("compare_multi_page", None)
 
         _multi = st.session_state.get("compare_multi_result")
         if _multi:
+            _n_pages = int(_multi.get("n_pages") or 1)
+            _page = int(st.session_state.get("compare_multi_page") or 0)
+            if _page >= _n_pages:
+                _page = 0
+                st.session_state["compare_multi_page"] = 0
+            _view = (
+                _multi
+                if _n_pages <= 1
+                else slice_compare_result(_multi, _page)
+            )
             st.markdown("#### Metrics across selected cases")
+            if _n_pages > 1:
+                _pc1, _pc2, _pc3 = st.columns([1, 2, 1])
+                with _pc1:
+                    if st.button("◀ Prev", key="compare_multi_prev", disabled=_page <= 0):
+                        st.session_state["compare_multi_page"] = max(0, _page - 1)
+                        st.rerun()
+                with _pc2:
+                    st.caption(
+                        f"Page **{_page + 1} / {_n_pages}** — cases "
+                        f"**{', '.join(_view['labels'])}** "
+                        f"(of {', '.join(_multi['labels'])})"
+                    )
+                with _pc3:
+                    if st.button("Next ▶", key="compare_multi_next", disabled=_page >= _n_pages - 1):
+                        st.session_state["compare_multi_page"] = min(_n_pages - 1, _page + 1)
+                        st.rerun()
             _rows = []
+            for _m in _view["metrics"]:
+                _row = {"Metric": _m["metric"]}
+                for _lbl in _view["labels"]:
+                    _v = _m.get(_lbl)
+                    _row[_lbl] = fmt(_v, _m["unit_quantity"], _m["decimals"]) if _v is not None else "—"
+                _sp = _m.get("spread_pct")
+                _row["Spread % (page)"] = f"{_sp:.1f}" if _sp is not None else "—"
+                _rows.append(_row)
+            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+            _csv_rows = []
             for _m in _multi["metrics"]:
                 _row = {"Metric": _m["metric"]}
                 for _lbl in _multi["labels"]:
                     _v = _m.get(_lbl)
                     _row[_lbl] = fmt(_v, _m["unit_quantity"], _m["decimals"]) if _v is not None else "—"
                 _sp = _m.get("spread_pct")
-                _row["Spread %"] = f"{_sp:.1f}" if _sp is not None else "—"
-                _rows.append(_row)
-            st.dataframe(pd.DataFrame(_rows), use_container_width=True, hide_index=True)
+                _row["Spread % (all)"] = f"{_sp:.1f}" if _sp is not None else "—"
+                _csv_rows.append(_row)
             st.download_button(
                 "⬇️  Download multi-case table (.csv)",
-                data=pd.DataFrame(_rows).to_csv(index=False),
+                data=pd.DataFrame(_csv_rows).to_csv(index=False),
                 file_name="aquasight_multicase_comparison.csv",
                 mime="text/csv",
                 use_container_width=True,

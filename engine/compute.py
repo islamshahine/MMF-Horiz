@@ -41,7 +41,7 @@ from engine.collector_intelligence import analyse_collector_performance
 from engine.collector_velocity_risk import analyse_collector_velocity_risk
 from engine.collector_hydraulics import compute_collector_hydraulics, distribution_solver_converged
 from engine.collector_geometry import enrich_collector_design_advisory
-from engine.design_basis import build_design_basis
+from engine.nozzle_system import build_underdrain_system_advisory
 
 
 def lv_severity_classify(vel: float, threshold: float):
@@ -183,7 +183,9 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         bw_head_mwc     = _work["bw_head_mwc"]
         default_rating  = _work["default_rating"]
         nozzle_stub_len = _work["nozzle_stub_len"]
-        strainer_mat    = _work["strainer_mat"]
+        from engine.strainer_materials import normalize_strainer_material, strainer_material_advisory
+
+        strainer_mat    = normalize_strainer_material(_work.get("strainer_mat", "Super_duplex_2507"))
         air_header_dn   = _work["air_header_dn"]
         manhole_dn      = _work["manhole_dn"]
         n_manholes      = _work["n_manholes"]
@@ -345,7 +347,55 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             q_bw_m3h=_q_bw_est,
             **_col_kwargs,
         )
+        from engine.collector_nozzle_plate import compute_nozzle_plate_bw_hydraulics
+        from engine.mechanical import nozzle_plate_area, nozzle_plate_bore_layout
+
+        _np_geo = nozzle_plate_area(
+            h_m=float(nozzle_plate_h),
+            vessel_id_m=float(real_id),
+            cyl_len_m=cyl_len,
+            h_dish_m=h_dish,
+        )
+        _plate_area = float(_np_geo["area_total_m2"])
+        from engine.nozzle_plate_catalogue import uses_drilled_density_band
+
+        _clamp_np_dens = uses_drilled_density_band(_work.get("nozzle_catalogue_id"))
+        _np_bores = nozzle_plate_bore_layout(
+            _plate_area, float(np_density), clamp_drilled_band=_clamp_np_dens,
+        )
+
+        collector_nozzle_plate = compute_nozzle_plate_bw_hydraulics(
+            q_bw_m3h=_q_bw_est,
+            nozzle_plate_area_m2=_plate_area,
+            cyl_len_m=float(total_length),
+            straight_cyl_len_m=float(cyl_len),
+            nominal_id_m=float(real_id),
+            np_bore_dia_mm=float(np_bore_dia),
+            np_density_per_m2=float(np_density),
+            n_holes_total=int(_np_bores["n_bores"]),
+            chord_m=float(_np_geo.get("chord_m") or 0.0),
+            area_cyl_m2=float(_np_geo.get("area_cyl_m2") or 0.0),
+            area_one_dish_m2=float(_np_geo.get("area_one_dish_m2") or 0.0),
+            collector_header_id_m=float(_work.get("collector_header_id_m", 0.25) or 0.25),
+            nozzle_plate_h_m=float(nozzle_plate_h),
+            collector_h_m=float(collector_h),
+            n_rows_along_drum=int(_work.get("n_nozzle_rows", 0) or 0),
+            h_dish_m=float(h_dish),
+            discharge_coefficient=float(_work.get("lateral_discharge_cd", 0.62) or 0.62),
+            header_feed_mode=str(_work.get("collector_header_feed_mode", "one_end") or "one_end"),
+            k_tee_branch=(
+                K_TEE_BRANCH_DEFAULT
+                if bool(_work.get("collector_tee_loss_enable", False))
+                else 0.0
+            ),
+            rho_water=rho_bw,
+            media_avg_bed_area_m2=float(avg_area),
+        )
         _mal_calc = float(collector_hyd.get("maldistribution_factor_calc", 1.0) or 1.0)
+        if collector_nozzle_plate.get("active"):
+            _mal_calc = float(
+                collector_nozzle_plate.get("distribution_factor_calc", 1.0) or 1.0
+            )
         _mal = max(1.0, min(2.0, _mal_calc if _use_mal_calc else _mal_user))
 
         # ── Block 4: Pressure drop (Ergun) ────────────────────────────────────────
@@ -382,6 +432,11 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             density_kg_m3=steel_density,
             override_thickness_mm=np_override_t,
         )
+        if collector_nozzle_plate.get("active"):
+            collector_nozzle_plate["n_bores_mechanical"] = int(wt_np.get("n_bores", 0) or 0)
+            collector_nozzle_plate["actual_density_per_m2"] = float(
+                wt_np.get("actual_density_per_m2", 0) or 0
+            )
 
         # ── Block 6: Supports ─────────────────────────────────────────────────────
         wt_sup = saddle_weight(
@@ -659,6 +714,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             bw_trains=_bw_trains_tl,
             stagger_model=_stag,
             sim_demand=_sim_d_tl,
+            n_streams=max(1, int(streams)),
         )
         bw_timeline["horizon_days"] = _horizon_days
         _n_des_paths = streams * max(1, n_filters - hydraulic_assist)
@@ -1288,11 +1344,20 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             "collector_bw_envelope": collector_bw_envelope,
             "collector_staged_orifices": collector_staged_orifices,
             "collector_hyd": collector_hyd,
+            "collector_nozzle_plate": collector_nozzle_plate,
             "collector_cfd_bundle": collector_cfd_bundle,
             "maldistribution_factor_user": _mal_user,
             "maldistribution_from_collector_model": _use_mal_calc,
             "air_scour_solve": air_scour_solve,
             "bw_timeline": bw_timeline,
+            "strainer_material_advisory": strainer_material_advisory(
+                salinity_ppt=float(_work.get("feed_sal", 35.0) or 35.0),
+                strainer_material=strainer_mat,
+            ),
+            "underdrain_system_advisory": build_underdrain_system_advisory(
+                _work,
+                salinity_ppt=float(_work.get("feed_sal", 35.0) or 35.0),
+            ),
             # TSS balance
             "m_sol_low": m_sol_low, "w_tss_low": w_tss_low, "m_daily_low": m_daily_low,
             "m_sol_avg": m_sol_avg, "w_tss_avg": w_tss_avg, "m_daily_avg": m_daily_avg,
@@ -1335,10 +1400,4 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             "input_validation": input_validation,
             "compute_used_reference_fallback": (not input_validation["valid"]),
             "env_structural": env_structural,
-            "design_basis": build_design_basis(_work, {
-                "q_per_filter": q_per_filter,
-                "maldistribution_factor": _mal,
-                "maldistribution_from_collector_model": _use_mal_calc,
-                "collector_hyd": collector_hyd,
-            }),
         }

@@ -8,7 +8,7 @@ import streamlit as st
 
 
 # Bump when computed dict shape / collector rules change (invalidates Streamlit LRU cache).
-_COMPUTE_CACHE_VERSION = 22
+_COMPUTE_CACHE_VERSION = 25  # nozzle plate layout incl. dish-head zones
 
 
 @st.cache_data(show_spinner=True, max_entries=48)

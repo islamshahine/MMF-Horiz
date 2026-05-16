@@ -2,10 +2,12 @@
 import streamlit as st
 from ui.helpers import fmt, ulbl, dv, fmt_bar_mwc
 from engine.design_basis_report import (
+    assumptions_catalog_rows,
     collector_summary_rows,
     design_basis_meta_rows,
     plain_text,
     traceability_table_rows,
+    underdrain_summary_rows,
 )
 from engine.pdf_report import build_pdf, PDF_OK as _PDF_OK
 from ui.scroll_markers import inject_anchor
@@ -155,14 +157,41 @@ def render_tab_report(inputs: dict, computed: dict):
             f"Assumptions, limits, and output traceability for enterprise review. "
             f"Reference: **{_basis.get('doc_reference', 'AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md')}**"
         )
-        if _basis.get("assumptions"):
+        if _basis.get("assumptions_catalog"):
+            st.markdown("**Assumptions (catalog)**")
+            import pandas as pd
+
+            _ac = assumptions_catalog_rows(_basis)
+            st.dataframe(
+                pd.DataFrame(_ac[1:], columns=_ac[0]),
+                use_container_width=True,
+                hide_index=True,
+            )
+        elif _basis.get("assumptions"):
             st.markdown("**Assumptions**")
             for _a in _basis["assumptions"]:
                 st.markdown(f"- {_a}")
+        _trace = traceability_table_rows(_basis)
+        if len(_trace) > 1:
+            st.markdown("**Output traceability**")
+            import pandas as pd
+
+            st.dataframe(
+                pd.DataFrame(_trace[1:], columns=_trace[0]),
+                use_container_width=True,
+                hide_index=True,
+            )
         if _basis.get("limits_and_criteria"):
             st.markdown("**Limits & criteria**")
             for _lim in _basis["limits_and_criteria"]:
                 st.markdown(f"- {_lim}")
+        _ud = _basis.get("underdrain") or {}
+        if _ud:
+            st.markdown(
+                f"**Underdrain:** {_ud.get('catalogue_label', '—')} · "
+                f"ρ **{_ud.get('np_density_per_m2', '—')} /m²** · "
+                f"strainer **{_ud.get('strainer_material', '—')}**"
+            )
         _col = _basis.get("collector") or {}
         if _col:
             _dist = _col.get("distribution") or {}

@@ -296,6 +296,125 @@ def fouling_confidence_level(
     return {"level": level, "score": score, "note": note}
 
 
+def fouling_cycle_uncertainty_crosscheck(
+    *,
+    indicative_run_time_h: float,
+    cycle_uncertainty_n: dict[str, Any] | None,
+) -> Dict[str, Any]:
+    """
+    Compare fouling-assistant indicative run time to the **N-scenario** cycle band
+    from ``computed["cycle_uncertainty"]`` (Filtration tab).
+    """
+    if not cycle_uncertainty_n:
+        return {
+            "available": False,
+            "note": (
+                "Hydraulic cycle model not loaded yet — open results (or hide inputs) so "
+                "**compute_all** runs, then revisit this step."
+            ),
+        }
+    exp_h = float(cycle_uncertainty_n.get("cycle_expected_h") or 0.0)
+    opt_h = float(cycle_uncertainty_n.get("cycle_optimistic_h") or 0.0)
+    con_h = float(cycle_uncertainty_n.get("cycle_conservative_h") or 0.0)
+    spread = float(cycle_uncertainty_n.get("spread_pct") or 0.0)
+    ind = max(0.1, float(indicative_run_time_h))
+    if exp_h <= 0:
+        return {
+            "available": False,
+            "note": "Cycle uncertainty data present but expected cycle duration is missing.",
+        }
+    ratio = ind / exp_h
+    if opt_h <= ind <= con_h:
+        alignment = "within_band"
+        note = (
+            f"Indicative fouling run time **{ind:.1f} h** sits inside the model band "
+            f"**{opt_h:.1f}–{con_h:.1f} h** (expected **{exp_h:.1f} h**, spread **{spread:.0f}%**)."
+        )
+    elif ind < opt_h:
+        alignment = "shorter_than_optimistic"
+        note = (
+            f"Indicative **{ind:.1f} h** is below the model optimistic **{opt_h:.1f} h** "
+            f"(expected **{exp_h:.1f} h**) — fouling panel may be conservative or M_max not yet applied."
+        )
+    elif ind > con_h:
+        alignment = "longer_than_conservative"
+        note = (
+            f"Indicative **{ind:.1f} h** exceeds model conservative **{con_h:.1f} h** "
+            f"(expected **{exp_h:.1f} h**) — review TSS bands, α, and maldistribution on Process / Media."
+        )
+    else:
+        alignment = "outside_band"
+        note = (
+            f"Indicative **{ind:.1f} h** vs model expected **{exp_h:.1f} h** (ratio **{ratio:.2f}×**). "
+            f"Use both as brackets until pilot data confirms."
+        )
+    return {
+        "available": True,
+        "alignment": alignment,
+        "indicative_run_time_h": round(ind, 2),
+        "cycle_expected_h": round(exp_h, 2),
+        "cycle_optimistic_h": round(opt_h, 2),
+        "cycle_conservative_h": round(con_h, 2),
+        "spread_pct": round(spread, 1),
+        "ratio_to_expected": round(ratio, 3),
+        "note": note,
+    }
+
+
+def build_fouling_assessment(
+    *,
+    tss_mg_l: float,
+    lv_m_h: float,
+    sdi15: float,
+    mfi_index: float,
+    test_blocked: bool = False,
+    blocked_cap: float = SDI_BLOCKED_CAP_DEFAULT,
+    seasonal_variability: str = "moderate",
+    algae_risk: str = "low",
+    has_upstream_uf_daf: bool = False,
+    cycle_uncertainty_n: dict[str, Any] | None = None,
+) -> Dict[str, Any]:
+    """Single structured fouling assessment for UI, tests, and future report export."""
+    sdi_eff, sdi_extra = effective_sdi15_for_correlation(
+        float(sdi15), test_blocked=test_blocked, blocked_cap=float(blocked_cap),
+    )
+    esl = estimate_solids_loading(tss_mg_l=tss_mg_l, lv_m_h=lv_m_h, sdi15=sdi_eff, mfi_index=mfi_index)
+    sev = estimate_fouling_severity(sdi15=sdi_eff, mfi_index=mfi_index, tss_mg_l=tss_mg_l, lv_m_h=lv_m_h)
+    rt = estimate_run_time(sdi15=sdi_eff, mfi_index=mfi_index, tss_mg_l=tss_mg_l, lv_m_h=lv_m_h)
+    bw = estimate_bw_frequency(run_time_h=float(rt["run_time_h"]))
+    stab = water_stability_class(
+        severity=str(sev["severity"]),
+        seasonal_variability=str(seasonal_variability),
+        algae_risk=str(algae_risk),
+    )
+    conf = fouling_confidence_level(
+        sdi15=sdi_eff,
+        mfi_index=mfi_index,
+        tss_mg_l=tss_mg_l,
+        has_upstream_uf_daf=has_upstream_uf_daf,
+        seasonal_variability=str(seasonal_variability),
+    )
+    cross = fouling_cycle_uncertainty_crosscheck(
+        indicative_run_time_h=float(rt["run_time_h"]),
+        cycle_uncertainty_n=cycle_uncertainty_n,
+    )
+    warnings: List[str] = []
+    for w in sdi_extra + esl.get("warnings", ()) + sev.get("warnings", ()) + rt.get("warnings", ()):
+        if w and w not in warnings:
+            warnings.append(w)
+    return {
+        "solid_loading_kg_m2": float(esl["solid_loading_kg_m2"]),
+        "severity": sev,
+        "run_time": rt,
+        "bw_frequency": bw,
+        "stability": stab,
+        "confidence": conf,
+        "cycle_crosscheck": cross,
+        "warnings": warnings,
+        "sdi_effective": sdi_eff,
+    }
+
+
 def fouling_advisory_recommendations(
     *,
     severity: str,
@@ -332,4 +451,6 @@ __all__ = [
     "water_stability_class",
     "fouling_confidence_level",
     "fouling_advisory_recommendations",
+    "fouling_cycle_uncertainty_crosscheck",
+    "build_fouling_assessment",
 ]

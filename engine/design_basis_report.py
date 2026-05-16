@@ -23,19 +23,43 @@ def design_basis_meta_rows(basis: dict[str, Any]) -> list[list[str]]:
     ]
 
 
+def assumptions_catalog_rows(basis: dict[str, Any]) -> list[list[str]]:
+    header = ["ID", "Category", "Assumption"]
+    rows: list[list[str]] = [header]
+    for a in basis.get("assumptions_catalog") or []:
+        rows.append([
+            str(a.get("id", "")),
+            str(a.get("category", "")),
+            plain_text(str(a.get("text", ""))),
+        ])
+    return rows
+
+
 def traceability_table_rows(basis: dict[str, Any]) -> list[list[str]]:
-    header = ["Output", "Value", "Unit", "Source", "Doc §"]
+    header = ["ID", "Label", "Value", "Unit", "Source", "Doc §"]
     rows: list[list[str]] = [header]
     for t in basis.get("traceability") or []:
         val = t.get("value_si", t.get("value", ""))
         rows.append([
-            str(t.get("output", "")),
+            str(t.get("trace_id", "")),
+            str(t.get("label", t.get("output", ""))),
             str(val),
             str(t.get("unit", "")),
             str(t.get("source", "")),
             str(t.get("doc_section", "")),
         ])
     return rows
+
+
+def underdrain_summary_rows(underdrain: dict[str, Any]) -> list[list[str]]:
+    if not underdrain:
+        return []
+    return [
+        ["Catalogue", str(underdrain.get("catalogue_label", "—"))],
+        ["Hole density", f"{underdrain.get('np_density_per_m2', '—')} /m²"],
+        ["Strainer", str(underdrain.get("strainer_material", "—"))],
+        ["Advisory tone", str(underdrain.get("tone", "—"))],
+    ]
 
 
 def collector_summary_rows(collector: dict[str, Any]) -> list[list[str]]:

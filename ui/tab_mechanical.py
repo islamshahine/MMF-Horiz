@@ -258,6 +258,15 @@ def render_tab_mechanical(inputs: dict, computed: dict):
              f"{fmt(w_total_final, 'mass_kg', 1):>18}"],
             ["", f"= {fmt(w_total_final / 1000.0, 'mass_t', 3)}"],
         ], columns=["Component", "Weight"]), **ST_DATAFRAME_KW)
+        _str_adv = computed.get("strainer_material_advisory") or {}
+        if _str_adv:
+            _pren = _str_adv.get("pren_typical")
+            _pren_txt = f" · typical PREN ~{_pren}" if _pren is not None else ""
+            st.caption(
+                f"Strainer nozzles: **{_str_adv.get('material_label', '—')}** "
+                f"({float(_str_adv.get('salinity_ppt', 0)):.1f} ppt {_str_adv.get('water_service', '')} service)"
+                f"{_pren_txt} — alloy guidance only."
+            )
         e1, e2, e3, e4, e5, e6 = st.columns(6)
         e1.metric("Shell+heads", fmt(wt_body["weight_body_kg"], "mass_kg", 0))
         e2.metric("Nozzles",     fmt(nozzle_wt_edited, "mass_kg", 0))

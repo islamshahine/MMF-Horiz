@@ -51,6 +51,7 @@ def build_pdf(
         design_basis_meta_rows,
         plain_text,
         traceability_table_rows,
+        underdrain_summary_rows,
     )
     from engine.units import format_value as _fmt
 
@@ -215,6 +216,10 @@ def build_pdf(
         if len(_trace) > 1:
             _h("Output traceability")
             _add(_trace, w0=42 * mm)
+        _ud = basis.get("underdrain") or {}
+        if _ud:
+            _h("Underdrain summary")
+            _add(underdrain_summary_rows(_ud), w0=50 * mm)
         _col = basis.get("collector") or {}
         if _col:
             _h("Collector model summary")

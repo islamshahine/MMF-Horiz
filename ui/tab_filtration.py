@@ -6,7 +6,10 @@ from engine.backwash import pressure_drop
 from engine.thresholds import layer_ebct_floor_min, layer_lv_cap_m_h
 from ui.helpers import (
     fmt, ulbl, dv, show_alert, pressure_drop_layers_display_frames,
-    cycle_matrix_temp_title, cycle_matrix_tss_row_title, filtration_dp_curve_display_df,
+    cycle_matrix_temp_title, cycle_matrix_tss_row_title,     filtration_dp_curve_display_df,
+    cycle_driver_decomposition_display_df,
+    metric_explain_help,
+    render_metric_explain_panel,
     ST_DATAFRAME_KW,
 )
 from ui.scroll_markers import inject_anchor
@@ -78,8 +81,20 @@ def render_tab_filtration(inputs: dict, computed: dict):
         "Edit duty, water, **M_max / α / fouling** on **🧱 Media** sidebar; **per-layer ΔP tables** → **🧱 Media** tab §3."
     )
     st.caption(
-        "**LV / EBCT** use **chordal slice areas** per layer. **Ergun + cake** share the same maldistribution factor as **🧱 Media** §3; "
+        "**LV / EBCT** use **chordal slice areas** per layer. **Ergun + cake** share the same **filtration maldistribution factor** as **🧱 Media** §3; "
         "full layer tables and capture-weight narrative live there — this tab keeps scenario roll-ups."
+    )
+    render_metric_explain_panel(
+        inputs,
+        computed,
+        [
+            "q_per_filter",
+            "solid_loading_effective",
+            "maldistribution_factor",
+            "dp_dirty",
+            "cycle_expected_h",
+            "cycle_uncertainty_spread",
+        ],
     )
 
     with st.expander("🌊 Water properties — feed & backwash", expanded=False):
@@ -215,6 +230,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
             fmt(bw_dp["dp_clean_bar"], "pressure_bar", 5),
             delta=fmt(bw_dp["dp_clean_mwc"], "pressure_mwc", 3),
             delta_color="off",
+            help=metric_explain_help("dp_dirty", inputs, computed) or None,
         )
         p2.metric(
             f"ΔP moderate (N) ({ulbl('pressure_bar')})",
@@ -227,6 +243,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
             fmt(bw_dp["dp_dirty_bar"], "pressure_bar", 5),
             delta=fmt(bw_dp["dp_dirty_mwc"], "pressure_mwc", 3),
             delta_color="off",
+            help=metric_explain_help("dp_dirty", inputs, computed) or None,
         )
 
     with st.expander("Filtration cycle matrix — TSS × temperature", expanded=True):
@@ -290,9 +307,11 @@ def render_tab_filtration(inputs: dict, computed: dict):
     if _cycle_unc:
         with st.expander("Cycle duration uncertainty — optimistic / expected / conservative", expanded=False):
             st.caption(
-                "Deterministic envelope at **design TSS** (not probabilistic). "
-                "Corners vary α calibration, TSS, capture efficiency, and maldistribution — see "
-                "`engine/uncertainty.py`."
+                "Deterministic cycle band at **design TSS** (not Monte Carlo). "
+                "**Corner-case envelope** — optimistic / expected / conservative with "
+                "α calibration, feed TSS, capture efficiency, and **filtration maldistribution factor** varied together. "
+                "**Driver decomposition** (N scenario) — same four factors perturbed **one at a time** "
+                "and ranked by cycle swing (table and chart below)."
             )
             _unc_rows = []
             for _sc, _u in _cycle_unc.items():
@@ -315,9 +334,8 @@ def render_tab_filtration(inputs: dict, computed: dict):
                     st.markdown(_line)
                 if _dec.get("drivers"):
                     st.dataframe(
-                        pd.DataFrame(_dec["drivers"]),
-                        use_container_width=True,
-                        hide_index=True,
+                        cycle_driver_decomposition_display_df(_dec["drivers"]),
+                        **ST_DATAFRAME_KW,
                     )
                 try:
                     import plotly.graph_objects as go

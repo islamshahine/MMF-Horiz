@@ -80,6 +80,45 @@ def _add_plan_horizontal_dimension(
     )
 
 
+def _add_plan_vertical_dimension(
+    fig: "go.Figure",
+    *,
+    y0: float,
+    y1: float,
+    x_line: float,
+    label_html: str,
+    tick_w: float,
+    color: str = "#475569",
+    label_x: float | None = None,
+) -> None:
+    """Vertical c–c dimension (data coords, m) — chord / transverse."""
+    ya, yb = (y0, y1) if y0 <= y1 else (y1, y0)
+    if abs(yb - ya) < 1e-6:
+        return
+    fig.add_shape(
+        type="line", x0=x_line, x1=x_line, y0=ya, y1=yb,
+        line=dict(color=color, width=1.5), layer="above",
+    )
+    for yv in (ya, yb):
+        fig.add_shape(
+            type="line", x0=x_line - tick_w, x1=x_line + tick_w, y0=yv, y1=yv,
+            line=dict(color=color, width=1.5), layer="above",
+        )
+    ym = 0.5 * (ya + yb)
+    x_lbl = float(label_x) if label_x is not None else x_line - tick_w * 3.2
+    fig.add_annotation(
+        x=x_lbl, y=ym,
+        text=label_html,
+        showarrow=False,
+        font=dict(size=9, color=color),
+        bgcolor="rgba(248,250,252,0.95)",
+        bordercolor=color,
+        borderwidth=1,
+        borderpad=3,
+        xanchor="right",
+    )
+
+
 def _orifice_positions_along_lateral(
   n_orf: int, y_start: float, y_end: float,
 ) -> list[float]:
@@ -453,6 +492,270 @@ def build_collector_underdrain_figure(
         bgcolor="rgba(248,250,252,0.92)",
         bordercolor="#e2e8f0",
         borderwidth=1,
+    )
+    return fig
+
+
+def _stratified_hole_sample(
+    hole_network: list[dict[str, Any]],
+    max_per_row: int = 80,
+) -> list[dict[str, Any]]:
+    """Keep representation from every chord row (avoid global stride artefacts)."""
+    by_row: dict[int, list[dict[str, Any]]] = {}
+    for h in hole_network:
+        ri = int(h.get("row_index", h.get("lateral_index", 0)) or 0)
+        by_row.setdefault(ri, []).append(h)
+    out: list[dict[str, Any]] = []
+    for ri in sorted(by_row.keys()):
+        row = by_row[ri]
+        if len(row) <= max_per_row:
+            out.extend(row)
+        else:
+            out.extend(row[:: max(1, len(row) // max_per_row)])
+    return out
+
+
+def build_nozzle_plate_plan_figure(
+    *,
+    cyl_len_m: float,
+    chord_m: float,
+    hole_network: list[dict[str, Any]],
+    n_rows_across: int = 0,
+    n_per_row: int = 0,
+    n_holes_placed: int = 0,
+    pitch_long_mm: float = 100.0,
+    pitch_trans_mm: float = 100.0,
+    edge_margin_mm: float = 50.0,
+    field_x_start_m: float = 0.0,
+    field_x_end_m: float = 0.0,
+    field_y_plot_start_m: float = 0.0,
+    field_y_plot_end_m: float = 0.0,
+    head_inset_m: float = 0.0,
+    bore_d_mm: float = 50.0,
+    open_area_pct: float = 0.0,
+    v_max: float = 0.0,
+    plate_outline_x_m: list[float] | None = None,
+    plate_outline_y_top_m: list[float] | None = None,
+    plate_outline_y_bot_m: list[float] | None = None,
+    x_cyl_start_m: float = 0.0,
+    x_cyl_end_m: float = 0.0,
+) -> "go.Figure | None":
+    """
+    Plan view — brick rows across chord, nozzles along vessel length (spec layout).
+    No internal header shown.
+    """
+    if not _PLOTLY_OK or not hole_network:
+        return None
+
+    _y_vals = [float(h.get("y_plot_m", 0) or 0) for h in hole_network]
+    _y_unique = len({round(y, 4) for y in _y_vals})
+    if n_rows_across < 1:
+        n_rows_across = _y_unique
+    if n_per_row < 1 and n_rows_across > 0:
+        n_per_row = max(1, len(hole_network) // n_rows_across)
+
+    L = max(0.5, float(cyl_len_m or 1.0))
+    W = max(0.3, float(chord_m or 1.0))
+    v_cap = max(0.01, float(v_max or 1.0))
+    hinset = float(head_inset_m or 0.0)
+    bore_m = max(0.001, float(bore_d_mm or 50.0) / 1000.0)
+    # Marker size ∝ bore on equal-aspect plan (reference pitch ~100 mm)
+    _mk_px = max(4, min(14, 5.0 * bore_m / 0.05))
+
+    fx0 = float(field_x_start_m) if field_x_start_m else hinset
+    fx1 = float(field_x_end_m) if field_x_end_m else L - hinset
+    y_plot0 = float(field_y_plot_start_m) if field_y_plot_start_m else -W / 2.0
+    y_plot1 = float(field_y_plot_end_m) if field_y_plot_end_m else W / 2.0
+
+    # Plot all holes when modest count; stratify only for very large networks
+    if len(hole_network) <= 8000:
+        sample = hole_network
+    else:
+        sample = _stratified_hole_sample(hole_network, max_per_row=250)
+    even_x, even_y, even_v, even_hov = [], [], [], []
+    odd_x, odd_y, odd_v, odd_hov = [], [], [], []
+
+    for h in sample:
+        st = float(h.get("station_m", 0) or 0)
+        yp = float(h.get("y_plot_m", 0) or 0)
+        v = float(h.get("velocity_m_s", 0) or 0)
+        ri = int(h.get("row_index", 0) or 0)
+        hi = int(h.get("hole_index", 0) or 0)
+        txt = (
+            f"Row {ri} · hole {hi}<br>"
+            f"Longitudinal {fmt(st, 'length_m', 2)}<br>"
+            f"Across chord {fmt(yp, 'length_m', 2)}<br>"
+            f"V {fmt(v, 'velocity_m_s', 2)}"
+        )
+        if h.get("staggered"):
+            odd_x.append(st); odd_y.append(yp); odd_v.append(v); odd_hov.append(txt)
+        else:
+            even_x.append(st); even_y.append(yp); even_v.append(v); even_hov.append(txt)
+
+    fig = go.Figure()
+
+    ol_x = list(plate_outline_x_m or [])
+    ol_top = list(plate_outline_y_top_m or [])
+    ol_bot = list(plate_outline_y_bot_m or [])
+    if len(ol_x) >= 2 and len(ol_top) == len(ol_x) and len(ol_bot) == len(ol_x):
+        _px = ol_x + ol_x[::-1]
+        _py = ol_top + ol_bot[::-1]
+        fig.add_trace(go.Scatter(
+            x=_px, y=_py, fill="toself", mode="lines",
+            line=dict(color="#7dd3fc", width=1.5),
+            fillcolor="rgba(186,230,253,0.4)",
+            name="Nozzle plate (cyl + dish heads)",
+            hoverinfo="skip",
+        ))
+    else:
+        fig.add_shape(
+            type="rect", x0=0, y0=-W / 2, x1=L, y1=W / 2,
+            line=dict(color="#7dd3fc", width=1.5),
+            fillcolor="rgba(186,230,253,0.35)", layer="below",
+        )
+
+    if float(x_cyl_start_m) > 0 and float(x_cyl_end_m) > float(x_cyl_start_m):
+        for _xv in (float(x_cyl_start_m), float(x_cyl_end_m)):
+            fig.add_shape(
+                type="line",
+                x0=_xv, x1=_xv, y0=-W / 2 - 0.05 * W, y1=W / 2 + 0.05 * W,
+                line=dict(color="#94a3b8", width=1, dash="dot"),
+                layer="below",
+            )
+
+    fig.add_shape(
+        type="rect",
+        x0=fx0, x1=fx1, y0=y_plot0, y1=y_plot1,
+        line=dict(color="#0ea5e9", width=1, dash="dash"),
+        fillcolor="rgba(0,0,0,0)",
+        layer="above",
+    )
+
+    _mk = dict(
+        size=_mk_px, cmin=0, cmax=v_cap, colorscale="Turbo",
+        line=dict(width=0.5, color="#0f172a"), opacity=0.92,
+    )
+    if even_x:
+        fig.add_trace(go.Scatter(
+            x=even_x, y=even_y, mode="markers",
+            marker={**_mk, "color": even_v, "symbol": "circle"},
+            text=even_hov, hovertemplate="%{text}<extra></extra>",
+            name=f"Even rows (P_long={pitch_long_mm:.0f} mm)",
+        ))
+    if odd_x:
+        fig.add_trace(go.Scatter(
+            x=odd_x, y=odd_y, mode="markers",
+            marker={**_mk, "color": odd_v, "symbol": "circle-open"},
+            text=odd_hov, hovertemplate="%{text}<extra></extra>",
+            name=f"Odd rows (+½P_long stagger)",
+        ))
+
+    p_long_m = max(0.001, float(pitch_long_mm or 100.0) / 1000.0)
+    even_xs = sorted(
+        float(h.get("station_m", 0))
+        for h in hole_network
+        if not h.get("staggered")
+    )
+    if len(even_xs) >= 2:
+        _add_plan_horizontal_dimension(
+            fig, x0=even_xs[0], x1=even_xs[1],
+            y_line=y_plot0 - 0.08 * W,
+            label_html=f"P<sub>long</sub> = {fmt(even_xs[1] - even_xs[0], 'length_m', 2)}",
+            tick_h=0.02 * W, color="#0369a1", label_above=False,
+        )
+    elif even_xs:
+        _add_plan_horizontal_dimension(
+            fig, x0=even_xs[0], x1=even_xs[0] + p_long_m,
+            y_line=y_plot0 - 0.08 * W,
+            label_html=f"P<sub>long</sub> = {fmt(p_long_m, 'length_m', 2)}",
+            tick_h=0.02 * W, color="#0369a1", label_above=False,
+        )
+    y_centres = sorted({round(float(h.get("y_plot_m", 0)), 4) for h in hole_network})
+    if len(y_centres) >= 2:
+        dy = y_centres[1] - y_centres[0]
+        _add_plan_vertical_dimension(
+            fig,
+            y0=y_centres[0], y1=y_centres[1],
+            x_line=fx1 + 0.03 * L,
+            label_html=f"P<sub>trans</sub> = {fmt(dy, 'length_m', 2)}",
+            tick_w=0.02 * W,
+            color="#64748b",
+            label_x=fx1 + 0.06 * L,
+        )
+
+    _x_dim = max(0.04 * L, 0.25)
+    _add_plan_vertical_dimension(
+        fig,
+        y0=-W / 2, y1=W / 2,
+        x_line=-_x_dim,
+        label_html=f"Chord = {fmt(W, 'length_m', 2)}",
+        tick_w=0.02 * max(W, 0.2),
+        color="#334155",
+        label_x=-_x_dim - 0.04 * max(W, 0.2),
+    )
+    _add_plan_horizontal_dimension(
+        fig,
+        x0=0, x1=L,
+        y_line=y_plot0 - 0.14 * W,
+        label_html=f"L<sub>plate</sub> = {fmt(L, 'length_m', 2)}",
+        tick_h=0.02 * W,
+        color="#334155",
+        label_above=False,
+    )
+
+    _x_pad = max(0.10 * L, 0.55)
+    _y_pad = max(0.18 * W, 0.35)
+    fig.update_layout(
+        title=dict(
+            text="Nozzle plate — plan (brick / staggered layout)",
+            font=dict(size=13),
+        ),
+        xaxis=dict(
+            title=f"Longitudinal — along straight vessel length ({ulbl('length_m')})",
+            range=[-_x_pad, L + _x_pad],
+        ),
+        yaxis=dict(
+            title=f"Transverse — across plate chord ({ulbl('length_m')})",
+            range=[-W / 2 - _y_pad, W / 2 + _y_pad],
+            scaleanchor="x",
+            scaleratio=1,
+        ),
+        height=460,
+        margin=dict(l=56, r=56, t=52, b=80),
+        template="plotly_white",
+        plot_bgcolor="#f8fafc",
+        legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0.5, xanchor="center",
+                    font=dict(size=9)),
+    )
+    _placed = n_holes_placed or len(hole_network)
+    _npr = n_per_row or (max(1, _placed // max(1, n_rows_across)) if n_rows_across else 0)
+    fig.add_annotation(
+        x=0.02, y=0.98, xref="paper", yref="paper",
+        xanchor="left", yanchor="top", showarrow=False, align="left",
+        text=(
+            "<b>Derived layout</b><br>"
+            f"Rows: <b>{n_rows_across}</b><br>"
+            f"Nozzles/row: <b>{_npr}</b><br>"
+            f"Total placed: <b>{_placed}</b><br>"
+            f"P<sub>long</sub>: <b>{pitch_long_mm:.0f} mm</b><br>"
+            f"P<sub>trans</sub>: <b>{pitch_trans_mm:.0f} mm</b><br>"
+            f"Edge margin: <b>{edge_margin_mm:.0f} mm</b><br>"
+            f"Open area: <b>{open_area_pct:.1f}%</b>"
+        ),
+        font=dict(size=9, color="#0f172a"),
+        bgcolor="rgba(255,255,255,0.94)", bordercolor="#94a3b8", borderwidth=1,
+    )
+    fig.add_annotation(
+        x=0.5, y=-0.12, xref="paper", yref="paper",
+        xanchor="center", yanchor="top", showarrow=False, align="center",
+        text=(
+            f"Plan: <b>{fmt(L, 'length_m', 2)}</b> along drum (longitudinal) × "
+            f"<b>{fmt(W, 'length_m', 2)}</b> across chord (transverse) · "
+            f"rows // chord, nozzles // length · even rows +½P<sub>long</sub> · "
+            f"Ø <b>{bore_d_mm:.0f} mm</b>"
+        ),
+        font=dict(size=9, color="#475569"),
+        bgcolor="rgba(248,250,252,0.95)", bordercolor="#e2e8f0", borderwidth=1,
     )
     return fig
 

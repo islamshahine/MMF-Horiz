@@ -452,6 +452,7 @@ def filter_bw_timeline_24h(
     bw_trains: int | None = None,
     stagger_model: str = "feasibility_trains",
     sim_demand: float | None = None,
+    n_streams: int = 1,
 ) -> dict:
     """
     Filter duty chart: operate vs backwash over ``horizon_h``.
@@ -514,6 +515,7 @@ def filter_bw_timeline_24h(
             bw_duration_h=bd,
             bw_trains=K,
             horizon_h=horizon_h,
+            n_streams=max(1, int(n_streams)),
         )
         filters = filters_from_phases(
             n_int,
@@ -522,7 +524,16 @@ def filter_bw_timeline_24h(
             bw_duration_h=bd,
             horizon_h=horizon_h,
         )
-        peak = peak_concurrent_bw(filters, horizon_h=horizon_h)
+        from engine.bw_scheduler import find_peak_bw_windows, peak_concurrent_bw_profile
+
+        prof = peak_concurrent_bw_profile(filters, horizon_h=horizon_h)
+        peak = int(prof["peak"])
+        _peak_wins = find_peak_bw_windows(filters, horizon_h=horizon_h)
+        opt_meta = {
+            **opt_meta,
+            "peak_time_h": prof["peak_time_h"],
+            "peak_windows": _peak_wins,
+        }
         notes.append(
             f"Optimized train stagger (scheduling aid): peak {opt_meta.get('peak_optimized')} "
             f"vs feasibility spacing peak {opt_meta.get('peak_feasibility_spacing')} "
@@ -556,6 +567,9 @@ def filter_bw_timeline_24h(
             "min_bw_trains_theory": min_k,
             "train_shortfall": train_shortfall,
             "optimizer": opt_meta,
+            "peak_time_h": prof["peak_time_h"],
+            "peak_windows": _peak_wins,
+            "meets_bw_trains_cap": bool(opt_meta.get("meets_bw_trains_cap", peak <= K)),
             "note": " ".join(notes),
         }
 
@@ -619,21 +633,19 @@ def filter_bw_timeline_24h(
 
         filters.append({"filter_index": i + 1, "segments": segs})
 
-    peak = 0.0
-    t = 0.0
-    while t < horizon_h - 1e-9:
-        c = 0
-        for f in filters:
-            for s in f["segments"]:
-                if s["state"] == "bw" and float(s["t0"]) <= t < float(s["t1"]):
-                    c += 1
-                    break
-        peak = max(peak, float(c))
-        t += 0.05
+    from engine.bw_scheduler import find_peak_bw_windows, peak_concurrent_bw_profile
+
+    prof = peak_concurrent_bw_profile(filters, horizon_h=horizon_h)
+    peak = int(prof["peak"])
+    _peak_wins = find_peak_bw_windows(filters, horizon_h=horizon_h)
+    _k_cap = int(bw_trains_out) if bw_trains_out is not None else max(1, K)
 
     return {
         "filters": filters,
-        "peak_concurrent_bw": int(round(peak)),
+        "peak_concurrent_bw": peak,
+        "peak_time_h": prof["peak_time_h"],
+        "peak_windows": _peak_wins,
+        "meets_bw_trains_cap": peak <= _k_cap,
         "horizon_h": horizon_h,
         "t_cycle_h": round(tc, 3),
         "bw_duration_h": round(bd, 4),

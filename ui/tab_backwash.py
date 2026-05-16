@@ -14,6 +14,8 @@ from ui.helpers import (
     cycle_matrix_tss_row_title,
     backwash_sequence_steps_display_df,
     bw_timeline_stagger_label,
+    bw_timeline_schedule_summary_html,
+    render_metric_explain_panel,
     fmt_si_range,
 )
 from ui.collector_hyd_schematic import (
@@ -50,8 +52,8 @@ def render_tab_backwash(inputs: dict, computed: dict):
 
     st.caption(
         "**Backwash** tab — **Plant backwash** (sections 1–5): bed expansion, duties, sequence, scheduling, timeline. "
-        "**Collector design (1D)** (section 6): internal header/lateral model, studies, schematics. "
-        "Inputs: **🔄 BW** sidebar (duty vs collector vs optional studies). "
+        "**Underdrain / nozzle plate (1D)** (section 6): screening model for your **nozzle plate** layout "
+        "(no pipe laterals in this project yet). Inputs: **🔄 BW** sidebar."
         "**BW pump / blower detail:** **Pumps & power** tab."
     )
 
@@ -78,7 +80,7 @@ def render_tab_backwash(inputs: dict, computed: dict):
     temp_high          = inputs["temp_high"]
 
     st.caption(
-        "Read **top-down**: plant BW first (sections 1–5), then **Collector design (1D)** if you use the underdrain model."
+        "Read **top-down**: plant BW first (sections 1–5), then **underdrain / nozzle plate (1D)** screening (section 6)."
     )
 
     with st.expander("1 · Plant backwash — bed, expansion & freeboard", expanded=True):
@@ -99,7 +101,7 @@ def render_tab_backwash(inputs: dict, computed: dict):
             )
         )
         st.caption(
-            "Internal **header / lateral / perforation** results are in **section 6 · Collector design (1D)** below."
+            "Nozzle-plate / underdrain screening (1D) is in **section 6** — not §4 vessel shell nozzles."
         )
         exp_rows = []
         _bw_integrity_alerts = []
@@ -314,21 +316,24 @@ def render_tab_backwash(inputs: dict, computed: dict):
             "**Optimized trains** adjusts start times to reduce peak overlap — *scheduling aid only*, not plant DCS logic. "
             "**Uniform** is a smooth legacy comparison."
         )
+        st.markdown(bw_timeline_schedule_summary_html(bw_timeline), unsafe_allow_html=True)
+        render_metric_explain_panel(
+            inputs,
+            computed,
+            ["bw_trains", "peak_concurrent_bw"],
+            title="How scheduling numbers are built",
+        )
         _opt = bw_timeline.get("optimizer") or {}
-        if _sm == "optimized_trains" and _opt:
-            o1, o2, o3 = st.columns(3)
-            o1.metric(
-                "Peak concurrent BW (optimized)",
-                str(_opt.get("peak_optimized", "—")),
+        if _sm == "optimized_trains" and _opt.get("stream_aware"):
+            _psp = _opt.get("per_stream_peak") or []
+            st.caption(
+                f"Stream-aware optimisation ({_opt.get('n_streams', '—')} streams) — "
+                f"per-stream peaks: {', '.join(str(p) for p in _psp)}."
             )
-            o2.metric(
-                "Peak (feasibility spacing)",
-                str(_opt.get("peak_feasibility_spacing", "—")),
-            )
-            o3.metric(
-                "Peak reduction",
-                str(_opt.get("improvement_filters", 0)),
-                help="Filters fewer at peak vs feasibility-train spacing on this horizon.",
+        if _sm == "feasibility_trains":
+            st.caption(
+                "Feasibility spacing keeps BW starts **Δt_bw ÷ BW trains** apart — "
+                "switch sidebar to **Optimized trains** to try lowering peak overlap."
             )
         _hge = bw_timeline.get("hours_operating_ge_design_n_h")
         _heq = bw_timeline.get("hours_operating_eq_design_n_h")
@@ -347,19 +352,24 @@ def render_tab_backwash(inputs: dict, computed: dict):
             _phys_txt = (
                 f"{_nphys} physical" if isinstance(_nphys, int) else f"{streams}×{n_filters} physical"
             )
-            st.info(
-                f"**Plant-wide duty ({_phys_txt} on chart, {_hdays} d / {_horz:.0f} h window):** "
-                f"**At N** — exactly **{_ndes}** units not in BW (rated set): **{_eq:.2f}** h · "
-                f"**At N−1** — exactly **{_ndes - 1}** not in BW: **{_n1:.2f}** h · "
-                f"**Below N−1**: **{_lt:.2f}** h.  "
-                + (
-                    f"**N+1 margin** (>{_ndes} online, spare filtering): **{_gt:.2f}** h · "
-                    if hydraulic_assist_bw > 0
-                    else ""
-                )
-                + f"*(≥ N total = **{float(_hge):.2f}** h = at N + margin.)*  "
-                f"Design **N** = **{_nper}** / stream × **{streams}** → **{_ndes}** plant-wide.  "
-                "Overlapping backwashes increase N−1 / below-N−1 time."
+            _duty_rows = [
+                ("At N (all rated online)", f"{_eq:.1f} h"),
+                ("At N−1 (one in BW)", f"{_n1:.1f} h"),
+                ("Below N−1", f"{_lt:.1f} h"),
+            ]
+            if hydraulic_assist_bw > 0:
+                _duty_rows.append(("N+1 margin", f"{_gt:.1f} h"))
+            _duty_body = "".join(
+                f"<tr><td>{lbl}</td><td style='text-align:right'><b>{val}</b></td></tr>"
+                for lbl, val in _duty_rows
+            )
+            st.markdown(
+                f"<p style='font-size:0.78rem;margin:0.25rem 0 0.15rem 0'>"
+                f"<b>Plant-wide duty</b> — {_phys_txt}, {_hdays} d / {_horz:.0f} h · "
+                f"design N = {_nper}/stream × {streams} → {_ndes} plant-wide.</p>"
+                f"<table style='width:100%;font-size:0.78rem;line-height:1.45;border-collapse:collapse;'>"
+                f"{_duty_body}</table>",
+                unsafe_allow_html=True,
             )
         _tl = bw_timeline
         _frows = _tl.get("filters") or []
@@ -416,11 +426,6 @@ def render_tab_backwash(inputs: dict, computed: dict):
                 )
                 fig.update_xaxes(range=[0.0, _hor])
                 st.plotly_chart(fig, use_container_width=True, key="bw_timeline_gantt")
-                _pk = _tl.get("peak_concurrent_bw", 0)
-                st.metric(
-                    "Peak filters in BW (this stagger model)",
-                    str(int(_pk)) if _pk is not None else "—",
-                )
                 _cap_n = _tl.get("hours_operating_eq_design_n_h")
                 _cap_n1 = _tl.get("hours_operating_eq_n_minus_1_h")
                 _duty_line = ""
@@ -435,11 +440,23 @@ def render_tab_backwash(inputs: dict, computed: dict):
                     f"repeat period **{_tl.get('period_h', '—')}** h.{_duty_line}  {_tl.get('note', '')}"
                 )
 
-    with st.expander("6 · Collector design (1D underdrain)", expanded=False):
+    with st.expander("6 · Underdrain / nozzle plate (1D screening)", expanded=False):
         st.caption(
-            "Internal **header + lateral + perforation** model. "
-            "**Vessel §4 nozzles** (Backwash inlet/outlet on the shell) are screened separately below. "
-            "Inputs: sidebar **🔄 BW → Collector / underdrain** and **Optional — collector studies**."
+            "**Installed underdrain:** **nozzle plate** under the media (bore, hole density, open area — **🧱 Media**). "
+            "**No pipe laterals** in this project configuration. "
+            "**This 1D model** screens BW distribution using a **feed header** and equivalent **orifice stations** "
+            "(surrogate for plate hydraulics until a dedicated nozzle-plate solver is added). "
+            "Outputs: **distribution factor**, **flow imbalance %**, optional studies. "
+            "**§4 shell nozzles** (BW in/out, air) are screened separately above."
+        )
+        _q_bw = float((computed.get("bw_hyd") or {}).get("q_bw_design_m3h", 0) or 0)
+        _q_fil = float(computed.get("q_per_filter", 0) or 0)
+        _q_bw_txt = fmt(_q_bw, "flow_m3h", 1) if _q_bw > 0 else "—"
+        _q_fil_txt = fmt(_q_fil, "flow_m3h", 1) if _q_fil > 0 else "—"
+        st.info(
+            "**Backwash only** — primary model: **nozzle plate** (Media density × area, hole rows along drum). "
+            f"Uses **BW flow** **{_q_bw_txt}** — does **not** model filtration feed **{_q_fil_txt}**. "
+            "Optional legacy **pipe-lateral** expander below is not your installed layout."
         )
         from ui.collector_design_panel import render_collector_design_panel
         render_collector_design_panel(computed, inputs)

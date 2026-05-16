@@ -32,7 +32,7 @@ _DRIVER_SPECS: list[dict[str, Any]] = [
     },
     {
         "id": "maldistribution",
-        "label": "Maldistribution factor",
+        "label": "Filtration maldistribution factor",
         "optimistic_key": "maldistribution_factor",
         "conservative_key": "maldistribution_factor",
     },
@@ -166,7 +166,7 @@ def decompose_cycle_drivers(
         "design_tss": f"±{tss_span * 100:.0f}% on design TSS",
         "alpha_calibration": f"±{alpha_span * 100:.0f}% on α calibration",
         "tss_capture": f"±{capture_span * 100:.0f}% on capture efficiency",
-        "maldistribution": f"+{mal_span * 100:.0f}% on maldistribution (conservative only)",
+        "maldistribution": f"+{mal_span * 100:.0f}% on filtration mal factor (conservative only)",
     }
 
     rows: list[dict[str, Any]] = []

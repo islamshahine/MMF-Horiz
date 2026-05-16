@@ -639,3 +639,73 @@ def render_tab_economics(inputs: dict, computed: dict):
                     f"Project life: **{inputs.get('project_life_years') or design_life_years}** yr · "
                     f"Inflation: **{inputs.get('inflation_rate', 0):.1f} %/yr**"
                 )
+
+    _deg = computed.get("lifecycle_degradation") or {}
+    if _deg:
+        with st.expander("7 · Lifecycle degradation (advisory)", expanded=False):
+            st.caption(_deg.get("doc_note", ""))
+            st.caption(
+                f"Condition **100 %** = fresh after replacement; below **{_deg.get('replacement_threshold_pct', 35):.0f} %** "
+                f"= advisory replacement zone. Horizon **{_deg.get('horizon_years', '—')} yr**."
+            )
+            for _f in _deg.get("findings") or []:
+                _msg = f"**{_f.get('topic', '')}** — {_f.get('detail', '')}"
+                if _f.get("severity") == "warning":
+                    st.warning(_msg)
+                elif _f.get("severity") == "advisory":
+                    st.info(_msg)
+                else:
+                    st.caption(_msg)
+            _comps = _deg.get("components") or {}
+            if _PLOTLY_OK and _comps:
+                _fig_d = _go.Figure()
+                for _key, _block in _comps.items():
+                    _curve = _block.get("curve") or []
+                    if not _curve:
+                        continue
+                    _fig_d.add_trace(_go.Scatter(
+                        x=[p["year"] for p in _curve],
+                        y=[p["condition_pct"] for p in _curve],
+                        mode="lines",
+                        name=_block.get("label", _key),
+                        hovertemplate=(
+                            "Year %{x}<br>Condition %{y:.0f} %<extra>"
+                            + str(_block.get("label", _key))
+                            + "</extra>"
+                        ),
+                    ))
+                _fig_d.add_hline(
+                    y=float(_deg.get("replacement_threshold_pct", 35)),
+                    line_dash="dash",
+                    line_color="rgba(255,120,0,0.7)",
+                    annotation_text="Replacement advisory",
+                )
+                _fig_d.update_layout(
+                    title="Component condition index (sawtooth after each replacement)",
+                    xaxis_title="Project year",
+                    yaxis_title="Condition %",
+                    yaxis_range=[0, 105],
+                    height=400,
+                    margin=dict(t=48, b=40, l=56, r=16),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, x=0),
+                )
+                st.plotly_chart(_fig_d, use_container_width=True)
+            _sum_rows = []
+            for _key, _block in _comps.items():
+                _sum_rows.append({
+                    "Component": _block.get("label", _key),
+                    "Nominal interval (yr)": _block.get("nominal_interval_years"),
+                    "Stress ×": _block.get("stress_factor"),
+                    "Effective interval (yr)": _block.get("effective_interval_years"),
+                    "Replacements (model)": ", ".join(
+                        str(y) for y in (_block.get("suggested_replacement_years") or [])
+                    ) or "—",
+                    f"Condition @ yr {_deg.get('horizon_years')}": _block.get("condition_at_horizon_pct"),
+                })
+            if _sum_rows:
+                st.dataframe(pd.DataFrame(_sum_rows), use_container_width=True, hide_index=True)
+            with st.expander("Stress drivers by component", expanded=False):
+                for _key, _block in _comps.items():
+                    st.markdown(f"**{_block.get('label', _key)}**")
+                    for _d in _block.get("drivers") or []:
+                        st.markdown(f"- {_d}")

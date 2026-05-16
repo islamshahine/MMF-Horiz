@@ -1,28 +1,64 @@
 """Guided fouling assistant workflow (sidebar) — advisory only, no compute_all hook."""
 from __future__ import annotations
 
+from typing import Any
+
 import streamlit as st
 
 from engine.fouling import (
     SDI_BLOCKED_CAP_DEFAULT,
     SDI_BLOCKED_CAP_OPTIONS,
-    effective_sdi15_for_correlation,
-    estimate_bw_frequency,
-    estimate_fouling_severity,
-    estimate_run_time,
-    estimate_solids_loading,
+    build_fouling_assessment,
     fouling_advisory_recommendations,
-    fouling_confidence_level,
-    water_stability_class,
 )
 from engine.units import display_value, si_value, unit_label
 
 
-def render_fouling_guided_workflow(out: dict, unit_system: str, *, on_apply_solid_loading) -> None:
-    """Four-step fouling interpretation; does not mutate ``out`` except via explicit Apply."""
-    st.warning(
-        "**Advisory only** — empirical correlations (`engine/fouling.py`). "
-        "Not a design basis until validated with pilot or operating data."
+def _fouling_compact_note(text: str, *, tone: str = "warn") -> None:
+    """Sidebar-sized note (smaller than default ``st.warning``)."""
+    _icon = "⚠" if tone == "warn" else "ℹ"
+    st.markdown(
+        f'<p style="font-size:0.78rem;line-height:1.45;margin:0.35rem 0;opacity:0.92">'
+        f"{_icon} {text}</p>",
+        unsafe_allow_html=True,
+    )
+
+
+def _render_cycle_crosscheck_table(cross: dict[str, Any]) -> None:
+    """Compact run-time band for narrow sidebar (avoids truncated ``st.metric`` labels)."""
+    _rows = (
+        ("Indicative (fouling)", cross["indicative_run_time_h"]),
+        ("Model expected", cross["cycle_expected_h"]),
+        ("Optimistic", cross["cycle_optimistic_h"]),
+        ("Conservative", cross["cycle_conservative_h"]),
+    )
+    _body = "".join(
+        f"<tr><td>{_lbl}</td><td style='text-align:right'><b>{float(_h):.1f} h</b></td></tr>"
+        for _lbl, _h in _rows
+    )
+    st.markdown(
+        f"""<table style="width:100%;font-size:0.78rem;line-height:1.5;border-collapse:collapse;">
+        <thead><tr style="opacity:0.85">
+        <th style="text-align:left;font-weight:600">Scenario</th>
+        <th style="text-align:right;font-weight:600">Cycle</th>
+        </tr></thead><tbody>{_body}</tbody></table>""",
+        unsafe_allow_html=True,
+    )
+
+
+def render_fouling_guided_workflow(
+    out: dict,
+    unit_system: str,
+    *,
+    computed: dict[str, Any] | None = None,
+    on_apply_solid_loading,
+) -> None:
+    """Five-step fouling interpretation; does not mutate ``out`` except via explicit Apply."""
+    _computed = computed or {}
+    _fouling_compact_note(
+        "<b>Advisory only</b> — SDI₁₅, MFI, TSS, and filtration-LV correlations. "
+        "Not a design basis until validated with pilot or plant data.",
+        tone="info",
     )
 
     st.markdown("##### Step 1 — Feed water characterisation")
@@ -57,9 +93,8 @@ def render_fouling_guided_workflow(out: dict, unit_system: str, *, on_apply_soli
 
     st.markdown("##### Step 2 — Fouling indices (SDI / MFI / LV)")
     st.caption(
-        "**SDI₁₅** = ASTM 15-minute index on **MMF feed (inlet)** — not RO-feed SDI₃ after filtration. "
-        "Typical inlet: wells **~2–3.5**; open intake often **> 5** or test **blocked (∞)**. "
-        "Target **SDI ~ 3** before membranes is a **downstream** goal (MMF + cartridge), not this field."
+        "**SDI₁₅** = ASTM 15-minute index on **MMF feed (inlet)**. "
+        "**TSS** for M_max in the hydraulic model comes from **Process** (low / avg / high)."
     )
     _vth_disp = float(out.get("velocity_threshold") or 12.0)
     _vth_si = si_value(_vth_disp, "velocity_m_h", unit_system)
@@ -75,10 +110,6 @@ def render_fouling_guided_workflow(out: dict, unit_system: str, *, on_apply_soli
         "SDI₁₅ test blocked (∞) — use cap value for advisory only",
         value=False,
         key="fouling_sdi_blocked",
-        help=(
-            "When the 0.45 µm SDI test plugs before 15 min, enter a bracketing cap here. "
-            "For **M_max** design, rely on **TSS** (Process tab) and pilot data — not this cap alone."
-        ),
     )
     _c1f, _c2f = st.columns(2)
     with _c1f:
@@ -87,10 +118,10 @@ def render_fouling_guided_workflow(out: dict, unit_system: str, *, on_apply_soli
             _cap_default = SDI_BLOCKED_CAP_DEFAULT
             _cap_idx = _cap_opts.index(_cap_default) if _cap_default in _cap_opts else 1
             _f_sdi = st.selectbox(
-                "SDI₁₅ cap — MMF inlet, advisory (−)",
+                "SDI₁₅ cap — MMF inlet (−)",
                 _cap_opts,
                 index=_cap_idx,
-                format_func=lambda v: f"{v:.0f}  (open intake / blocked test bracket)",
+                format_func=lambda v: f"{v:.0f}  (blocked test bracket)",
                 key="fouling_sdi_cap",
             )
         else:
@@ -101,7 +132,6 @@ def render_fouling_guided_workflow(out: dict, unit_system: str, *, on_apply_soli
                 max_value=15.0,
                 step=0.1,
                 key="fouling_sdi",
-                help="Measured ASTM D4189 SDI₁₅ on water entering the multimedia filter.",
             )
     with _c2f:
         _f_mfi = st.number_input(
@@ -111,31 +141,34 @@ def render_fouling_guided_workflow(out: dict, unit_system: str, *, on_apply_soli
             max_value=15.0,
             step=0.1,
             key="fouling_mfi",
-            help="0–10+ severity from your lab protocol (not raw s/L²).",
         )
-
-    _sdi_eff, _sdi_extra = effective_sdi15_for_correlation(
-        float(_f_sdi),
-        test_blocked=_sdi_blocked,
-        blocked_cap=float(st.session_state.get("fouling_sdi_cap", SDI_BLOCKED_CAP_DEFAULT)),
-    )
 
     _lv_si = max(0.1, float(si_value(float(_f_lv_disp), "velocity_m_h", unit_system)))
     _tss_use = max(0.05, float(out.get("tss_avg", 10.0)))
-    _esl = estimate_solids_loading(tss_mg_l=_tss_use, lv_m_h=_lv_si, sdi15=_sdi_eff, mfi_index=float(_f_mfi))
-    _sev = estimate_fouling_severity(
-        sdi15=_sdi_eff, mfi_index=float(_f_mfi), tss_mg_l=_tss_use, lv_m_h=_lv_si,
-    )
-    _rt = estimate_run_time(
-        sdi15=_sdi_eff, mfi_index=float(_f_mfi), tss_mg_l=_tss_use, lv_m_h=_lv_si,
-    )
-    _bw = estimate_bw_frequency(run_time_h=float(_rt["run_time_h"]))
+    _has_pretreat = st.session_state.get("fouling_upstream", "none") not in ("none", "")
+    _cu_n = (_computed.get("cycle_uncertainty") or {}).get("N") if _computed else None
 
-    _stab = water_stability_class(
-        severity=str(_sev["severity"]),
+    _assess = build_fouling_assessment(
+        tss_mg_l=_tss_use,
+        lv_m_h=_lv_si,
+        sdi15=float(_f_sdi),
+        mfi_index=float(_f_mfi),
+        test_blocked=_sdi_blocked,
+        blocked_cap=float(st.session_state.get("fouling_sdi_cap", SDI_BLOCKED_CAP_DEFAULT)),
         seasonal_variability=str(st.session_state.get("fouling_seasonal_var", "moderate")),
         algae_risk=str(st.session_state.get("fouling_algae_risk", "low")),
+        has_upstream_uf_daf=_has_pretreat,
+        cycle_uncertainty_n=_cu_n,
     )
+
+    _sev = _assess["severity"]
+    _rt = _assess["run_time"]
+    _bw = _assess["bw_frequency"]
+    _stab = _assess["stability"]
+    _sugg_si = float(_assess["solid_loading_kg_m2"])
+    _sugg_disp = display_value(_sugg_si, "loading_kg_m2", unit_system)
+    st.session_state["_fouling_last_sugg_disp"] = round(float(_sugg_disp), 5)
+
     _tone = _stab["tone"]
     if _tone == "ok":
         st.success(f"Water stability class: **{_stab['label']}**")
@@ -144,41 +177,49 @@ def render_fouling_guided_workflow(out: dict, unit_system: str, *, on_apply_soli
     else:
         st.warning(f"Water stability class: **{_stab['label']}**")
 
-    _sugg_si = float(_esl["solid_loading_kg_m2"])
-    _sugg_disp = display_value(_sugg_si, "loading_kg_m2", unit_system)
-    st.session_state["_fouling_last_sugg_disp"] = round(float(_sugg_disp), 5)
-
-    st.markdown("##### Step 3 — Operational interpretation")
+    st.markdown("##### Step 3 — Operational consequences")
+    _cur_sl = float(out.get("solid_loading") or 0.0)
+    _cur_disp = display_value(_cur_sl, "loading_kg_m2", unit_system) if _cur_sl > 0 else None
+    _cur_line = (
+        f"{_cur_disp:.3f} {unit_label('loading_kg_m2', unit_system)}"
+        if _cur_disp is not None
+        else "— (set on Media tab)"
+    )
     st.markdown(
-        f"- **Suggested M_max:** {_sugg_disp:.3f} {unit_label('loading_kg_m2', unit_system)}  \n"
+        f"- **Current M_max (sidebar):** {_cur_line}  \n"
         f"- **Fouling score:** {_sev['score']:.0f}/100 ({_sev['severity']})  \n"
-        f"- **Indicative run time:** ~{_rt['run_time_h']:.1f} h  \n"
+        f"- **Indicative run time (empirical):** ~{_rt['run_time_h']:.1f} h  \n"
         f"- **Implied BW frequency:** ~{_bw['bw_cycles_per_day']:.1f} cycles/day "
-        f"(assumes {_bw['assumed_bw_block_h']:.1f} h blocked per event)"
-    )
-    _cu_note = ""
-    if st.session_state.get("_fouling_link_uncertainty"):
-        _cu_note = " Review **Filtration → cycle uncertainty** after Apply for optimistic/conservative band."
-    st.caption(
-        "High SDI variability or algae risk can shorten real run time versus this single-point estimate."
-        + _cu_note
+        f"(~{_bw['assumed_bw_block_h']:.1f} h per event)"
     )
 
-    st.markdown("##### Step 4 — Recommendations & confidence")
-    _has_pretreat = st.session_state.get("fouling_upstream", "none") not in ("none", "")
+    st.markdown("##### Step 4 — Cross-check with hydraulic cycle model")
+    st.checkbox(
+        "Show comparison to Filtration cycle uncertainty (N scenario)",
+        value=bool(st.session_state.get("fouling_link_uncertainty", True)),
+        key="fouling_link_uncertainty",
+        help="Uses the last **compute_all** result (optimistic / expected / conservative cycle band).",
+    )
+    _cross = _assess["cycle_crosscheck"]
+    if st.session_state.get("fouling_link_uncertainty", True):
+        if _cross.get("available"):
+            _align = str(_cross.get("alignment", ""))
+            if _align == "within_band":
+                st.success(_cross.get("note", ""))
+            else:
+                st.info(_cross.get("note", ""))
+            _render_cycle_crosscheck_table(_cross)
+        else:
+            st.caption(_cross.get("note", ""))
+
+    st.markdown("##### Step 5 — Recommendations, confidence & apply")
     if _sdi_blocked:
-        st.info(
-            f"Using SDI cap **{_sdi_eff:g}** in correlations. "
-            "**TSS low / avg / high** on the Process tab remains the primary driver for M_max in `compute_all`."
+        _fouling_compact_note(
+            f"Using SDI cap <b>{_assess['sdi_effective']:g}</b>. "
+            "Process TSS (low / avg / high) remains the primary driver for hydraulic M_max.",
+            tone="info",
         )
-
-    _conf = fouling_confidence_level(
-        sdi15=_sdi_eff,
-        mfi_index=float(_f_mfi),
-        tss_mg_l=_tss_use,
-        has_upstream_uf_daf=_has_pretreat,
-        seasonal_variability=str(st.session_state.get("fouling_seasonal_var", "moderate")),
-    )
+    _conf = _assess["confidence"]
     st.caption(f"**Confidence:** {_conf['level']} — {_conf['note']}")
     for _line in fouling_advisory_recommendations(
         severity=str(_sev["severity"]),
@@ -187,11 +228,17 @@ def render_fouling_guided_workflow(out: dict, unit_system: str, *, on_apply_soli
         run_time_h=float(_rt["run_time_h"]),
     ):
         st.markdown(f"- {_line}")
+    for _w in _assess.get("warnings") or []:
+        _fouling_compact_note(_w)
 
-    _seen_fw = set()
-    for _w in _sdi_extra + _esl.get("warnings", ()) + _sev.get("warnings", ()) + _rt.get("warnings", ()):
-        if _w and _w not in _seen_fw:
-            _seen_fw.add(_w)
-            st.warning(_w)
+    _ul = unit_label("loading_kg_m2", unit_system)
+    st.markdown(
+        f'<p style="font-size:0.82rem;line-height:1.5;margin:0.6rem 0 0.25rem 0">'
+        f"<b>Suggested M<sub>max</sub> (this assessment):</b> "
+        f'<span style="font-size:0.95rem">{_sugg_disp:.3f}</span> {_ul}'
+        f"</p>",
+        unsafe_allow_html=True,
+    )
+    st.caption("Use **Apply** below to copy this value to Media → max solids loading.")
 
     st.button("Apply suggested solid loading (M_max)", key="fouling_apply_mmax", on_click=on_apply_solid_loading)

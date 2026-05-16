@@ -1,3 +1,21 @@
+"""BW distribution panels — feed/outlet collector vs underdrain (Backwash tab)."""
+import pandas as pd
+import streamlit as st
+from ui.helpers import (
+    fmt, ulbl, localize_engine_message,
+    collector_hyd_profile_display_df,
+    orifice_network_display_df,
+    staged_orifice_bands_display_df,
+    staged_orifice_hole_display_df,
+    fmt_si_range,
+)
+from ui.collector_hyd_schematic import (
+    build_collector_elevation_figure, build_collector_underdrain_figure,
+)
+
+
+def render_bw_feed_collector_panel(computed: dict, inputs: dict) -> None:
+    """Section 6 — vessel BW nozzles, internal header/plenum (BW flow only)."""
 """Underdrain / nozzle plate (1D screening) — Backwash tab panel."""
 import pandas as pd
 import streamlit as st
@@ -7,202 +25,16 @@ from ui.helpers import (
     localize_engine_message,
     collector_hyd_profile_display_df,
     orifice_network_display_df,
-    nozzle_plate_hole_display_df,
-    staged_orifice_bands_display_df,
-    staged_orifice_hole_display_df,
     fmt_si_range,
 )
 from ui.collector_hyd_schematic import (
     build_collector_elevation_figure,
     build_collector_underdrain_figure,
-    build_nozzle_plate_plan_figure,
 )
 
 
 def render_collector_design_panel(computed: dict, inputs: dict) -> None:
-    """Vessel intelligence, nozzle-plate BW hydraulics, legacy lateral surrogate, studies."""
-    _np = computed.get("collector_nozzle_plate") or {}
-    _uda = computed.get("underdrain_system_advisory") or {}
-    if _np.get("active"):
-        with st.expander("Nozzle plate — BW hydraulics (primary)", expanded=True):
-            if _uda:
-                from engine.strainer_materials import strainer_material_label
-
-                st.caption(
-                    f"**Media inputs:** {_uda.get('catalogue_label', '—')} · "
-                    f"ρ **{float(_uda.get('np_density_per_m2', 0)):.0f} /m²** · "
-                    f"bore **{float(inputs.get('np_bore_dia', 0)):.0f} mm** · "
-                    f"strainer **{strainer_material_label(inputs.get('strainer_mat', ''))}**"
-                )
-            st.caption(localize_engine_message(str(_np.get("screening_note", ""))))
-            _basis = localize_engine_message(str(_np.get("design_basis", "")))
-            if _basis:
-                st.info(
-                    f"**Design basis:** {_basis} — from sidebar **🧱 Media** "
-                    f"(height, bore, density /m², **rows across chord**) and **🔄 Backwash** "
-                    f"(BW hydraulics)."
-                )
-            st.caption(_np.get("method", ""))
-            d1, d2, d3, d4 = st.columns(4)
-            d1.metric(
-                "Plate area",
-                fmt(float(_np.get("nozzle_plate_area_m2", 0)), "area_m2", 2),
-            )
-            _ch = _np.get("chord_m")
-            d2.metric(
-                "Plate chord",
-                fmt(float(_ch), "length_m", 2) if _ch else "—",
-            )
-            d3.metric("Density (input)", f"{float(_np.get('np_density_per_m2', 0)):.0f} /m²")
-            _act_d = float(_np.get("actual_density_per_m2", 0) or 0)
-            d4.metric(
-                "Density (as-built)",
-                f"{_act_d:.1f} /m²" if _act_d > 0 else "—",
-            )
-            p1, p2, p3, p4 = st.columns(4)
-            p1.metric("BW flow", fmt(_np.get("q_bw_m3h", 0), "flow_m3h", 1))
-            p2.metric("Plate holes (total)", str(int(_np.get("n_holes_total", 0))))
-            p3.metric(
-                f"Open area ({'%'})",
-                f"{float(_np.get('open_area_fraction_pct', 0)):.1f}",
-            )
-            p4.metric(
-                "Distribution factor (1D)",
-                f"{float(_np.get('distribution_factor_calc', 1)):.3f}",
-            )
-            p5, p6, p7, p8 = st.columns(4)
-            _holes_early = list(_np.get("hole_network") or [])
-            _n_rows_ch = int(_np.get("n_rows_across_chord", 0) or 0)
-            if _n_rows_ch < 1 and _holes_early:
-                _n_rows_ch = len({
-                    int(h.get("row_index", h.get("lateral_index", 0)) or 0)
-                    for h in _holes_early
-                })
-            p5.metric("Rows (across chord)", str(_n_rows_ch))
-            _n_rows_in = int(inputs.get("n_nozzle_rows", 0) or 0)
-            if _n_rows_in > 0:
-                p5.caption(f"Override: {_n_rows_in} (Media)")
-            if _n_rows_ch <= 1 and int(_np.get("n_holes_total", 0) or 0) > 50:
-                st.error(
-                    "Layout has only **1 row** across chord — expected a brick grid. "
-                    "Set **🧱 Media → Nozzle rows across chord** (e.g. **7**), or **0** for auto, "
-                    "then **Clear cache** (⋮ menu) and **Rerun**."
-                )
-            p6.metric(
-                "P_long (along drum)",
-                f"{float(_np.get('pitch_long_mm', 0) or 0):.0f} mm",
-            )
-            p7.metric(
-                "Nozzles / row",
-                str(int(_np.get("n_per_row_along_drum") or _np.get("holes_per_row", 0) or 0)),
-            )
-            _rsp = float(_np.get("row_spacing_m", 0) or 0)
-            p8.metric(
-                "Row spacing (Δstation)",
-                fmt(_rsp, "length_m", 2) if _rsp > 0 else "—",
-            )
-            p9, p10, p11, p12 = st.columns(4)
-            p9.metric(
-                f"V hole mean ({ulbl('velocity_m_s')})",
-                fmt(_np.get("orifice_velocity_uniform_m_s", 0), "velocity_m_s", 2),
-            )
-            p10.metric(
-                f"V hole max ({ulbl('velocity_m_s')})",
-                fmt(_np.get("orifice_velocity_max_m_s", 0), "velocity_m_s", 2),
-            )
-            p11.metric("Flow imbalance", f"{float(_np.get('flow_imbalance_pct', 0)):.1f}%")
-            p12.metric(
-                "Hole Ø",
-                fmt(float(_np.get("hole_d_mm", 0)), "length_mm", 0),
-            )
-            for _adv in _np.get("advisories") or []:
-                _sev = str(_adv.get("severity", "advisory"))
-                _msg = localize_engine_message(
-                    f"**{_adv.get('topic', '')}:** {_adv.get('detail', '')}"
-                )
-                if _sev == "warning":
-                    st.warning(_msg)
-                else:
-                    st.info(_msg)
-            _holes = list(_np.get("hole_network") or [])
-            _layout_rev = int(_np.get("layout_revision", 0) or 0)
-            if _holes and _layout_rev < 3:
-                st.warning(
-                    "Nozzle plate layout is from an **older cached run** (single-row). "
-                    "Change any sidebar input (e.g. density ±1) or use **Clear cache** in "
-                    "Streamlit menu → **Rerun** to refresh the brick layout."
-                )
-            if _holes:
-                _n_rows = int(_np.get("n_rows_along_drum", 0) or 0)
-                with st.expander("Hole / row detail (sample)", expanded=False):
-                    _pch = float(_np.get("pitch_chord_mm", 0) or 0)
-                    _edg = float(_np.get("edge_clearance_mm", 0) or 0)
-                    st.caption(
-                        f"**Brick layout:** **{int(_np.get('n_rows_across_chord', 0))}** rows across "
-                        f"chord (P_trans **{_pch:.0f} mm**), **"
-                        f"{int(_np.get('n_per_row_along_drum', 0))}** nozzles/row along drum "
-                        f"(P_long **{float(_np.get('pitch_long_mm', 0) or _pch):.0f} mm**; "
-                        f"odd rows +½P_long). Field "
-                        f"{fmt(float(_np.get('field_x_start_m', 0)), 'length_m', 2)}–"
-                        f"{fmt(float(_np.get('field_x_end_m', 0)), 'length_m', 2)} × chord. "
-                        f"**{int(_np.get('n_holes_total', 0))}** holes — plan = layout only."
-                    )
-                    st.dataframe(
-                        nozzle_plate_hole_display_df(_holes[:120]),
-                        use_container_width=True,
-                        hide_index=True,
-                    )
-                    if len(_holes) > 120:
-                        st.caption(f"Showing 120 of {len(_holes)} holes.")
-                    # Longitudinal = straight vessel length; transverse = plate chord
-                    _cyl = float(
-                        _np.get("cyl_len_m")
-                        or inputs.get("total_length")
-                        or computed.get("total_length")
-                        or 0
-                    )
-                    _chord = float(_np.get("chord_m") or 0.0)
-                    if _chord <= 0:
-                        _chord = float((computed.get("wt_np") or {}).get("chord_m", 0) or 0)
-                    _fig_np = build_nozzle_plate_plan_figure(
-                        cyl_len_m=_cyl,
-                        chord_m=_chord,
-                        hole_network=_holes,
-                        n_rows_across=int(_np.get("n_rows_across_chord", 0) or 0),
-                        n_per_row=int(_np.get("n_per_row_along_drum", 0) or 0),
-                        n_holes_placed=int(_np.get("n_holes_total", 0) or len(_holes)),
-                        pitch_long_mm=float(_np.get("pitch_long_mm", 100) or 100),
-                        pitch_trans_mm=float(_np.get("pitch_trans_mm", 100) or 100),
-                        edge_margin_mm=float(_np.get("edge_clearance_mm", 50) or 50),
-                        field_x_start_m=float(_np.get("field_x_start_m", 0) or 0),
-                        field_x_end_m=float(_np.get("field_x_end_m", 0) or 0),
-                        field_y_plot_start_m=float(
-                            _np.get("field_y_plot_start_m", 0) or 0
-                        ),
-                        field_y_plot_end_m=float(
-                            _np.get("field_y_plot_end_m", 0) or 0
-                        ),
-                        head_inset_m=float(_np.get("head_inset_m", 0) or 0),
-                        bore_d_mm=float(_np.get("hole_d_mm", 50) or 50),
-                        open_area_pct=float(_np.get("open_area_fraction_pct", 0) or 0),
-                        v_max=float(_np.get("orifice_velocity_max_m_s", 0) or 0),
-                        plate_outline_x_m=_np.get("plate_outline_x_m"),
-                        plate_outline_y_top_m=_np.get("plate_outline_y_top_m"),
-                        plate_outline_y_bot_m=_np.get("plate_outline_y_bot_m"),
-                        x_cyl_start_m=float(_np.get("x_cyl_start_m", 0) or 0),
-                        x_cyl_end_m=float(_np.get("x_cyl_end_m", 0) or 0),
-                    )
-                    if _fig_np is not None:
-                        st.plotly_chart(
-                            _fig_np,
-                            use_container_width=True,
-                            key="nozzle_plate_bw_plan",
-                        )
-                    else:
-                        st.caption(
-                            "Install **plotly** for the nozzle-plate plan illustration."
-                        )
-
+    """1D collector intelligence, hydraulics, studies, schematics."""
     _ci = computed.get("collector_intel") or {}
     if _ci:
         from engine.collector_intelligence import summarize_nozzle_schedule_velocities
@@ -277,14 +109,37 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
     _ch = computed.get("collector_hyd") or {}
     if _ch:
         with st.expander(
-            "Legacy pipe-lateral surrogate (optional — not your nozzle-plate layout)",
+            "Nozzle plate & plenum — BW screening (1D)"
+            if _ch.get("underdrain_type") == "nozzle_plate"
+            else "Collector hydraulics — 1D header / lateral ladder",
             expanded=False,
         ):
-            st.caption(
-                "Screening model with **pipe laterals** and perforations. "
-                "For this project use **Nozzle plate — BW hydraulics** above. "
-                + str(_ch.get("method", ""))
-            )
+            st.caption(_ch.get("method", ""))
+
+def render_underdrain_panel(computed: dict, inputs: dict) -> None:
+    """Section 7 — nozzle plate or pipe-lateral underdrain (BW flow only)."""
+    _ch = computed.get("collector_hyd") or {}
+    if not _ch:
+        st.info(
+            "No underdrain / collector hydraulics in this run. "
+            "Set **BW velocity** and **underdrain type** in the sidebar, then **Run**."
+        )
+        return
+    _ud = str(_ch.get("underdrain_type") or inputs.get("underdrain_type") or "nozzle_plate")
+            _plate = _ch.get("nozzle_plate") or {}
+            if _plate:
+                p1, p2, p3, p4 = st.columns(4)
+                p1.metric("Plate holes (total)", str(_plate.get("n_holes_total", "—")))
+                p2.metric(
+                    f"Mean hole V ({ulbl('velocity_m_s')})",
+                    fmt(_plate.get("hole_velocity_mean_m_s", 0), "velocity_m_s", 2),
+                )
+                p3.metric(
+                    f"Peak hole V ({ulbl('velocity_m_s')})",
+                    fmt(_plate.get("hole_velocity_max_m_s", 0), "velocity_m_s", 2),
+                )
+                p4.metric("Open area", f"{_plate.get('open_area_fraction_pct', 0):.1f}%")
+                st.caption(localize_engine_message(str(_plate.get("note", ""))))
             _mal_used = float(computed.get("maldistribution_factor", 1.0) or 1.0)
             _mal_calc = float(_ch.get("maldistribution_factor_calc", 1.0) or 1.0)
             _from_model = bool(computed.get("maldistribution_from_collector_model"))
@@ -296,9 +151,9 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
                 help="max/mean flow across 1D orifice stations (nozzle-plate screening surrogate; not §4 shell nozzles).",
             )
             hc3.metric(
-                "Flow imbalance (1D stations)",
+                "Plenum zone imbalance",
                 f"{_ch.get('flow_imbalance_pct', 0):.1f}%",
-                help="Spread across equivalent orifice stations — not pipe lateral count.",
+                help="Spread across plenum zones along the drum (nozzle-plate screening).",
             )
             hc4.metric(
                 "Filtration mal source",
@@ -772,3 +627,9 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
                             mime=_mime,
                             key="collector_cfd_download",
                         )
+
+
+def render_collector_design_panel(computed: dict, inputs: dict) -> None:
+    """Legacy wrapper — both sections."""
+    render_bw_feed_collector_panel(computed, inputs)
+    render_underdrain_panel(computed, inputs)

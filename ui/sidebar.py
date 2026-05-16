@@ -109,7 +109,7 @@ def render_sidebar(
     RUBBER_TYPES, EPOXY_TYPES, CERAMIC_TYPES,
     DEFAULT_LABOR_RUBBER_M2, DEFAULT_LABOR_EPOXY_M2, DEFAULT_LABOR_CERAMIC_M2,
     STEEL_DENSITY_KG_M3, FLANGE_RATINGS, STRAINER_WEIGHT_KG, MANHOLE_WEIGHT_KG,
-    SUPPORT_TYPES, NOZZLE_DENSITY_DEFAULT, NOZZLE_DENSITY_MIN, NOZZLE_DENSITY_MAX,
+    SUPPORT_TYPES, NOZZLE_DENSITY_DEFAULT,
     ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS, HOUSING_CAPACITY_OPTIONS,
     DEFAULT_ELEMENTS_PER_HOUSING, SAFETY_FACTOR_CIP, SAFETY_FACTOR_STD,
 ) -> dict:
@@ -567,27 +567,11 @@ def render_sidebar(
             "**Volumes, ΔP tables, inventory:** main **🧱 Media** tab. **Filtration cycles & scenarios:** **💧 Filtration**."
         )
         inject_anchor("mmf-anchor-sb-media-nozzle")
-        st.markdown("**Nozzle plate**")
-        _lbl_nph = f"Nozzle plate height ({unit_label('length_m', unit_system)})"
-        _def_nph = display_value(1.0, "length_m", unit_system)
-        _stp_nph = display_value(0.05, "length_m", unit_system)
-        out["nozzle_plate_h"] = st.number_input(_lbl_nph, value=_def_nph, step=_stp_nph, key="nozzle_plate_h")
-        out["np_bore_dia"]    = st.number_input(
-            f"Bore diameter ({unit_label('length_mm', unit_system)})", value=50.0,
-            step=float(display_value(5.0, "length_mm", unit_system)), min_value=float(display_value(10.0, "length_mm", unit_system)), key="np_bd")
-        out["np_density"]     = st.number_input("Nozzle density (/m²)", value=NOZZLE_DENSITY_DEFAULT,
-                                                 min_value=NOZZLE_DENSITY_MIN, max_value=NOZZLE_DENSITY_MAX,
-                                                 step=1.0, key="np_den")
-        out["np_beam_sp"]     = st.number_input(
-            f"Beam spacing ({unit_label('length_mm', unit_system)})", value=500.0,
-            step=float(display_value(50.0, "length_mm", unit_system)), key="np_bs")
-        out["np_override_t"]  = st.number_input(
-            f"Override plate t ({unit_label('length_mm', unit_system)}) — 0=calc",
-            value=0.0, step=float(display_value(1.0, "length_mm", unit_system)), key="np_ov",
-            help="0 — calculate nozzle-plate thickness from loads. Non-zero — use this thickness.",
+        from ui.nozzle_catalogue_ui import render_underdrain_media_sidebar
+
+        out = render_underdrain_media_sidebar(
+            out, unit_system, nozzle_density_default=NOZZLE_DENSITY_DEFAULT,
         )
-        from ui.nozzle_catalogue_ui import render_nozzle_catalogue_sidebar
-        out = render_nozzle_catalogue_sidebar(out, unit_system)
 
         inject_anchor("mmf-anchor-sb-media-layers")
         st.markdown("**Media layers**")
@@ -814,20 +798,22 @@ def render_sidebar(
                         key="solid_loading_scale",
                     )
                     out["use_calculated_maldistribution"] = st.checkbox(
-                        "Use calculated maldistribution (1D collector model)",
+                        "Link filtration mal factor to 1D underdrain distribution",
                         value=bool(st.session_state.get("use_calculated_maldistribution", False)),
                         key="use_calculated_maldistribution",
                         help=(
-                            "When enabled, Ergun / cake use max(lateral Q)/mean(Q) from the 1D collector solve "
-                            "(🔄 BW sidebar → Collector / underdrain). Results: Backwash → Collector design (1D)."
+                            "When enabled, **filtration** Ergun / cake use the **1D distribution factor** "
+                            "(max/mean flow) from the 1D screening solve. "
+                            "Your **nozzle plate** is defined in **🧱 Media**; this link is approximate until "
+                            "nozzle-plate hydraulics are added. Not §4 shell BW/air nozzles."
                         ),
                     )
                     out["maldistribution_factor"] = st.number_input(
-                        "Maldistribution factor (≥1) — manual",
+                        "Filtration maldistribution factor (≥1) — manual",
                         value=1.0, min_value=1.0, max_value=2.0, step=0.05,
                         key="maldistribution_factor",
                         disabled=bool(out.get("use_calculated_maldistribution")),
-                        help="Ignored when calculated maldistribution is enabled.",
+                        help="Plant-wide fouling velocity multiplier. Ignored when linked to 1D underdrain distribution.",
                     )
                 with _c2a:
                     out["alpha_calibration_factor"] = st.number_input(
@@ -846,7 +832,10 @@ def render_sidebar(
 
             with st.expander("Fouling assistant — guided workflow (SDI / MFI → M_max)", expanded=False):
                 render_fouling_guided_workflow(
-                    out, unit_system, on_apply_solid_loading=_apply_fouling_suggested_solid_loading,
+                    out,
+                    unit_system,
+                    computed=st.session_state.get("mmf_last_computed") or {},
+                    on_apply_solid_loading=_apply_fouling_suggested_solid_loading,
                 )
 
             _lbl_csd = f"Captured solids density ({unit_label('density_kg_m3', unit_system)})"
@@ -870,13 +859,13 @@ def render_sidebar(
     with bw_tab:
         inject_anchor("mmf-anchor-sb-bw")
         st.caption(
-            "**Inputs** for backwash duty (plant), **internal collector / underdrain (1D)**, and optional screening studies. "
-            "**Charts & advisories:** main **🔄 Backwash** tab — plant block first, then **Collector design (1D)**."
+            "**Inputs** for backwash duty (plant), **underdrain / nozzle plate (1D screening)**, and optional studies. "
+            "**Charts & advisories:** main **🔄 Backwash** tab — plant block first, then section 6."
         )
         st.markdown("### Backwash duty (plant)")
         st.caption(
             "Bed elevation, **BW velocity**, **air scour**, step times, blower/pump head, and timeline — "
-            "not lateral perforation detail (see **Collector / underdrain** below)."
+            "not nozzle-plate / underdrain detail (see **Underdrain / nozzle plate (1D)** below)."
         )
         st.markdown("**Bed & BW hydraulics**")
         from engine.collector_geometry import max_collector_centerline_height_m
@@ -1112,7 +1101,14 @@ def render_sidebar(
             step=float(display_value(50.0, "length_mm", unit_system)),
             key="nozzle_stub_len",
         )))
-        out["strainer_mat"]    = st.selectbox("Strainer material", list(STRAINER_WEIGHT_KG.keys()), index=0, key="strainer_mat")
+        from engine.strainer_materials import strainer_material_label
+
+        _str_mat = str(out.get("strainer_mat") or st.session_state.get("strainer_mat") or "—")
+        st.caption(
+            f"**Strainer material** is set on **🧱 Media** (with nozzle catalogue): "
+            f"**{strainer_material_label(_str_mat) if _str_mat != '—' else '—'}**. "
+            "Internals weight uses this alloy."
+        )
         _lbl_ahdn = f"Air scour header DN ({unit_label('length_mm', unit_system)})"
         out["air_header_dn"]   = int(round(st.number_input(
             _lbl_ahdn,
@@ -1174,18 +1170,41 @@ def render_sidebar(
             out["saddle_h"] = 0.8; out["saddle_contact_angle"] = 120.0
 
         st.divider()
-        st.markdown("### Collector / underdrain (1D)")
+        st.markdown("### Underdrain / nozzle plate (1D screening)")
+        _q_pf_si = float(st.session_state.get("mmf_last_q_per_filter") or 0.0)
+        if _q_pf_si <= 0 and float(out.get("total_flow", 0) or 0) > 0:
+            _n_hyd_paths = max(
+                1, int(out.get("n_filters", 1)) - int(out.get("hydraulic_assist", 0)),
+            )
+            _q_pf_si = float(out["total_flow"]) / max(1, int(out.get("streams", 1))) / _n_hyd_paths
+        _area_si = float(st.session_state.get("mmf_last_avg_area") or 0.0)
+        _bwv_si = si_value(float(out.get("bw_velocity", 30)), "velocity_m_h", unit_system)
+        _q_bw_si = _bwv_si * _area_si if _area_si > 0 else 0.0
+        _q_pf_txt = (
+            f"**{format_value(_q_pf_si, 'flow_m3h', unit_system, 1)}**"
+            if _q_pf_si > 0
+            else "— (run model)"
+        )
+        _q_bw_txt = (
+            f"**{format_value(_q_bw_si, 'flow_m3h', unit_system, 1)}**"
+            if _q_bw_si > 0
+            else "— (set BW velocity + media area)"
+        )
         st.caption(
-            "Internal **header + lateral + perforation** model (not vessel §4 nozzles). "
-            "Results and plots: Backwash → **Collector design (1D)**."
+            "**Your design (today):** **nozzle plate** underdrain — perforated or slotted plate under the media "
+            "(**🧱 Media** → nozzle plate bore, density, open area). **No lateral pipes** in this project yet. "
+            "**This 1D block** is a **screening surrogate**: feed **header/manifold** plus equivalent **orifice "
+            "stations** along the drum (not a full nozzle-plate network). **Backwash flow only** — uses BW flow "
+            f"{_q_bw_txt}, **not** filtration feed {_q_pf_txt} (Filtration tab). "
+            "Other underdrain types may be added later. **Not** §4 shell BW in / out / air nozzles."
         )
         with st.expander(
             "Sizes, material & optimization",
             expanded=False,
         ):
             st.caption(
-                "**Inlet feed / BW outlet collector** (not a bottom underdrain). "
-                "Enable **Use calculated maldistribution** in **Media → Advanced calibration** to feed ΔP from this model."
+                "Header DN may link to §4 BW inlet/outlet nozzle pipe ID. "
+                "Optional: link **filtration maldistribution factor** to the 1D distribution factor in **Media → Advanced calibration**."
             )
             st.markdown("**Sizes & hydraulics**")
             _lbl_chid = f"Header internal diameter ({unit_label('length_m', unit_system)})"
@@ -1222,13 +1241,23 @@ def render_sidebar(
                 key="collector_tee_loss_enable",
                 help=(
                     "Adds local loss Δh = K·V_header²/(2g) at each lateral takeoff in the 1D "
-                    "distribution solve (screening). Increases downstream maldistribution vs "
+                    "distribution solve (screening). Increases header–lateral distribution loss vs "
                     "pipe friction alone — not 3D tee CFD."
                 ),
             )
             out["n_bw_laterals"] = int(st.number_input(
-                "Number of BW laterals along vessel length", value=4, min_value=1, max_value=24, step=1,
+                "Equivalent lateral stations (1D collector)",
+                value=int(st.session_state.get("n_bw_laterals", 4) or 4),
+                min_value=1,
+                max_value=80,
+                step=1,
                 key="n_bw_laterals",
+                help=(
+                    "Count of **equivalent orifice stations** along the internal BW collector "
+                    "header (1D screening model) — **not** nozzle-plate rows. "
+                    "For brick nozzle rows across the plate chord, use **🧱 Media → "
+                    "Nozzle rows across chord**."
+                ),
             ))
             out["lateral_dn_mm"] = st.number_input(
                 f"Lateral pipe DN ({unit_label('length_mm', unit_system)})",
@@ -1376,7 +1405,7 @@ def render_sidebar(
             st.caption(
                 "Run when you change **lateral DN**, **perforation Ø**, **N laterals**, "
                 "**construction**, or **material** (and header ID if not linked to §4). "
-                "The solver picks N × DN × perforation count for the lowest maldistribution; "
+                "The solver picks N × DN × perforation count for the lowest 1D distribution factor; "
                 "it does not change §4 vessel nozzles or a linked header diameter."
             )
             _opt_msg = st.session_state.pop("_collector_opt_message", None)

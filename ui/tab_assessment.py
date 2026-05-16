@@ -87,6 +87,24 @@ def render_tab_assessment(inputs: dict, computed: dict):
 
     st.subheader("Process assessment")
 
+    _basis = computed.get("design_basis") or {}
+    if _basis.get("assumptions_catalog") or _basis.get("traceability"):
+        with st.expander("Design basis — key assumptions & traceability", expanded=False):
+            st.caption(
+                f"Schema **{_basis.get('schema_version', '—')}** · "
+                f"Full export on **Report** tab."
+            )
+            for _a in (_basis.get("assumptions_catalog") or [])[:6]:
+                st.markdown(f"- **{_a.get('id', '')}** — {_a.get('text', '')}")
+            _tr = _basis.get("traceability") or []
+            if _tr:
+                st.markdown("**Traced outputs (sample)**")
+                for _t in _tr[:8]:
+                    _v = _t.get("value_si", _t.get("value", "—"))
+                    st.markdown(
+                        f"- **{_t.get('label', _t.get('output', ''))}:** {_v} {_t.get('unit', '')}"
+                    )
+
     with st.expander("Process model scope — effluent, RTD, breakthrough", expanded=False):
         st.markdown(
             "This release focuses on **hydraulic envelope** (LV, EBCT), **scalar cake / solid loading** "

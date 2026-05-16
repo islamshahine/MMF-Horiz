@@ -46,7 +46,23 @@ def render_tab_media(inputs: dict, computed: dict):
     )
 
     from ui.nozzle_catalogue_ui import render_nozzle_catalogue_media_panel
-    render_nozzle_catalogue_media_panel(st.session_state.get("unit_system", "metric"))
+    render_nozzle_catalogue_media_panel(
+        st.session_state.get("unit_system", "metric"),
+        inputs=inputs,
+        salinity_ppt=float(inputs.get("feed_sal", 35.0) or 35.0),
+    )
+    _uda = computed.get("underdrain_system_advisory") or {}
+    if _uda.get("findings"):
+        with st.expander("Underdrain system check (catalogue · density · strainer)", expanded=False):
+            st.caption(
+                f"**{_uda.get('catalogue_label', '—')}** · "
+                f"ρ **{float(_uda.get('np_density_per_m2', 0)):.0f} /m²** · "
+                f"strainer **{_uda.get('strainer_label', '—')}**"
+            )
+            for _f in _uda.get("findings") or []:
+                st.warning(_f.get("detail", "")) if _f.get("severity") == "warning" else st.info(_f.get("detail", ""))
+            for _r in _uda.get("recommendations") or []:
+                st.caption(f"• {_r}")
 
     with st.expander("0 · Media fill budget (indicative)", expanded=False):
         from engine.media_pricing import estimate_media_inventory_budget, REGION_FACTOR

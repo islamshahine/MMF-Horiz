@@ -1,5 +1,7 @@
 import math
 
+from engine.strainer_materials import STRAINER_WEIGHT_KG, normalize_strainer_material
+
 # =============================================================================
 # SADDLE CATALOGUE  (capacity t, section label, kg/m, piece length m, paint m²/m)
 # =============================================================================
@@ -403,6 +405,37 @@ def nozzle_plate_area(
     }
 
 
+def nozzle_plate_bore_layout(
+    area_total_m2: float,
+    nozzle_density_per_m2: float,
+    *,
+    clamp_drilled_band: bool = True,
+) -> dict[str, int]:
+    """
+    Hole count from plate area and target density.
+
+    ``clamp_drilled_band=True`` (default) limits count to the **45–55 /m²** drilled
+    false-bottom band used for legacy mechanical screening. Set ``False`` for
+    wedge-wire / mushroom catalogue densities (layout uses brick algorithm in compute).
+    """
+    area = max(0.0, float(area_total_m2))
+    dens = float(nozzle_density_per_m2)
+    n_target = max(1, round(dens * area))
+    n_bores_min = math.ceil(NOZZLE_DENSITY_MIN * area)
+    n_bores_max = math.floor(NOZZLE_DENSITY_MAX * area)
+    if clamp_drilled_band:
+        n_bores = max(n_bores_min, min(n_bores_max, n_target))
+    else:
+        n_bores = n_target
+    return {
+        "n_bores": n_bores,
+        "n_bores_min": n_bores_min,
+        "n_bores_max": n_bores_max,
+        "n_target_unclamped": n_target,
+        "clamp_drilled_band": clamp_drilled_band,
+    }
+
+
 def nozzle_plate_design(
     vessel_id_m: float,
     cyl_len_m: float,
@@ -509,10 +542,10 @@ def nozzle_plate_design(
 
     # ── Plate weight ──────────────────────────────────────────────────────────
     # Bore layout
-    n_bores_min  = math.ceil(NOZZLE_DENSITY_MIN * area_total)
-    n_bores_max  = math.floor(NOZZLE_DENSITY_MAX * area_total)
-    n_bores      = max(n_bores_min,
-                       min(n_bores_max, round(nozzle_density_per_m2 * area_total)))
+    _bore = nozzle_plate_bore_layout(area_total, nozzle_density_per_m2)
+    n_bores_min = _bore["n_bores_min"]
+    n_bores_max = _bore["n_bores_max"]
+    n_bores = _bore["n_bores"]
     bore_a_each  = math.pi / 4 * (bore_diameter_mm / 1000) ** 2
     bores_area   = bore_a_each * n_bores
     net_area     = max(area_total - bores_area, 0.0)
@@ -582,13 +615,6 @@ PIPE_WEIGHT_KG_M = {
     200: 20.10, 250: 28.26, 300: 36.69, 400: 55.87,
 }
 
-# Strainer nozzle unit weights (one nozzle body, no base)
-STRAINER_WEIGHT_KG = {
-    "SS316":  0.35,   # stainless steel — pressure service
-    "HDPE":   0.08,   # high-density polyethylene — standard duty
-    "PP":     0.06,   # polypropylene — low pressure
-}
-
 # Manhole standard weights (cover + neck stub, DN 600)
 MANHOLE_WEIGHT_KG = {
     "DN 600": 130,
@@ -598,7 +624,7 @@ MANHOLE_WEIGHT_KG = {
 
 def internals_weight(
     n_strainer_nozzles: int,
-    strainer_material: str      = "SS316",
+    strainer_material: str      = "Super_duplex_2507",
     air_header_dn_mm: int       = 200,
     air_header_length_m: float  = 0.0,    # = cyl_len if not overridden
     cyl_len_m: float            = 21.55,
@@ -614,7 +640,7 @@ def internals_weight(
     Parameters
     ----------
     n_strainer_nozzles  : Number of strainer nozzles (= n_bores from nozzle plate)
-    strainer_material   : "SS316" | "HDPE" | "PP"
+    strainer_material   : key in ``STRAINER_WEIGHT_KG`` (see ``engine/strainer_materials.py``)
     air_header_dn_mm    : Air scour header pipe DN, mm
     air_header_length_m : Header length (defaults to cyl_len if 0)
     cyl_len_m           : Vessel cylindrical length, m
@@ -625,7 +651,8 @@ def internals_weight(
     dict with individual and total weights, kg and tonnes
     """
     # Strainer nozzles
-    w_per_nozzle   = STRAINER_WEIGHT_KG.get(strainer_material, 0.35)
+    _sm = normalize_strainer_material(strainer_material)
+    w_per_nozzle   = STRAINER_WEIGHT_KG.get(_sm, 0.35)
     w_strainers    = n_strainer_nozzles * w_per_nozzle
 
     # Air scour header
@@ -645,7 +672,7 @@ def internals_weight(
     return {
         # Strainers
         "n_strainer_nozzles":     n_strainer_nozzles,
-        "strainer_material":      strainer_material,
+        "strainer_material":      _sm,
         "weight_per_strainer_kg": round(w_per_nozzle, 3),
         "weight_strainers_kg":    round(w_strainers, 1),
         # Air header
