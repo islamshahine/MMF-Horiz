@@ -14,8 +14,12 @@
 - Economics (CAPEX, OPEX, carbon footprint, LCOW benchmarking) — **intermittent BW** pump & blower duty from the BW step table for annual kWh; OPEX energy and operational CO₂ use **metered-style Σ kWh × tariff / grid** (not 24/7 rated pump power)
 - **Lifecycle financials** — discounted cash flows, replacements (media / nozzles / lining), escalation, optional benefit stream for IRR, depreciation (straight-line / declining balance), NPV sensitivity **spider chart**; outputs in `computed["econ_financial"]` (+ legacy `econ_npv` simplified curve)
 - Engineering assessment with severity scoring
-- **Design comparison** (⚖️ Compare tab): sidebar design vs editable alternative, second `compute_all`, 13-metric diff table, CSV export
-- Technical report generation (Word .docx + optional PDF) — includes optional **lifecycle financial** section (NPV / IRR summary, cash-flow excerpt, replacement table) and matching **PDF** section (`financial`)
+- **Design comparison** (⚖️ Compare tab): Design A vs B + **design library** (save up to **20** cases, compare **2–12**, paginated metrics table)
+- **Explainability** — metric registry with contributor breakdowns (Filtration / Backwash)
+- **Design basis & traceability** (schema **1.1**) — assumption IDs, output traceability, Report JSON/PDF/Word
+- **Lifecycle degradation curves** — advisory sawtooth condition for media, nozzles, collector (Economics tab)
+- **Pressurized underdrain catalogue** — mushroom / wedge-wire screening; salinity-based strainer defaults (Media sidebar)
+- Technical report generation (Word .docx + optional PDF) — includes optional **lifecycle financial** and **design basis** sections
 
 **Target users:** Process engineers and filter designers at water treatment / desalination companies.
 
@@ -42,6 +46,8 @@ app.py
   │       ← Pumps & power edits still reach compute when sidebar hidden
   │
   ├─ compute_all_cached(inputs) → computed: dict      ← `ui/compute_cache.py`; deep-copy + LRU cache
+  │
+  ├─ build_design_basis / explainability / lifecycle_degradation  ← `app.py` post-process on full computed
   │
   ├─ with ctx:  status badges (uses inputs + computed)
   │
@@ -112,8 +118,20 @@ MMF-Horiz/
 │   ├── collector_geometry.py    # Lateral reach, spacing, underdrain screening suggestions
 │   ├── collector_intelligence.py  # 1C rules: freeboard, nozzle velocities, air header
 │   ├── collector_optimisation.py  # Grid search on collector inputs (Backwash / sidebar)
-│   ├── design_basis.py       # Assumptions + traceability bundle for reports
+│   ├── design_basis.py       # Assumptions catalog (ASM-*), traceability (TRC-*), schema 1.1
 │   ├── design_basis_report.py  # PDF/Word formatters for design basis section
+│   ├── explainability.py     # METRIC_REGISTRY — equation contributors for UI tooltips
+│   ├── lifecycle_degradation.py  # Sawtooth media/nozzle/collector condition vs year (advisory)
+│   ├── nozzle_plate_catalogue.py  # Pressurized MMF underdrain screening (9 products)
+│   ├── strainer_materials.py # Salinity-driven SS/duplex/super duplex; polymer bodies
+│   ├── nozzle_system.py      # Underdrain coherence advisory (catalogue + strainer + ρ)
+│   ├── collector_nozzle_plate.py  # Brick/staggered nozzle layout, open area, plate weight
+│   ├── compare_workspace.py  # Multi-case compare: library 20, selection 12, pagination
+│   ├── bw_scheduler.py       # Multi-day BW stagger (stream-aware v2, peak windows)
+│   ├── collector_staged_orifices.py  # Staged lateral orifice advisory
+│   ├── collector_velocity_risk.py    # Erosion/plugging heuristics
+│   ├── collector_envelope.py   # BW flow operating envelope sweeps
+│   ├── uncertainty_cycle.py  # Cycle driver decomposition (P2)
 │   ├── uncertainty.py        # Filtration cycle optimistic / expected / conservative bands
 │   ├── coating.py            # Internal surface areas, lining/coating cost
 │   ├── cartridge.py          # Cartridge filter design & optimisation
@@ -155,7 +173,10 @@ MMF-Horiz/
 │   ├── tab_economics.py      # 💰 Economics tab — CAPEX/OPEX/carbon/benchmark; NPV curve; lifecycle financial + Plotly spider
 │   ├── tab_assessment.py     # 🎯 Assessment tab + n_filters LV sweep + OAT tornado chart
 │   ├── tab_report.py         # 📄 Report tab + JSON save/load; PDF/Word use fmt; PDF passes unit_system
-│   ├── tab_compare.py        # ⚖️ Compare — Design B stored in SI; compute_all×2; CSV; incremental `econ_financial`
+│   ├── tab_compare.py        # ⚖️ Compare — A/B + library (20/12/pagination); incremental `econ_financial`
+│   ├── nozzle_catalogue_ui.py  # Unified Media underdrain block (catalogue + strainer)
+│   ├── fouling_workflow.py   # 5-step fouling guided workflow
+│   ├── bw_distribution_panels.py  # Backwash distribution / collector panels
 │   ├── tab_pump_costing.py   # ⚡ Pumps & power — hydraulics, pump selection, RFQ/datasheet export
 │   ├── feed_pump_context_inputs.py  # merge_feed_hydraulics_into_out; reconcile_si_inputs_with_pump_widgets
 │   ├── project_toolbar.py    # Top strip: New / Save / Save as / Load (deferred before sidebar)
@@ -202,7 +223,7 @@ MMF-Horiz/
 | Water quality | `feed_temp`, `feed_sal`, `bw_temp`, `bw_sal`, `tss_low/avg/high`, `temp_low/high` |
 | Vessel geometry | `nominal_id`, `total_length`, `end_geometry`, `lining_mm` |
 | Mechanical | `material_name`, `design_pressure`, `corrosion`, `shell_radio`, `head_radio`, `ov_shell`, `ov_head` |
-| Nozzle plate | `nozzle_plate_h`, `np_bore_dia`, `np_density`, `np_beam_sp`, `np_override_t`, `np_slot_dp` |
+| Nozzle plate | `nozzle_plate_h`, `np_bore_dia`, `np_density`, `np_beam_sp`, `np_override_t`, `np_slot_dp`, `nozzle_catalogue_id`, `strainer_mat`, `n_nozzle_rows` |
 | Collector | `collector_h`, `freeboard_mm` |
 | Media layers | `layers` — list of dicts with `{Type, Depth, d10, cu, epsilon0, rho_p_eff, psi, d60, is_porous, is_support, capture_pct}` |
 | Backwash | `bw_velocity`, `air_scour_rate`, `bw_cycles_day`, `bw_s_*` (step durations), `bw_total_min` |
@@ -233,6 +254,9 @@ MMF-Horiz/
 | Weight | `w_noz`, `w_total`, `vessel_areas`, `lining_result`, `wt_oper` |
 | Economics | `econ_capex`, `econ_opex`, `econ_carbon`, `econ_bench` (includes `*_bench_si` tuples; `econ_opex` may include `energy_kwh_*_yr` when metered); `econ_npv` (simplified cost PV profile); **`econ_financial`** (NPV, IRR, payback, cashflow_table, depreciation_table, replacement_schedule, npv_sensitivity, CO₂–cost path, JSON-serialisable) |
 | Assessment | `overall_risk`, `risk_color/border/icon`, `drivers`, `impacts`, `recommendations`, `n_criticals/warnings/advisories`, `all_lv_issues`, `all_ebct_issues`, `rob_rows` |
+| Post-process (app.py) | **`design_basis`** (v1.1), **`explainability`**, **`lifecycle_degradation`** |
+| Collector extras | `collector_staged_orifices`, `collector_velocity_risk`, `collector_bw_envelope`, `collector_nozzle_plate`, `underdrain_system_advisory` |
+| Cycle uncertainty | `cycle_uncertainty`, `cycle_economics` |
 | Severity fns | `lv_severity_fn`, `ebct_severity_fn` (callables passed to tabs) |
 | Input validation | `input_validation` (`valid`, `errors`, `warnings` from `engine/validators.py` — **SI magnitudes**, same `inputs` contract as the rest of the engine) · `compute_used_reference_fallback` (bool; when invalid, `compute_all` uses `REFERENCE_FALLBACK_INPUTS` so tabs still render) |
 
@@ -280,10 +304,13 @@ Three-tier system applied to every scenario × layer combination:
 | ⚙️ Mechanical | Vessel drawing (ISO 128 style) · ASME thickness · nozzle plate · nozzle schedule · saddle design (Zick) · weight summary · lining/coating |
 | 🧱 Media | Geometric volumes · media properties · pressure drop all scenarios · media inventory · clogging analysis · **Media Engineering Intelligence** (arrangement validation + per-layer role/BW/bio cards) |
 | ⚡ Pumps & power | Feed-path pressure budget · pump/BW/blower duty · performance curves · alignment with economics energy · RFQ / datasheet export (feed pump, air blower) · widgets merged into sidebar SI `inputs` |
-| 💰 Economics | CAPEX breakdown + pie chart · OPEX breakdown + pie chart · carbon footprint · **BW pump / blower h/day** (plant-wide, from step timing × cycles) · annual kWh split caption · global benchmark with **proper CRF** (i, n user-inputs) · benchmark bands in **active unit system** · **NPV** expander (levelised OPEX curve) · **Lifecycle financial** expander (cash-flow metrics, tables, cumulative / OPEX / CAPEX–OPEX charts, replacement timeline, **NPV sensitivity spider** (Plotly `Scatterpolar`), CO₂ vs cumulative cost) |
-| 🎯 Assessment | Overall risk banner · key drivers · operational impacts · violation tables · Design Robustness Index · **n_filters sweep** — columns **Physical / stream** & **Design N** (standby fixed); **OAT tornado** (9×4) with metric **descriptions**, **tornado_narrative** under chart |
-| 📄 Report | **JSON project save/load** (also via top **project toolbar**) · section selector · **PDF download** (ReportLab, incl. `financial`) · Word .docx download · optional **lifecycle financial** tables · inline markdown preview |
-| ⚖️ Compare | Design **A** (current sidebar) vs **B** (editable subset) · second `compute_all` · **13 key metrics** via `compare_designs` · 🟡 significant diff column · winner summary · **CSV export** · **incremental lifecycle economics** (ΔCAPEX, ΔNPV, Δ year-1 operating cash) when both runs expose `econ_financial` |
+| 💰 Economics | CAPEX / OPEX / carbon · BW pump/blower h/day · benchmark CRF · **NPV** expander · **Lifecycle financial** (§6) · **Lifecycle degradation** (§7) — sawtooth condition curves |
+| 🎯 Assessment | Risk banner · drivers · robustness · n_filters sweep · OAT tornado · **design basis** sample (assumptions + traceability) |
+| 📄 Report | JSON save/load · PDF/Word · **design basis** section (assumptions catalog + traceability table + JSON download) |
+| ⚖️ Compare | **A vs B** (13 metrics, incremental NPV) · **library** save **20** / compare **2–12** · paginated table (**4**/page) · CSV |
+| 🧱 Media | Underdrain catalogue reference table · **fouling workflow** (5 steps) · media intelligence |
+| 🔄 Backwash | Collector hydraulics · BW scheduler v2 · staged orifices · velocity risk · envelope · distribution panels |
+| 💧 Filtration | **Explainability** expander — how key numbers are built |
 
 ---
 
@@ -391,7 +418,14 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | **SI contract (validation UX)** | `validate_inputs(..., unit_system=)` — geometry errors use `format_value` when imperial; Compare B widgets transpose on toggle (`ui/compare_units.py`). | `tests/test_validation.py`, `tests/test_compare_units.py` |
 | **Collector 1A / 1B (1D)** | `collector_hydraulics.py` — header/lateral Darcy + orifice ladder + iterative lateral distribution; optional auto maldistribution; Backwash UI + schematics + optimisation. **Not** CFD / full 3D manifold. | `tests/test_collector_hydraulics.py`, `tests/test_distribution_convergence.py`, `tests/test_collector_geometry.py` |
 | **Collector 1C (rules)** | `collector_intelligence.py` — advisories on freeboard, nozzle velocities, air header. | (Backwash expander + manual) |
-| **Design basis export** | `design_basis.py` + report section in PDF/Word. | `tests/test_design_basis.py` |
+| **Design basis export (v1.1)** | `design_basis.py` — ASM/TRC IDs; built post-compute in `app.py`; Report + Assessment UI. | `tests/test_design_basis.py` |
+| **Explainability registry** | `explainability.py` + `render_metric_explain_panel` on Filtration/Backwash. | `tests/test_explainability.py` |
+| **Lifecycle degradation** | `lifecycle_degradation.py` — Economics §7 sawtooth curves. | `tests/test_lifecycle_degradation.py` |
+| **Underdrain catalogue** | Pressurized-only 9 products; `strainer_materials`, `nozzle_system`, Media sidebar. | `tests/test_nozzle_plate_catalogue.py`, `test_nozzle_system.py`, `test_strainer_materials.py` |
+| **Nozzle plate layout** | `collector_nozzle_plate.py` — brick layout, open area. | `tests/test_collector_nozzle_plate.py` |
+| **BW scheduler v2** | Stream-aware `optimize_bw_phases`, peak windows. | `tests/test_bw_scheduler.py` |
+| **Fouling workflow** | `ui/fouling_workflow.py` + `build_fouling_assessment`. | `tests/test_fouling_workflow.py`, `test_fouling.py` |
+| **Multi-case compare scale** | Library 20, selection 12, `slice_compare_result`. | `tests/test_compare_workspace.py` |
 | **Cycle uncertainty (2A)** | `uncertainty.py` → `computed["cycle_uncertainty"]`; Filtration band chart. | `tests/test_uncertainty.py` |
 | **Uncertainty → economics** | `uncertainty_economics.py` → `computed["cycle_economics"]` LCOW optimistic/expected/conservative; Economics expander. | `tests/test_uncertainty_economics.py` |
 | **Fouling guided workflow** | `ui/fouling_workflow.py` + `engine/fouling.py`. | `tests/test_fouling.py` |
@@ -418,9 +452,11 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | Priority | Item | Rationale | Status |
 |----------|------|-----------|--------|
 | **1** | **Collector hand-calc benchmark pack** | Anchors trust in 1A/1B before new physics; fast regression | **Done** — `engine/collector_benchmarks.py`, Backwash expander, `tests/test_collector_benchmarks.py` |
-| **2** | **Multi-case compare** | High consultant value; extends Compare tab | **Done (MVP)** — Compare tab library (≤4 cases), `engine/compare_workspace.py` |
-| **3** | **BW scheduler** | High ops value; largest scope + false-precision risk | **Done (MVP)** — multi-day horizon (1–14 d), `optimized_trains` heuristic in `engine/bw_scheduler.py` |
-| **4** | **Vendor nozzle-plate catalogue** | Faster media setup; screening refs | **Done (MVP)** — `nozzle_plate_catalogue.py`, Media sidebar apply |
+| **2** | **Multi-case compare scale-up** | Consultant optioneering at scale | **Done** — library **20**, run **12**, pagination |
+| **3** | **BW scheduler v2** | Ops scheduling | **Done (MVP)** — stream-aware + peak windows in `bw_scheduler.py` |
+| **4** | **Pressurized underdrain catalogue** | Media setup | **Done** — 9 products; gravity/collector rows removed |
+| **5** | **Explainability + design basis v1.1** | Enterprise review | **Done** — post-compute bundles in `app.py` |
+| **6** | **Lifecycle degradation curves** | O&M narrative | **Done (advisory)** — `lifecycle_degradation.py` |
 
 ### D. **Other polish / scale-up**
 
@@ -436,9 +472,10 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | # | Topic | Notes |
 |---|--------|--------|
 | 1 | **Global / automatic optimiser** | No MILP or gradient search; grid ranker + apply-to-sidebar; **2-objective Pareto (CAPEX vs annual OPEX)** on feasible grid rows only. |
-| 2 | **Multi-case comparison** | **Done (MVP)** — Compare workspace (≤4 cases), `engine/compare_workspace.py`; primary UI remains **A vs B** + CSV export. |
-| 3 | **Vendor nozzle catalogue** | **Done (MVP)** — `engine/nozzle_plate_catalogue.py`, Media sidebar + tab reference table. |
-| 4 | **Live BW scheduler** | **24 h schematic** Gantt + stagger exists; no multi-day optimiser / ops Gantt tied to plant DCS. |
+| 2 | **Multi-case comparison** | **Done** — library **20**, compare **2–12**, pagination; A vs B unchanged. |
+| 3 | **Pressurized underdrain catalogue** | **Done** — 9 products; Leopold / collector-drilled **not** in list. |
+| 4 | **BW scheduler** | **Done (MVP)** — multi-day horizon + `optimized_trains` v2; not MILP/DCS. |
+| 5 | **Explainability / design basis / degradation** | **Done** — see §B table above. |
 | 5 | **External media pricing** | **MVP:** user USD/m³ + region factor in `media_pricing.py` + Media tab; no vendor database or API feed. |
 | 6 | **Collector CFD / full manifold** | **1B+ MVP delivered** — dual-end feed, orifice network, external CFD BC export; in-app CFD / 3D still backlog. |
 | 7 | **Air scour auto-tune** | **Done (MVP):** `auto_expansion` solves **minimum** air-equivalent superficial velocity for target net expansion (bisection on R–Z stack); `air_scour_solve` includes `objective`, thermo **`p_blower_motor_kw` / `p_blower_shaft_kw`** (after `bw_system_sizing`); Backwash + sidebar copy; Design **B** on Compare tab has same manual/auto controls. `tests/test_backwash.py`, `test_integration.py`. *(Further: VFD/blower-map multi-objective — backlog.)* |
@@ -446,8 +483,8 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | 9 | **Uncertainty → economics** | **Done:** `cycle_economics` LCOW band (BW energy scaled from cycle envelope). |
 | 10 | **Monte Carlo lite** | Deferred — envelope (2A) preferred for Streamlit UX. |
 
-**Narrative (updated 2026-05)**  
-Platform hardening (project library, hydrate, imperial validation, design basis, 1A/1B collector + **plan/elevation schematics** (dimensions moved below vessel where noted), 2A uncertainty + LCOW band, fouling workflow, optimisation UX + **Pareto**, **media fill budget**, **multi-case compare workspace**, **CFD export** robustness, **auto air-scour** with screening blower kW readout) is **in repo**. Git tracks **source only** (no `__pycache__` in index). Remaining leverage: MILP/gradient optimiser, vendor price feeds, in-app CFD, optional CI, deeper branch tests.
+**Narrative (updated 2026-05-16)**  
+Platform hardening through **design basis v1.1**, **explainability**, **pressurized underdrain catalogue**, **multi-case compare scale-up**, **lifecycle degradation curves**, **BW scheduler v2**, **fouling workflow**, collector **1A/1B+**, and post-compute enrichment in `app.py` is **in repo** (commit `9dc1fa7` on `main`). Remaining leverage: MILP/gradient optimiser, vendor price API feeds, in-app CFD, Monte Carlo lite, optional CI.
 
 ---
 
@@ -480,4 +517,10 @@ Rows **1–11** match **Section A** (original v2). Rows **12–13** are recent h
 | 21 | **Design basis in reports** — assumptions, traceability, collector block in PDF/Word | `engine/design_basis.py`, `engine/design_basis_report.py`, `ui/tab_report.py` |
 | 22 | **Imperial validation + Compare unit sync** — display-aligned validator messages; Compare B widgets on toggle | `engine/validators.py`, `ui/compare_units.py`, `tests/test_compare_units.py` |
 | 23 | **Auto air scour + screening blower kW** — `air_scour_solve` enrichment; Backwash expander; Compare B air mode | `engine/compute.py`, `engine/backwash.py`, `ui/tab_backwash.py`, `ui/tab_compare.py`, `ui/sidebar.py` |
-| 24 | **Multi-case compare workspace (≤4)** + **CFD export aliases** — `compare_workspace`; `normalize_cfd_export_format` in `build_cfd_export_bytes` | `engine/compare_workspace.py`, `engine/collector_cfd_export.py`, `ui/tab_compare.py`, `tests/test_compare_workspace.py`, `tests/test_collector_manifold.py` |
+| 24 | **Multi-case compare (v1, ≤4)** + **CFD export aliases** — superseded by row **29** for scale-up | `engine/compare_workspace.py`, `engine/collector_cfd_export.py` |
+| 25 | **Explainability registry** — METRIC_REGISTRY, contributor panels, plain-value UI | `engine/explainability.py`, `ui/helpers.py`, `app.py`, `tests/test_explainability.py` |
+| 26 | **Design basis v1.1** — ASM/TRC traceability; post-compute; Report/Assessment tables | `engine/design_basis.py`, `design_basis_report.py`, `app.py` |
+| 27 | **Pressurized underdrain catalogue** — 9 products, strainer materials, unified Media sidebar | `nozzle_plate_catalogue.py`, `strainer_materials.py`, `nozzle_catalogue_ui.py`, `collector_nozzle_plate.py` |
+| 28 | **Lifecycle degradation (advisory)** — sawtooth media/nozzle/collector | `lifecycle_degradation.py`, `ui/tab_economics.py` |
+| 29 | **Multi-case compare scale** — library 20, run 12, pagination | `compare_workspace.py`, `ui/tab_compare.py` |
+| 30 | **BW scheduler v2** + **fouling 5-step workflow** | `bw_scheduler.py`, `ui/fouling_workflow.py`, `engine/fouling.py` |

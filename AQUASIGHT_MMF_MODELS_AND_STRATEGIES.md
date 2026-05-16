@@ -20,7 +20,7 @@
 10. [Quick reference — correlations](#10-quick-reference--correlations)
 11. [Development priorities — reconciled view](#11-development-priorities--reconciled-view-vs-external-roadmap) *(end of §11: **Shipped deltas (2026-05)**)*
 
-**Also in §3:** multi-case compare workspace (**§3.15**), CFD BC export contract (**§3.16**), collector schematic UI (**§3.17**).
+**Also in §3:** multi-case compare (**§3.15**), CFD BC export (**§3.16**), collector schematic (**§3.17**), pressurized underdrain catalogue (**§3.18**), explainability registry (**§3.19**), lifecycle degradation curves (**§3.20**), design basis traceability v1.1 (**§3.21**).
 
 ## 1. Platform philosophy
 
@@ -77,6 +77,16 @@ validate_inputs → (fallback REFERENCE_FALLBACK_INPUTS if invalid)
     → assessment (severity, robustness, narrative drivers)
     → environment structural (wind/snow hooks)
 ```
+
+**Post-compute enrichment (`app.py`, after `compute_all_cached`):**
+
+```
+build_design_basis(inputs, computed)      → computed["design_basis"]     (schema 1.1)
+build_explainability_index(...)         → computed["explainability"]
+build_lifecycle_degradation(...)        → computed["lifecycle_degradation"]
+```
+
+These bundles read the **full** `computed` dict (not a partial snapshot). They are advisory / traceability layers — they do not change Ergun, collector solve, or cash flows.
 
 **Dependency rule:** Later stages consume SI dict keys from earlier stages; tabs never re-implement physics.
 
@@ -345,13 +355,24 @@ Outputs: peak LV, min EBCT, CAPEX, dirty ΔP → tornado chart + narrative.
 
 Pure-Python matrix on top of existing `compute_all` outputs — no second physics path.
 
-| Function / rule | Role |
-|------------------|------|
-| `MAX_COMPARE_CASES` (= 4) | `compare_many_designs` raises if `< 2` or `> 4` cases. |
-| `snapshot_case_inputs(inputs, label)` | Serializable `{ "label", "inputs" }` for session / library pins. |
-| `compare_many_designs(cases)` | `cases` = `list[tuple[str, dict]]` of `(label, computed)` in display order. Builds rows from the same **`COMPARISON_METRICS`** tuple as A vs B (`engine/comparison.py`): each row has `metric`, `unit_quantity`, `decimals`, one key per case label with the scalar value, and optional **`spread_pct`** `(max − min) / \|first\| × 100` when ≥2 numeric values exist. |
+| Constant | Value | Role |
+|----------|-------|------|
+| `MAX_LIBRARY_CASES` | 20 | Saved named designs in session (`compare_library`). |
+| `MAX_COMPARE_SELECTION` | 12 | Cases computed in one **Run multi-case comparison** (`MAX_COMPARE_CASES` alias). |
+| `COMPARE_TABLE_PAGE_SIZE` | 4 | Columns per results page in the UI. |
 
-**UI:** Compare tab keeps the **Design A vs Design B** strip (incremental Δ, `diff_value`, NPV narrative). The **workspace** adds 2–4 pinned cases, each from a full `compute_all`, in one metric table. **CSV** export for the multi-case grid is tab-owned; financial “B minus A” semantics stay on the primary pair.
+| Function | Role |
+|----------|------|
+| `snapshot_case_inputs(inputs, label)` | Serializable `{ "label", "inputs" }` (deep-copied SI). |
+| `compare_many_designs(cases)` | `cases` = `list[(label, computed)]`; rows from **`COMPARISON_METRICS`** (`engine/comparison.py`); **`spread_pct`** = `(max − min) / \|first case\| × 100`. |
+| `slice_compare_result(result, page)` | Subset of case columns for paginated table + per-page spread. |
+
+**UI (`ui/tab_compare.py`):**
+
+- **Design A vs B** — unchanged: editable B subset, second `compute_all`, 13 metrics, incremental `econ_financial`, CSV.
+- **Design library** — save current sidebar design (up to 20 labels); multiselect **2–12** cases; **Prev / Next** when more than four columns; **CSV** includes **all** selected cases (full-width export).
+
+**Tests:** `tests/test_compare_workspace.py` (incl. five-case run and pagination slice).
 
 ---
 
@@ -381,6 +402,88 @@ Pure-Python matrix on top of existing `compute_all` outputs — no second physic
 - **Module:** `ui/collector_hyd_schematic.py` — Matplotlib **plan** and **elevation** from `inputs` + `computed["collector_hyd"]`.
 - **Layout:** Longitudinal dimensions and figure captions are placed **below** the vessel outline to free the drawing window; legend and label positions tuned to reduce overlap with internals.
 - **Scope:** Engineering communication and QA of the 1A/1B model — **not** a fabrication drawing.
+
+---
+
+### 3.18 Pressurized underdrain catalogue (`engine/nozzle_plate_catalogue.py`)
+
+**Scope:** Screening references for **pressurized horizontal MMF** media-bed nozzle plates only.
+
+| Excluded from catalogue | Reason |
+|-------------------------|--------|
+| Leopold IMT–style caps | **Gravity filters** — wrong application for this vessel type. |
+| Drilled orifices labelled “collector” | **Feed / BW-out lateral** references — belong in §4 collector inputs, not the media false-bottom picker. |
+
+**Catalogue (9 products, 2026-05):** Johnson wedge-wire (0.25 / 0.50 mm slot), Hansen Aquaflow-type insert, PP mushrooms (0.2–2.0 mm slot), HDPE mushrooms (0.5 / 2.0 mm slot). Each row stores bore, slot, Cd, typical ρ (/m²), body material, strainer family.
+
+| Module | Role |
+|--------|------|
+| `nozzle_plate_catalogue.py` | `NOZZLE_PLATE_CATALOGUE`, `catalogue_patch_for_product`, `list_catalogue_products_sorted` |
+| `strainer_materials.py` | Salinity-driven metal default (SS316 → duplex → super duplex); polymer bodies → PP/HDPE |
+| `nozzle_system.py` | `build_underdrain_system_advisory` — coherence of ρ, strainer, catalogue |
+| `ui/nozzle_catalogue_ui.py` | Unified **Media** sidebar block: plate geometry + catalogue + strainer; **Apply catalogue** via `on_click` (Streamlit-safe session patch) |
+| `collector_nozzle_plate.py` | Brick/staggered layout, open area %, mechanical weight; `layout_revision` for cache busting |
+
+**Inputs:** `nozzle_catalogue_id`, `np_density` (35–100 /m² input range; drilled false-bottom band 45–55 only for manual drilled plate), `strainer_mat`, plate geometry keys.
+
+**Legacy IDs** (`generic_drilled_*`, `leopold_imt_2mm`, …) resolve to `None` with a one-time UI warning — users must re-pick a valid product or **Custom (manual)**.
+
+---
+
+### 3.19 Explainability registry (`engine/explainability.py`)
+
+Deterministic **metric → equation → contributors** map for tooltips and review panels (not a second solver).
+
+| Piece | Role |
+|-------|------|
+| `METRIC_REGISTRY` | ~10 metrics: `q_per_filter`, `solid_loading_effective`, `maldistribution_factor`, `dp_dirty`, cycle uncertainty, BW scheduler, collector imbalance, bed expansion, strainer, nozzle open area |
+| `get_metric_explanation(metric_id, inputs, computed)` | Resolves `inputs.*` / `computed.*` paths to live values |
+| `build_explainability_index` | Attached in `app.py` → `computed["explainability"]` |
+| `ui/helpers.render_metric_explain_panel` | Filtration / Backwash expanders — plain numeric values (no code-styled paths) |
+
+**Doc cross-links:** each registry entry includes `doc_section` (e.g. §3 Process basis, §11.4 Collector).
+
+---
+
+### 3.20 Lifecycle degradation advisory (`engine/lifecycle_degradation.py`)
+
+**Sawtooth condition index** (100 % = fresh after replacement, 0 % = end of cycle) vs project year — **not** wear-rate CFD or FEA.
+
+| Component | Nominal interval (inputs) | Stress drivers (examples) |
+|-----------|---------------------------|---------------------------|
+| Media bed | `media_replace_years` / `replacement_interval_media` | Short `cycle_expected_h`, high `solid_loading_effective_kg_m2`, mal_f, high `bw_velocity` |
+| Nozzles / underdrain | `nozzle_replace_years` / `replacement_interval_nozzles` | BW velocity, `collector_velocity_risk`, underdrain advisory tone, nozzle orifice velocity |
+| Feed / BW collector | Default 15 yr (`replacement_interval_collector` optional) | `flow_imbalance_pct`, collector mal_f calc, velocity risk flags, staged-orifice advisory |
+
+```
+effective_interval = nominal_interval / stress_factor    (stress capped 0.55–2.0)
+condition(year)      = 100 × (1 − (year mod eff_interval) / eff_interval)
+```
+
+**Output:** `computed["lifecycle_degradation"]` — `components`, `findings`, `tone`, `replacement_threshold_pct` (35 %).
+
+**UI:** Economics tab expander **「7 · Lifecycle degradation (advisory)」** — Plotly overlay + summary table + driver bullets.
+
+**Note:** Discrete replacement cash events remain in `econ_financial.replacement_schedule`; curves are operating-stress commentary only.
+
+---
+
+### 3.21 Design basis & traceability (`engine/design_basis.py` v1.1)
+
+Built **after** full `compute_all` in `app.py` (schema **`1.1`**).
+
+| Block | Contents |
+|-------|----------|
+| `assumptions_catalog` | Stable IDs **`ASM-*`** (process, media, BW, collector, internals, fouling) |
+| `traceability` | Rows **`TRC-*`**: label, resolved value, unit, source, doc §, linked assumption IDs |
+| `underdrain` | Catalogue label, ρ, strainer, advisory tone |
+| `collector` | 1D method, distribution convergence, screening suggestions |
+| `explainability_metrics` | Cross-link to `METRIC_REGISTRY` ids |
+| `exclusions` | CFD, 3D manifold, MILP scheduler, gravity/leopold/collector-drilled catalogue scope |
+
+**Report formatters:** `design_basis_report.py` — assumptions table, traceability table, underdrain summary; PDF/Word section **Design basis & traceability**.
+
+**UI:** Report tab expander + JSON download; Assessment tab sample assumptions / trace rows.
 
 ---
 
@@ -534,10 +637,10 @@ These let experienced users tune models without forking code:
 | ⚙️ Mechanical | “Is the vessel buildable? How heavy? Nozzles?” |
 | 🧱 Media | “What’s in the bed? ΔP breakdown? Intelligence warnings?” |
 | ⚡ Pumps & power | “What head and kW? Pump/datasheet narrative?” |
-| 💰 Economics | “What does it cost and emit? Lifecycle cash?” |
+| 💰 Economics | “What does it cost and emit? Lifecycle cash? **Degradation curves** (media / nozzles / collector)?” |
 | 🎯 Assessment | “Is it safe? What if we lose a filter? What moves NPV?” |
 | 📄 Report | “Give me a file for the client.” |
-| ⚖️ Compare | “Is **B vs A** better on **14** `COMPARISON_METRICS` + incremental NPV? Optional **workspace**: **2–4** full `compute_all` cases, same metric rows + spread.” |
+| ⚖️ Compare | “Is **B vs A** better on **13** `COMPARISON_METRICS` + incremental NPV? **Library:** save up to **20** cases, compare **2–12**, paginated table (**4**/page), full CSV.” |
 
 ### 7.2 Display rules
 
@@ -549,7 +652,7 @@ These let experienced users tune models without forking code:
 
 ### 7.3 Progressive disclosure
 
-- Expander for lifecycle financial, tornado, media intelligence, n_filters sweep.
+- Expanders for lifecycle financial, **lifecycle degradation (§7)**, explainability (Filtration), tornado, media intelligence, fouling workflow, n_filters sweep.
 - Status badges in input column — traffic-light summary without opening tabs.
 - Validation banners — errors before tabs when inputs invalid.
 
@@ -557,8 +660,8 @@ These let experienced users tune models without forking code:
 
 | Idea | Value |
 |------|--------|
-| **Design basis panel** | Single page: assumptions, limits, codes cited |
-| **Traceability** | Click ΔP row → show Ergun term breakdown |
+| **Design basis panel** | **Delivered (v1.1):** `ASM-*` / `TRC-*` tables on Report + Assessment |
+| **Traceability** | **Delivered:** explainability registry + metric contributor panels |
 | **Uncertainty bands** | Low/avg/high as shaded regions on charts |
 | **Operating envelope chart** | LV vs EBCT feasibility map per scenario |
 | **Media life narrative** | Link cycle duration → replacement interval → OPEX |
@@ -580,7 +683,7 @@ Use these prompts with AI or workshops. Each axis is independent — mix and mat
 | Direction | Description |
 |-----------|-------------|
 | **Design library** | SQLite UI for projects, snapshots, named scenarios (engine exists). |
-| **Multi-case workspace** | **MVP (≤4 cases):** `engine/compare_workspace.py` + Compare tab canvas; richer 3–10-case UI still aspirational. |
+| **Multi-case workspace** | **Delivered:** library **20**, run **12**, UI pagination **4**/page (`compare_workspace.py`). |
 | **Requirements traceability** | Link each input to P&ID tag / DBR line item. |
 | **Collaboration** | Comment threads on assessment drivers; revision diff on JSON. |
 | **API-first clients** | ERP / estimating tools POST designs; return PDF + metrics only. |
@@ -741,16 +844,22 @@ Statements the platform should *not* overclaim:
 | **Basis** | Design basis & traceability export | **Done** — `design_basis_report.py`, PDF/Word section, `build_design_basis()` |
 | **1B+** | Dual-end feed + orifice network + CFD BC export | **Done (MVP)** — `collector_manifold.py`, `collector_cfd_export.py`; in-app CFD backlog |
 | **Bench** | Collector hand-calc regression suite | **Done** — `engine/collector_benchmarks.py` (8 cases); Backwash expander |
-| **Cmp+** | Multi-case compare (≤4 designs) | **Done (MVP)** — `engine/compare_workspace.py`, Compare tab; CSV-friendly still A/B-centric in places |
+| **Cmp+** | Multi-case compare (library 20 / run 12) | **Done** — `compare_workspace.py`, pagination, `slice_compare_result` |
 | **Sched** | Dynamic BW scheduler | **Done (MVP)** — multi-day horizon + `optimized_trains`; MILP/DCS out of scope |
 
-#### Phase 3 — Platform scale (10+ weeks)
+#### Phase 3 — Platform scale — **partially delivered (2026-05)**
 
-- Dynamic BW scheduler (train MILP or heuristic — label as *scheduling aid*).
-- Multi-design workspace (SQLite UI + `project_db` — engine ready).
-- ~~Uncertainty → economics bands~~ **Done (2026-05):** `engine/uncertainty_economics.py` → `cycle_economics` on `compute_all`.
-- Media lifecycle degradation curves.
-- Monte Carlo lite (**optional**, behind checkbox).
+| Item | Status |
+|------|--------|
+| BW scheduler v2 (stream-aware, peak windows) | **Done (MVP)** — `engine/bw_scheduler.py`, Backwash UI |
+| Multi-design workspace scale-up | **Done** — library 20 / compare 12 / pagination |
+| Design basis traceability v1.1 | **Done** — `build_design_basis` post-compute in `app.py` |
+| Explainability registry | **Done** — `engine/explainability.py` |
+| Lifecycle degradation curves | **Done (advisory)** — `engine/lifecycle_degradation.py`, Economics §7 |
+| Pressurized underdrain catalogue | **Done** — 9 products; gravity/collector rows removed |
+| Uncertainty → economics bands | **Done** — `uncertainty_economics.py` → `cycle_economics` |
+| Monte Carlo lite | **Backlog** — optional, behind checkbox |
+| MILP / DCS BW optimiser | **Backlog** — heuristic scheduler only |
 
 ### 11.4 Priority 1 — collector package (refined)
 
@@ -819,9 +928,9 @@ Steps 1–4 from external prompt are good; map to **existing** sidebar keys:
 | Optimisation UI + Pareto rank | High | Medium | **P1** (with Phase 1) |
 | Design basis / traceability | High (enterprise) | Medium | **P1–2** |
 | Dynamic BW scheduler | High | High | **P2–3** |
-| Multi-design (>2) | Medium | Medium | **P2** — **MVP delivered** (`compare_workspace`, ≤4); full named library UI backlog |
-| Uncertainty → economics | Medium | Medium | **P3** |
-| Media ageing curves | Medium | High | **P3** |
+| Multi-design (>2) | Medium | Medium | **Done** — library 20, run 12, pagination |
+| Uncertainty → economics | Medium | Medium | **Done** — `cycle_economics` |
+| Media ageing curves | Medium | High | **Done (advisory)** — `lifecycle_degradation` |
 
 ### 11.8 Implementation checklist (every feature)
 
@@ -847,17 +956,23 @@ assumptions, limits, runtime (ms per compute_all call).
 
 ### Shipped deltas (2026-05)
 
-Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.15–§3.17, §7.1, §7.5, and §8:
+Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.15–§3.21, §7.1, §7.5, and §8:
 
 | Topic | Summary |
 |-------|---------|
 | **Air scour** | `auto_expansion` finds **minimum** air-equivalent superficial velocity for target net expansion; after `bw_system_sizing`, **`air_scour_solve`** includes motor/shaft blower kW and objective; Compare **B** mirrors sidebar air-scour mode widgets. |
-| **Multi-case compare** | `compare_workspace` (**≤4** cases), shared **`COMPARISON_METRICS`** with A/B; CSV/workspace on Compare tab. |
+| **Multi-case compare** | Library **20**, run **12**, UI pages of **4** columns; full CSV export. |
+| **Underdrain catalogue** | Pressurized-only (**9** products); salinity strainers; Apply via `on_click`. |
+| **Explainability** | `METRIC_REGISTRY` + Filtration/Backwash panels; plain values in UI. |
+| **Design basis** | Schema **1.1**; `ASM-*` / `TRC-*`; post-compute in `app.py`. |
+| **Lifecycle degradation** | Sawtooth media / nozzle / collector; Economics expander **§7**. |
+| **BW scheduler v2** | Stream-aware phases, peak concurrent windows on all stagger modes. |
+| **Fouling workflow** | 5-step UI; `build_fouling_assessment`; cycle cross-check. |
 | **CFD export** | Full BC **JSON** bundle + **orifice CSV**; **`normalize_cfd_export_format`** maps legacy UI labels to `json` / `csv_orifices`. |
 | **Schematic** | `collector_hyd_schematic` — dimensions below vessel, cleaner legend/captions (§3.17). |
-| **Tests (indicative)** | e.g. `tests/test_compare_workspace.py`, `tests/test_collector_manifold.py` (normalize), `tests/test_integration.py` (air scour auto), `tests/test_backwash.py`. |
+| **Tests (indicative)** | `test_compare_workspace`, `test_explainability`, `test_design_basis`, `test_lifecycle_degradation`, `test_nozzle_plate_catalogue`, `test_nozzle_system`, `test_strainer_materials`, `test_fouling_workflow`, `test_bw_scheduler`, `test_collector_nozzle_plate`. |
 
 ---
 
-*Document version: 2026-05 — includes §11 reconciled development priorities, §3.15–§3.17, and shipped deltas.*
+*Document version: 2026-05-16 — §3.15–§3.21, post-compute bundles, catalogue scope, compare scale-up, degradation curves.*
 
