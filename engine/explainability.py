@@ -187,6 +187,18 @@ METRIC_REGISTRY: Dict[str, MetricExplanation] = {
         ),
         "§3.24 Design to target",
     ),
+    "spatial_uniformity": MetricExplanation(
+        "spatial_uniformity",
+        "Nozzle plate hydraulic uniformity",
+        "1 − std(loading_factor)/mean(loading_factor) on Voronoi lumped BW split",
+        (
+            MetricContributor("Uniformity", "computed.spatial_distribution.hydraulic_uniformity_index", "0–1"),
+            MetricContributor("Max loading", "computed.spatial_distribution.max_loading_factor", "−"),
+            MetricContributor("Q basis", "computed.spatial_distribution.q_basis_m3h", "m³/h"),
+            MetricContributor("Method", "computed.spatial_distribution.method", "id"),
+        ),
+        "§3.22 Spatial distribution",
+    ),
     "collector_flow_imbalance": MetricExplanation(
         "collector_flow_imbalance",
         "Collector flow imbalance",

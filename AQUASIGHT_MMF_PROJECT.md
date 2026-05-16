@@ -473,7 +473,7 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 |---|--------|--------|
 | 1 | **Phase 4 A2 — Operating envelope map** | **Done** — `operating_envelope.py`, Filtration heatmap, scenario slider |
 | 2 | **Phase 4 A3 — Design-to-target inverse** | **Done** — `design_targets.py`, Assessment expander, Apply patches |
-| 3 | **Phase 4 A4 — Spatial distribution** | §3.22 spec — Voronoi loading on nozzle plate |
+| 3 | **Phase 4 A4 — Spatial distribution** | **Done** — `spatial_distribution.py`, loading map, CFD CSV enrich |
 | 4 | **MILP / gradient global optimiser** | Grid ranker + Pareto delivered; MILP/DCS **Tier C** |
 | 5 | **Real blower maps (B1)** | Vendor curves + VFD; beyond adiabatic MVP |
 | 6 | **BW scheduler v3 (B2)** | Peak tariff / maintenance windows |
@@ -497,7 +497,7 @@ Phases **0–3** delivered (design basis, explainability, catalogue, compare sca
 |----|---------|------------------|--------------|----------|--------|
 | **A2** | Operating envelope map (LV × EBCT, severity regions) | `operating_envelope.py` | `operating_envelope` | Filtration tab expander | **Done** |
 | **A3** | Design-to-target inverse (ΔP, LCOW, Q_BW) | `design_targets.py` | `design_targets` | Assessment — Apply patches | **Done** |
-| **A4** | Spatial hydraulic distribution (Voronoi loading) | `spatial_distribution.py` | `spatial_distribution` | Mechanical / Backwash | **Spec only** (§3.22) |
+| **A4** | Spatial hydraulic distribution (Voronoi loading) | `spatial_distribution.py` | `spatial_distribution` | Backwash nozzle panel | **Done** |
 
 **Tier B:** B1 blower maps · B2 BW scheduler v3 (peak tariff) · B3 project revision tree · B4 shaded uncertainty charts.
 

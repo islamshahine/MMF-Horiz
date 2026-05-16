@@ -49,7 +49,7 @@
 - Biofouling / SDI prediction from first principles (fouling module is empirical advisory; 5-step workflow is screening only).
 - MILP / gradient global optimiser or DCS-linked scheduling (grid ranker + heuristic BW scheduler v2 only).
 - In-app CFD solve, 3D manifold FEA, or nozzle-manufacturer CFD validation.
-- **Local hydraulic loading map** on the underdrain plate (geometric stagger exists; Voronoi / per-nozzle loading is **§3.22 — spec only** until Phase 4 A4).
+- **Filtration-phase spatial map** on underdrain (BW map delivered in §3.22; set `flow_basis=filtration` if extended).
 - **Target-driven inverse design UX** (“LCOW < X → suggest N and ID”) — engine grid exists (`optimisation.py`); dedicated Assessment workflow is Phase 4 A3.
 - Live operations / digital twin (24 h Gantt is schematic duty, not optimised plant control).
 
@@ -489,9 +489,9 @@ Built **after** full `compute_all` in `app.py` (schema **`1.1`**).
 
 ---
 
-### 3.22 Spatial hydraulic distribution — specification (Phase 4 A4, not yet coded)
+### 3.22 Spatial hydraulic distribution (`engine/spatial_distribution.py`) — **Delivered (Phase 4 A4)**
 
-> **Status (2026-05):** **Specification only** — connects to delivered **geometric** layout in `engine/collector_nozzle_plate.py` (`staggered_plate_layout`, `build_staggered_nozzle_hole_network`). Implementation planned as **post-compute enrichment** (same pattern as `lifecycle_degradation`, `design_basis`).
+> **Status (2026-05):** Implemented as **post-compute enrichment** in `app.py` (after `compute_all`), using `collector_nozzle_plate.hole_network` positions from `staggered_plate_layout`.
 
 #### Purpose
 
@@ -812,7 +812,7 @@ Use these prompts with AI or workshops. Each axis is independent — mix and mat
 | Direction | Status | Description |
 |-----------|--------|-------------|
 | **1D collector hydraulics (1A/1B/1B+)** | **Delivered** | `collector_hydraulics.py`, manifold, auto maldistribution, CFD BC export |
-| **Spatial nozzle loading (2D plan)** | **Spec (§3.22)** | Voronoi service area + lumped velocity — **Phase 4 A4** |
+| **Spatial nozzle loading (2D plan)** | **Delivered (A4)** | `spatial_distribution.py`; Backwash nozzle panel heatmap |
 | **Biofouling / GAC breakthrough** | **Backlog** | First-principles growth or adsorption curves |
 | **Air scour + blower** | **MVP delivered** | `auto_expansion`, thermo kW; **Backlog (B1):** vendor maps, VFD affinity |
 | **BW scheduler** | **MVP delivered (v2)** | Heuristic stream-aware; **Backlog:** MILP/DCS (C5), peak-tariff v3 (B2) |
@@ -989,7 +989,7 @@ Statements the platform should *not* overclaim:
 |----|------|-------------|------------------|--------|
 | **A2** | Operating envelope map | `operating_envelope.py`; Filtration heatmap | `operating_envelope` | **Done** |
 | **A3** | Design-to-target inverse | `design_targets.py`; Assessment expander | `design_targets` | **Done** |
-| **A4** | Spatial hydraulic distribution | `spatial_distribution.py`; Mechanical/Backwash heatmap | `spatial_distribution` | **Spec §3.22** |
+| **A4** | Spatial hydraulic distribution | `spatial_distribution.py`; Backwash heatmap | `spatial_distribution` | **Done** |
 
 **Tier B (after A2–A4 or parallel when resourced)**
 
@@ -1082,7 +1082,7 @@ Steps 1–4 from external prompt are good; map to **existing** sidebar keys:
 | Lifecycle degradation curves | Medium | High | **Done (advisory)** |
 | Operating envelope map (A2) | High | Medium | **Done** |
 | Design-to-target inverse (A3) | High | Medium | **Done** |
-| Spatial distribution (A4) | High | High | **After A2/A3** — §3.22 |
+| Spatial distribution (A4) | High | High | **Done** |
 
 ### 11.8 Implementation checklist (every feature)
 
@@ -1132,7 +1132,7 @@ Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.
 | Topic | Summary |
 |-------|---------|
 | **Operating envelope (A2)** | `operating_envelope.py`; LV×EBCT heatmap; scenario slider; `ASM-ENV-01`. |
-| **§3.22 spatial spec** | Voronoi service area + lumped local velocity — **spec only**; Phase 4 **A4**. |
+| **Spatial distribution (A4)** | Grid-Voronoi service areas; loading-factor map; CFD CSV columns optional. |
 | **§8 / §11 refresh** | Delivered vs backlog columns; Phase 4 decision intelligence (A2/A3/A4); updated AI assistant prompt. |
 | **Air scour** | `auto_expansion` finds **minimum** air-equivalent superficial velocity for target net expansion; after `bw_system_sizing`, **`air_scour_solve`** includes motor/shaft blower kW and objective; Compare **B** mirrors sidebar air-scour mode widgets. |
 | **Multi-case compare** | Library **20**, run **12**, UI pages of **4** columns; full CSV export. |

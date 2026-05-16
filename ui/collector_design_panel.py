@@ -124,6 +124,70 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
                     st.warning(_msg)
                 else:
                     st.info(_msg)
+            _sp = computed.get("spatial_distribution") or {}
+            if _sp.get("enabled"):
+                with st.expander("Spatial hydraulic loading — Voronoi map", expanded=False):
+                    st.caption(_sp.get("note", ""))
+                    u1, u2, u3, u4 = st.columns(4)
+                    u1.metric(
+                        "Uniformity index",
+                        f"{float(_sp.get('hydraulic_uniformity_index', 0)):.2f}",
+                    )
+                    u2.metric(
+                        "Max loading factor",
+                        f"{float(_sp.get('max_loading_factor', 0)):.2f}",
+                    )
+                    u3.metric(
+                        "Min loading factor",
+                        f"{float(_sp.get('min_loading_factor', 0)):.2f}",
+                    )
+                    u4.metric(
+                        f"Q basis ({ulbl('flow_m3h')})",
+                        fmt(_sp.get("q_basis_m3h"), "flow_m3h", 1),
+                    )
+                    for _flag in _sp.get("advisory_flags") or []:
+                        st.warning(_flag.replace("_", " "))
+                    try:
+                        import plotly.graph_objects as go
+
+                        _xy = _sp.get("nozzle_xy_m") or []
+                        _lf = _sp.get("nozzle_loading_factor") or []
+                        if _xy and _lf:
+                            _fig_sp = go.Figure(
+                                go.Scatter(
+                                    x=[p[0] for p in _xy],
+                                    y=[p[1] for p in _xy],
+                                    mode="markers",
+                                    marker=dict(
+                                        size=9,
+                                        color=_lf,
+                                        colorscale="RdYlGn_r",
+                                        cmin=0.7,
+                                        cmax=1.3,
+                                        colorbar=dict(title="Loading factor"),
+                                    ),
+                                    text=[
+                                        f"LF={_lf[i]:.2f}" for i in range(len(_lf))
+                                    ],
+                                    hovertemplate=(
+                                        "x %{x:.2f} m<br>y %{y:.2f} m<br>%{text}<extra></extra>"
+                                    ),
+                                )
+                            )
+                            _fig_sp.update_layout(
+                                title="Nozzle loading factor (plan view, SI m)",
+                                xaxis_title="Along drum (m)",
+                                yaxis_title="Across chord (m)",
+                                height=380,
+                                margin=dict(t=48, b=40),
+                            )
+                            st.plotly_chart(
+                                _fig_sp,
+                                use_container_width=True,
+                                key="spatial_loading_heatmap",
+                            )
+                    except ImportError:
+                        st.info("Install **plotly** for spatial loading map.")
             _holes = list(_np.get("hole_network") or [])
             _layout_rev = int(_np.get("layout_revision", 0) or 0)
             if _holes and _layout_rev < 3:

@@ -153,6 +153,19 @@ from engine.design_targets import build_design_targets_summary, targets_from_inp
 from engine.operating_envelope import build_operating_envelope
 
 computed["operating_envelope"] = build_operating_envelope(_inputs_for_compute, computed)
+from engine.spatial_distribution import (
+    build_spatial_distribution,
+    enrich_hole_network_with_spatial,
+)
+
+computed["spatial_distribution"] = build_spatial_distribution(_inputs_for_compute, computed)
+_sp = computed.get("spatial_distribution") or {}
+if _sp.get("enabled"):
+    _np_plate = computed.get("collector_nozzle_plate")
+    if isinstance(_np_plate, dict) and _np_plate.get("hole_network"):
+        _np_plate["hole_network"] = enrich_hole_network_with_spatial(
+            list(_np_plate["hole_network"]), _sp,
+        )
 computed["design_targets"] = build_design_targets_summary(
     _inputs_for_compute,
     computed,

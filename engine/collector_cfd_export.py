@@ -116,11 +116,17 @@ def bundle_to_json(bundle: dict[str, Any], *, indent: int = 2) -> str:
 def orifice_network_to_csv(rows: list[dict[str, Any]]) -> str:
     """CSV table of per-hole BCs for spreadsheet / Fluent import."""
     if not rows:
-        return "lateral_index,hole_index,station_m,y_along_lateral_m,flow_m3h,velocity_m_s,orifice_d_mm\n"
+        return (
+            "lateral_index,hole_index,station_m,y_along_lateral_m,"
+            "flow_m3h,velocity_m_s,orifice_d_mm\n"
+        )
     cols = [
         "lateral_index", "hole_index", "station_m", "y_along_lateral_m",
         "flow_m3h", "velocity_m_s", "orifice_d_mm",
     ]
+    for extra in ("service_area_m2", "local_velocity_m_h", "loading_factor"):
+        if any(extra in r for r in rows):
+            cols.append(extra)
     lines = [",".join(cols)]
     for r in rows:
         lines.append(",".join(str(r.get(c, "")) for c in cols))

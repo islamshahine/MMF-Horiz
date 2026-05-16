@@ -133,6 +133,22 @@ def _build_assumptions_catalog(inputs: dict, computed: dict) -> List[dict[str, A
                 "ranked rows meeting user caps — Apply to sidebar only, not auto-design."
             ),
         },
+        {
+            "id": "ASM-SPATIAL-001",
+            "category": "Internals",
+            "text": (
+                "Spatial nozzle loading: 2D grid-Voronoi service areas on BW plate; "
+                "lumped Q split by area — not bed RTD or CFD."
+            ),
+        },
+        {
+            "id": "ASM-SPATIAL-002",
+            "category": "Internals",
+            "text": (
+                "Local orifice velocity from Q_basis × (A_service / ΣA) / A_open; "
+                "dead-zone heuristic uses edge distance and loading factor."
+            ),
+        },
     ]
     if ch:
         rows.append({
