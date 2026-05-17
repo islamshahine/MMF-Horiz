@@ -20,7 +20,7 @@
 10. [Quick reference — correlations](#10-quick-reference--correlations)
 11. [Development priorities — reconciled view](#11-development-priorities--reconciled-view-vs-external-roadmap) *(end of §11: **Shipped deltas (2026-05)**)*
 
-**Also in §3:** multi-case compare (**§3.15**), CFD BC export (**§3.16**), collector schematic (**§3.17**), pressurized underdrain catalogue (**§3.18**), explainability registry (**§3.19**), lifecycle degradation curves (**§3.20**), design basis traceability v1.1 (**§3.21**), spatial hydraulic distribution (**§3.22**), operating envelope map (**§3.23**), design-to-target search (**§3.24**), blower performance maps (**§3.25**), project revision tree (**§3.26**), Filtration uncertainty chart bands (**§3.27**), Monte Carlo lite (**§3.28**), external CFD import compare (**§3.29**), digital twin lite (**§3.30**), MILP BW scheduler lite (**§3.31**), equipment tag CSV (**§3.32**), **triangular nozzle-plate distribution (**§3.33**)**, Streamlit UX / duty-chart performance (**§3.34**).
+**Also in §3:** multi-case compare (**§3.15**), CFD BC export (**§3.16**), collector schematic (**§3.17**), pressurized underdrain catalogue (**§3.18**), explainability registry (**§3.19**), lifecycle degradation curves (**§3.20**), design basis traceability v1.1 (**§3.21**), spatial hydraulic distribution (**§3.22**), operating envelope map (**§3.23**), design-to-target search (**§3.24**), blower performance maps (**§3.25**), project revision tree (**§3.26**), Filtration uncertainty chart bands (**§3.27**), Monte Carlo lite (**§3.28**), external CFD import compare (**§3.29**), digital twin lite (**§3.30**), MILP BW scheduler lite (**§3.31**), equipment tag CSV (**§3.32**), **triangular nozzle-plate distribution (**§3.33**)**, Streamlit UX / duty-chart performance (**§3.34**), **Client / Engineer / Expert view modes (**§3.35**)**.
 
 ## 1. Platform philosophy
 
@@ -751,6 +751,33 @@ Post-compute in `app.py` (before `build_design_basis` so traceability can resolv
 
 ---
 
+### 3.35 Client / Engineer / Expert view modes (`ui/ui_mode.py`, `ui/sidebar_input_helpers.py`) — **Delivered**
+
+| Block | Contents |
+|-------|----------|
+| **Purpose** | Audience-specific **display filter** for sidebar widgets and results panels — client review meetings vs standard design vs model validation. |
+| **Architecture rule** | **Does not** change `compute_all()`, `engine/*`, or the `inputs` key contract. Hidden widgets keep values from `st.session_state` or `engine/validators.REFERENCE_FALLBACK_INPUTS`; `merge_hidden_input_defaults()` runs before `convert_inputs()`. |
+| **Config** | `ui/ui_mode.py` — `UI_MODES`, `HIDDEN_KEYS`, `VISIBLE_SIDEBAR_TABS`, `VISIBLE_MAIN_TABS`, `mode_allows()`, `get_mode_config()`, `show_engineer_tools()`, `show_tier_c_tools()`. Tab label strings match `ui/layout_enhancements.py` exactly. |
+| **Selector** | Sidebar top: **View mode** radio (`SESSION_KEY = "ui_mode"`). Legacy `mmf_ui_profile` migrates to `client` / `engineer` on first load. |
+| **Helpers** | `read_hidden_input(key, widget_fn, mode=…)` in `ui/sidebar_input_helpers.py` — used for Client vessel fields (geometry detail, ASME, lining). |
+| **app.py** | Thin: `init_ui_mode_state()`, `visible_main_tab_labels(MAIN_TAB_LABELS)`, `show_tier_c_tools()` for Monte Carlo post-hook only. |
+
+**Mode matrix (summary):**
+
+| Mode | Sidebar tabs | Sidebar inputs (high level) | Main results |
+|------|--------------|----------------------------|--------------|
+| **Client** | Process, Vessel, Media only | Flow, N, water, media layers, core cake (ρ, α); slim vessel (ID, length, material) | All main tabs except **⚖️ Compare**; no Tier-C tooling |
+| **Engineer** | All five (`🔄 BW`, `💰 Econ` included) | Full physical inputs; fouling + α expander; **no** §6.3 knob sub-expander | Compare, collector optional studies, project library; **no** MC / twin / design optim |
+| **Expert** | All five | Engineer + **Advanced — pilot / field calibration factors** (§6.3 knobs) | Tier-C: MC (Filtration), design optim / targets / twin / tag import (Assessment), CFD export/import + stagger compare (Backwash) |
+
+**On-demand studies (unchanged physics):** Collector BW-flow sweep and staged orifice remain **button-triggered** post-compute paths (`_envelope_fast`, `_staged_fast`) — not gated by view mode beyond Engineer+ for sidebar forms.
+
+**Tests:** `tests/test_ui_mode.py`, `tests/test_ui_profile.py`, `tests/test_sidebar_input_helpers.py`.
+
+**Commits:** `03014c4` (three-mode config + tab gating), `6e52d3c` (helpers, vessel gating, Expert Tier-C, remove `ui_profile.py`).
+
+---
+
 ## 4. Assessment & decision logic
 
 ### 4.1 Per-layer severity (`compute.py`)
@@ -872,6 +899,8 @@ These let experienced users tune models without forking code:
 | `dp_trigger_bar` | Dirty ΔP endpoint / auto-α |
 | Per-layer `lv_threshold_m_h`, `ebct_threshold_min` | Assessment setpoints |
 
+**View modes (§3.35):** In **Client** mode, §6.3 tuning widgets are not shown; defaults (e.g. `alpha_calibration_factor = 1`, `maldistribution_factor = 1`) are merged at Apply. In **Engineer** mode, fouling workflow and core α remain available; §6.3 **knobs** appear only in **Expert**. `dp_trigger_bar` and `solid_loading` remain design inputs in Engineer/Expert workflows.
+
 ### 6.4 Input UX patterns that work
 
 - **Presets** — water (Red Sea, Mediterranean, …), media types from catalogue.
@@ -879,6 +908,7 @@ These let experienced users tune models without forking code:
 - **Normalize capture weights** button — keeps cake split honest.
 - **Deferred project load** — before widgets instantiate (Streamlit constraint).
 - **Collapsed input column** — results full-width; pump reconcile preserves SI merge.
+- **View mode (Client / Engineer / Expert)** — §3.35; display-only; session `ui_mode`; Client hydrates hidden keys from `REFERENCE_FALLBACK_INPUTS`.
 
 ### 6.5 Input gaps (enhancement fodder)
 
@@ -919,6 +949,7 @@ These let experienced users tune models without forking code:
 ### 7.3 Progressive disclosure
 
 - Expanders for lifecycle financial, **lifecycle degradation (§7)**, explainability (Filtration), tornado, media intelligence, fouling workflow, n_filters sweep.
+- **View mode** — §3.35 tiers which expanders and tabs exist (Client hides Compare and Tier-C panels; Expert unlocks validation tooling).
 - Status badges in input column — traffic-light summary without opening tabs.
 - Validation banners — errors before tabs when inputs invalid.
 
@@ -937,7 +968,7 @@ These let experienced users tune models without forking code:
 | **BW duty chart fast refresh** | **Delivered (partial)** | §3.34 — duty-only rerun; tune further if still > few seconds |
 | **Media pricing regions** | **Delivered** | `REGION_FACTOR`: **Egypt** (1.09), **Middle East** (1.11) in `media_pricing.py` |
 | **Media life narrative** | **Backlog** | Link cycle → replacement → OPEX in one caption block |
-| **Client / engineer modes** | **Backlog** | Hide calibration vs expose raw SI |
+| **Client / Engineer / Expert view modes** | **Delivered** | §3.35 — `ui/ui_mode.py`; display filter only; full `inputs` on Apply |
 
 ### 7.5 Collector schematic presentation
 
@@ -983,6 +1014,7 @@ Use these prompts with AI or workshops. Each axis is independent — mix and mat
 | **Guided “new train” wizard** | **Backlog** | Flow → water → media template → auto N |
 | **Risk storytelling / benchmark radar** | **Backlog** | Executive one-pager; regional econ bands |
 | **Training mode** | **Backlog** | Locked reference case + quizzes |
+| **Client / Engineer / Expert modes** | **Delivered** | §3.35 — sidebar selector; Tier-C on Expert only |
 
 ### 8.4 Input ideas
 
@@ -1179,10 +1211,13 @@ Statements the platform should *not* overclaim:
 | **P5.2** | BW duty chart — duty-only fast UI | `bw_timeline_cache.py`, `app.py` | **Done** — `_duty_fast` skips eight main tabs; renders §5 timeline only |
 | **P5.3** | Triangular nozzle QA at client densities (40–60 /m²) | `tests/test_nozzle_distribution.py` | **Done** — parametrized regression pack |
 | **P5.4** | Filtration-phase spatial map | `spatial_distribution.py`, `ui/spatial_loading_panel.py`, Filtration tab | **Done** — `spatial_distribution_filtration`; shared Plotly panel |
-| **P5.5** | External media pricing API | `media_pricing.py` | **Backlog** |
-| **P5.6** | C2 full in-app CFD | new solver hook | **Backlog** |
-| **P5.7** | C3 P&ID OCR | — | **Aspirational** |
-| **P5.8** | C5 DCS / MES BW export | `milp_lite` | **Backlog** |
+| **P5.5** | Collector BW-flow sweep UX | `collector_envelope_cache.py` | **Done** — on-demand sweep; `f140beb` |
+| **P5.6** | Staged orifice schedule UX | `collector_staged_cache.py` | **Done** — on-demand drill schedule; `adab765` |
+| **P5.7** | Client / Engineer / Expert view modes | `ui/ui_mode.py`, `sidebar_input_helpers.py` | **Done** — §3.35; `6e52d3c` |
+| **P5.8** | External media pricing API | `media_pricing.py` | **Backlog** — region factors only |
+| **P5.9** | C2 full in-app CFD | new solver hook | **Backlog** |
+| **P5.10** | C3 P&ID OCR | — | **Aspirational** |
+| **P5.11** | C5 DCS / MES BW export | `milp_lite` | **Backlog** |
 
 ### 11.4 Priority 1 — collector package (refined)
 
@@ -1260,6 +1295,7 @@ Steps 1–4 from external prompt are good; map to **existing** sidebar keys:
 | Triangular nozzle distribution | High | Medium | **Done** — §3.33 |
 | BW duty-chart UX / cache | Medium | Medium | **Done (partial)** — §3.34 |
 | Media region factors (Egypt, Middle East) | Low | Low | **Done** |
+| Client / Engineer / Expert view modes | Medium | Medium | **Done** — §3.35 |
 
 ### 11.8 Implementation checklist (every feature)
 
@@ -1327,12 +1363,13 @@ Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.
 | **Collector sweep (P5.5)** | `collector_envelope_form` + `collector_envelope_cache`; post-compute restore when geometry unchanged. |
 | **Media regions** | Egypt / Middle East `REGION_FACTOR` keys on Media tab. |
 | **Release `ad49e3d` (2026-05-17)** | Pushed to `origin/main`: triangular nozzles, BW duty cache, Tier B/C lite, `pytest.ini`, GitHub Actions CI; pitch test allows shrink below ideal when boundary clip limits placement. |
+| **View modes (§3.35)** | `ui/ui_mode.py` + `read_hidden_input`; Client 3-tab sidebar + Compare hidden; Expert §6.3 knobs + Tier-C panels; `6e52d3c` on `main`. |
 
 ---
 
 ## 12. What to do next (2026-05-17)
 
-Use this section as the **single checklist** after the May 2026 nozzle-layout and BW-performance sprint. Phases **0–4** and Tier **B/C lite** are **shipped on `main`** (`ad49e3d`); focus shifts to **UI verification, performance tuning, and selective backlog**.
+Use this section as the **single checklist** after the May 2026 nozzle-layout and BW-performance sprint. Phases **0–4**, Tier **B/C lite**, and Phase **5** UX items through **P5.7** (view modes) are **shipped on `main`** (`6e52d3c`); focus shifts to **selective backlog** (DCS, full CFD, media API).
 
 ### 12.1 Immediate (this week)
 
@@ -1361,7 +1398,7 @@ Use this section as the **single checklist** after the May 2026 nozzle-layout an
 | **C3 OCR** | P&ID image → tags | Tag CSV lite **done**; OCR needs validation dataset |
 | **C5 DCS** | Export MILP schedule | `milp_lite` **done**; plant DCS format TBD |
 | **B6** | External media pricing API | Region factors only today |
-| **UX** | Client vs engineer mode | Hide calibration keys in “client” session profile |
+| **UX** | Client / Engineer / Expert view modes | **Done** — §3.35; display filter; `ui_mode` session key |
 
 ### 12.4 Architecture rules (unchanged)
 
@@ -1370,17 +1407,18 @@ Use this section as the **single checklist** after the May 2026 nozzle-layout an
 3. **Post-compute preferred** when core Ergun/BW equations unchanged.
 4. **Cache version bump** when layout or enrichment shape changes (`_COMPUTE_CACHE_VERSION`).
 5. **No second hole-count source** — sidebar density is authoritative.
+6. **View mode is display-only** — `ui_mode` never removes `inputs` keys; hidden widgets use session or `REFERENCE_FALLBACK_INPUTS` (§3.35).
 
 ### 12.5 Last release commit (reference)
 
 | Field | Value |
 |-------|--------|
-| **SHA** | `4db98fb` (duty 7 d); `f140beb` (collector sweep); `ad49e3d` (May sprint) |
+| **SHA** | `6e52d3c` (view modes); `03014c4` (three-mode gating); `4db98fb` (duty 7 d); `ad49e3d` (May sprint) |
 | **Branch** | `main` → `origin/main` |
 | **Date** | 2026-05-17 |
-| **Summary** | P5.5 on-demand collector BW-flow sweep; §3.34 duty-chart + lazy tabs; triangular nozzles; Tier B/C lite |
+| **Summary** | §3.35 Client/Engineer/Expert UI; P5.5–P5.7; duty-chart + collector on-demand studies; triangular nozzles |
 
 ---
 
-*Document version: 2026-05-17 — Phase 5 complete (P5.1–P5.5 + duty 7 d fix); §12 smoke done; backlog §12.3.*
+*Document version: 2026-05-17 — Phase 5 through P5.7 (view modes §3.35); §12 smoke done; backlog §12.3 (C2/C3/C5/DCS, media API).*
 
