@@ -106,17 +106,14 @@ def render_bw_stagger_compare_panel(inputs: dict, computed: dict) -> dict | None
             )
 
         _keys = list(_timelines.keys())
-        _view = st.radio(
+        _prev_view = st.session_state.get("bw_stagger_compare_view", _keys[0])
+        _view = st.selectbox(
             "View cached model (instant)",
             options=_keys,
             format_func=lambda x: _STAGGER_LABELS.get(x, x),
-            horizontal=True,
+            index=_keys.index(_prev_view) if _prev_view in _keys else 0,
             key="bw_stagger_compare_view",
-            index=_keys.index(st.session_state.get("bw_stagger_compare_view", _keys[0]))
-            if st.session_state.get("bw_stagger_compare_view") in _keys
-            else 0,
         )
-        st.session_state["bw_stagger_compare_view"] = _view
         return _timelines.get(_view)
 
     return None

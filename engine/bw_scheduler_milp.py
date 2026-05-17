@@ -145,14 +145,14 @@ def optimize_bw_phases_milp(
     blackouts = list(maintenance_blackouts or [])
     m_slots = max(4, min(int(n_slots or min(n, _MAX_SLOTS)), _MAX_SLOTS))
 
-    # Long horizons: v3 heuristic is fast enough; MILP first solve can freeze the UI.
-    if horizon > 72.0:
+    # Long horizons: v3 heuristic is fast enough; MILP CBC can freeze the UI on multi-day charts.
+    if horizon > 48.0:
         ph, meta = optimize_bw_phases_v3(
             n, period_h=period, bw_duration_h=bd, bw_trains=bw_trains, horizon_h=horizon,
             peak_tariff_windows=peak_w, tariff_peak_multiplier=tariff_peak_multiplier,
             maintenance_blackouts=blackouts,
         )
-        meta["method"] = "fallback_v3_horizon_gt_72h"
+        meta["method"] = "fallback_v3_horizon_gt_48h"
         return ph, meta
 
     if n > _MAX_FILTERS:

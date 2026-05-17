@@ -127,6 +127,7 @@ else:
             SUPPORT_TYPES, NOZZLE_DENSITY_DEFAULT,
             ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS, HOUSING_CAPACITY_OPTIONS,
             DEFAULT_ELEMENTS_PER_HOUSING, SAFETY_FACTOR_CIP, SAFETY_FACTOR_STD,
+            lightweight_duty_refresh=_duty_only,
         )
         st.session_state["mmf_last_inputs"] = inputs
 
@@ -160,7 +161,11 @@ if _duty_fast:
     computed = dict(_last)
     _repair_bw_timeline_slot(computed)
     _merged = merge_bw_duty_applied(_inputs_for_compute)
-    refresh_bw_timeline_in_computed(_merged, computed)
+    _stag = str(_merged.get("bw_timeline_stagger", "feasibility_trains"))
+    with st.spinner(
+        f"Updating duty chart ({_stag.replace('_', ' ')})…"
+    ):
+        refresh_bw_timeline_in_computed(_merged, computed)
 elif _duty_only:
     st.warning(
         "No saved plant model in this session — running a **full** calculation once. "
@@ -300,7 +305,9 @@ def _render_main_results_stack(
     if duty_fast:
         from ui.bw_duty_timeline_section import render_bw_duty_timeline_section
 
-        render_bw_duty_timeline_section(inputs, computed, expanded=True)
+        render_bw_duty_timeline_section(
+            inputs, computed, expanded=True, show_compare_panel=False,
+        )
         return
 
     (tab_filtration, tab_backwash, tab_mechanical, tab_media, tab_pumps,
