@@ -733,7 +733,7 @@ Post-compute in `app.py` (before `build_design_basis` so traceability can resolv
 
 ---
 
-### 3.34 Streamlit UX — duty chart & compute performance (`ui/bw_timeline_cache.py`, `app.py`, `ui/sidebar.py`) — **Delivered (partial)**
+### 3.34 Streamlit UX — duty chart & compute performance (`ui/bw_timeline_cache.py`, `app.py`, `ui/sidebar.py`) — **Delivered**
 
 | Block | Contents |
 |-------|----------|
@@ -741,7 +741,8 @@ Post-compute in `app.py` (before `build_design_basis` so traceability can resolv
 | **Duty-only path** | Sidebar form: BW settings + **Update duty chart** button; sets `_bw_duty_only_rerun` + `_bw_duty_applied`; reuses `st.session_state["mmf_last_computed"]` when present. |
 | **Timeline cache** | `build_bw_timeline_cached` (hashable scalars); `refresh_bw_timeline_in_computed`, `merge_bw_duty_applied`; `overlay_bw_timeline` must return timeline dict (not full `computed`). |
 | **Stagger compare** | `engine/bw_stagger_compare.py` + panel — cached comparison without re-running full physics. |
-| **Long horizons** | `scheduler_max_passes()` in `bw_scheduler.py` caps MILP/heuristic cost on multi-day windows. |
+| **Long horizons** | `scheduler_max_passes()` + `scheduler_dt_h()` (~400 peak samples max). **MILP lite** at horizon **>48 h** uses feasibility-train spacing (`fallback_feasibility_horizon_gt_48h`), not v3 search — avoids multi-minute UI freeze. |
+| **Duty refresh UI** | `_duty_fast` renders **§5 timeline only** on Backwash (not full tab schematics). |
 | **Regression guard** | Do **not** hide main tabs on duty refresh (removed `_bw_duty_fast_ui` early-return). |
 | **Lazy main tabs** | `app.py` renders only the active main tab (radio) — reduces rerun cost. |
 | **Collector BW-flow sweep (P5.5)** | Removed from `compute_all` (was N× `compute_collector_hydraulics` per rerun). Sidebar **form** + **Run BW-flow sweep** → `_collector_envelope_rerun` + `_envelope_fast` reuses `mmf_last_computed`; `build_collector_bw_flow_envelope_cached` in `ui/collector_envelope_cache.py`; results in `computed["collector_bw_envelope"]` (Backwash collector studies). |
@@ -1339,14 +1340,14 @@ Use this section as the **single checklist** after the May 2026 nozzle-layout an
 |---|--------|--------|-----|
 | 1 | **Commit & push** sprint to `origin/main` | **Done** | `ad49e3d` — triangular nozzles, BW duty cache, Tier B/C lite, docs, CI |
 | 2 | **Targeted pytest** (nozzle + media + spatial) | **Done** | 24 passed — `pytest tests/test_nozzle_distribution.py tests/test_collector_nozzle_plate.py tests/test_media_pricing.py tests/test_spatial_distribution.py -q` |
-| 3 | **Smoke Streamlit** | **Verify** | `python -m streamlit run app.py` → Apply → Backwash → **Update duty chart** + optional **Run BW-flow sweep** (sidebar studies expander; no hang on open) |
+| 3 | **Smoke Streamlit** | **Done** | Apply → **Update duty chart** (7 d / MILP ok) + **Run BW-flow sweep** — verified 2026-05-17 |
 | 4 | **Hole density contract** | **Enforced** | Sidebar **Hole density (/m²)** → `N = round(ρ × A_plate)` only; optional regression at ρ = 40/50/60 (§12.2 **B**) |
 
 ### 12.2 Short term (next 2–4 weeks)
 
 | # | Topic | Detail |
 |---|--------|--------|
-| **A** | **Duty-chart performance** | **Fast path shipped** — `_duty_fast` in `app.py` renders §5 timeline only; post-hooks skipped on duty-only rerun. Verify latency on your laptop after **Update duty chart**. |
+| **A** | **Duty-chart performance** | **Done** — `_duty_fast`, §5-only render, MILP >2 d → feasibility spacing, adaptive `scheduler_dt_h` (`4db98fb`). |
 | **B** | **Nozzle layout QA** | Add pytest cases at ρ = 40, 50, 60 /m² for a reference plate area; assert axial coverage ≥95%, `layout_mode == triangular_stagger`, `len(hole_network) ≈ N`. |
 | **C** | **Spatial map polish** | **Done (P5.4)** — Filtration tab map via `flow_basis=filtration` → `spatial_distribution_filtration`; `ASM-SPATIAL-003`. |
 | **E** | **Collector BW-flow sweep UX** | **Done (P5.5)** — `f140beb`: on-demand sweep; not in `compute_all`; `test_collector_envelope_cache.py`. |
@@ -1374,12 +1375,12 @@ Use this section as the **single checklist** after the May 2026 nozzle-layout an
 
 | Field | Value |
 |-------|--------|
-| **SHA** | `f140beb` (latest perf); `ad49e3d` (May sprint) |
+| **SHA** | `4db98fb` (duty 7 d); `f140beb` (collector sweep); `ad49e3d` (May sprint) |
 | **Branch** | `main` → `origin/main` |
 | **Date** | 2026-05-17 |
 | **Summary** | P5.5 on-demand collector BW-flow sweep; §3.34 duty-chart + lazy tabs; triangular nozzles; Tier B/C lite |
 
 ---
 
-*Document version: 2026-05-17 — Phase 5: P5.2–P5.5 shipped; §3.34 UX + on-demand collector sweep; §12 verification checklist.*
+*Document version: 2026-05-17 — Phase 5 complete (P5.1–P5.5 + duty 7 d fix); §12 smoke done; backlog §12.3.*
 
