@@ -19,7 +19,7 @@ from ui.collector_hyd_schematic import (
 )
 from ui.spatial_loading_panel import render_spatial_loading_panel
 from ui.scroll_markers import inject_anchor
-from ui.ui_profile import is_engineer_mode
+from ui.ui_mode import is_expert_mode, show_engineer_tools
 
 
 def _render_collector_bw_envelope_block(computed: dict, *, expanded: bool = False) -> None:
@@ -145,7 +145,7 @@ def render_collector_optional_studies_panel(computed: dict) -> None:
     """
     BW-flow sweep + staged Ø — sidebar-triggered studies (not inside legacy lateral expander).
     """
-    if not is_engineer_mode():
+    if not show_engineer_tools():
         return
     inject_anchor("mmf-anchor-collector-optional-studies")
     _stg = computed.get("collector_staged_orifices")
@@ -440,7 +440,7 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
     render_collector_optional_studies_panel(computed)
 
     _ch = computed.get("collector_hyd") or {}
-    if _ch and is_engineer_mode():
+    if _ch and show_engineer_tools():
         with st.expander(
             "Legacy pipe-lateral surrogate (optional — not your nozzle-plate layout)",
             expanded=False,
@@ -794,36 +794,37 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
                     )
                     if len(_orn) > 80:
                         st.caption(f"Showing 80 of {len(_orn)} holes.")
-                _cfd = computed.get("collector_cfd_bundle")
-                if _cfd:
-                    with st.expander(
-                        "Optional — export for external CFD (OpenFOAM / Fluent)",
-                        expanded=False,
-                    ):
-                        st.caption(
-                            "Only needed if a consultant runs CFD. You can ignore this "
-                            "if you do not have CFD software."
-                        )
-                        from engine.collector_cfd_export import build_cfd_export_bytes
+                if is_expert_mode():
+                    _cfd = computed.get("collector_cfd_bundle")
+                    if _cfd:
+                        with st.expander(
+                            "Optional — export for external CFD (OpenFOAM / Fluent)",
+                            expanded=False,
+                        ):
+                            st.caption(
+                                "Only needed if a consultant runs CFD. You can ignore this "
+                                "if you do not have CFD software."
+                            )
+                            from engine.collector_cfd_export import build_cfd_export_bytes
 
-                        _cfd_fmt = st.selectbox(
-                            "Export format",
-                            options=["json", "csv_orifices"],
-                            format_func=lambda x: (
-                                "JSON (full boundary package)"
-                                if x == "json"
-                                else "CSV (orifice table only)"
-                            ),
-                            key="collector_cfd_export_fmt",
-                        )
-                        _data, _fname, _mime = build_cfd_export_bytes(_cfd, _cfd_fmt)
-                        st.download_button(
-                            "Download for external CFD",
-                            data=_data,
-                            file_name=_fname,
-                            mime=_mime,
-                            key="collector_cfd_download",
-                        )
-                from ui.cfd_import_panel import render_cfd_import_panel
+                            _cfd_fmt = st.selectbox(
+                                "Export format",
+                                options=["json", "csv_orifices"],
+                                format_func=lambda x: (
+                                    "JSON (full boundary package)"
+                                    if x == "json"
+                                    else "CSV (orifice table only)"
+                                ),
+                                key="collector_cfd_export_fmt",
+                            )
+                            _data, _fname, _mime = build_cfd_export_bytes(_cfd, _cfd_fmt)
+                            st.download_button(
+                                "Download for external CFD",
+                                data=_data,
+                                file_name=_fname,
+                                mime=_mime,
+                                key="collector_cfd_download",
+                            )
+                    from ui.cfd_import_panel import render_cfd_import_panel
 
-                render_cfd_import_panel(computed, key_prefix="collector_cfd_import")
+                    render_cfd_import_panel(computed, key_prefix="collector_cfd_import")

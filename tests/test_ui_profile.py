@@ -1,15 +1,9 @@
-"""Backward-compat wrappers around ui_mode."""
+"""UI mode session helpers (legacy test module name)."""
 
 import streamlit as st
 
-from ui.ui_mode import SESSION_KEY
-from ui.ui_profile import (
-    is_client_mode,
-    is_engineer_mode,
-    is_expert_mode,
-    merge_client_sidebar_defaults,
-    visible_main_tab_labels,
-)
+from ui.ui_mode import SESSION_KEY, merge_client_sidebar_defaults, visible_main_tab_labels
+from ui.ui_mode import is_client_mode, is_engineer_mode, is_expert_mode
 
 
 def _set_mode(mode: str) -> None:
@@ -41,4 +35,4 @@ def test_merge_client_defaults_fills_calibration_keys():
     _set_mode("client")
     out = merge_client_sidebar_defaults({})
     assert out["alpha_calibration_factor"] == 1.0
-    assert "total_flow" in out or out.get("bw_velocity") is not None
+    assert out.get("total_flow") == 21000.0

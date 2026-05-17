@@ -117,15 +117,18 @@ def render_sidebar(
     _ensure_presets()
     out = {}
 
+    from ui.sidebar_input_helpers import read_hidden_input
     from ui.ui_mode import (
         current_ui_mode,
         get_mode_config,
+        is_client_mode,
+        is_engineer_mode,
         is_expert_mode,
         merge_hidden_input_defaults,
+        mode_allows,
         render_ui_mode_selector,
         show_engineer_tools,
     )
-    from ui.ui_profile import is_client_mode, is_engineer_mode
 
     ui_mode = render_ui_mode_selector()
     _mode_cfg = get_mode_config(ui_mode)
@@ -386,7 +389,13 @@ def render_sidebar(
         _lbl_tl = f"Total length T/T ({unit_label('length_m', unit_system)})"
         _def_tl = display_value(24.3, "length_m", unit_system)
         out["total_length"] = st.number_input(_lbl_tl, value=_def_tl, step=_stp_id, key="total_length")
-        out["end_geometry"] = st.selectbox("End geometry", ["Elliptic 2:1", "Torispherical 10%"], key="end_geometry")
+        out["end_geometry"] = read_hidden_input(
+            "end_geometry",
+            lambda: st.selectbox(
+                "End geometry", ["Elliptic 2:1", "Torispherical 10%"], key="end_geometry"
+            ),
+            mode=ui_mode,
+        )
 
         st.markdown("**Mechanical (ASME)**")
         out["material_name"]   = st.selectbox("Material", list(MATERIALS.keys()), index=3, key="material_name")
@@ -396,22 +405,38 @@ def render_sidebar(
         _lbl_dp = f"Design pressure ({unit_label('pressure_bar', unit_system)})"
         _def_dp = display_value(7.0, "pressure_bar", unit_system)
         _stp_dp = display_value(0.5, "pressure_bar", unit_system)
-        out["design_pressure"] = st.number_input(_lbl_dp, value=_def_dp, step=_stp_dp, key="design_pressure")
+        out["design_pressure"] = read_hidden_input(
+            "design_pressure",
+            lambda: st.number_input(_lbl_dp, value=_def_dp, step=_stp_dp, key="design_pressure"),
+            mode=ui_mode,
+        )
         _lbl_dt = f"Design temperature ({unit_label('temperature_c', unit_system)})"
         _def_dt = display_value(50.0, "temperature_c", unit_system)
-        out["design_temp"]     = st.number_input(_lbl_dt, value=_def_dt, step=5.0, key="design_temp")
+        out["design_temp"] = read_hidden_input(
+            "design_temp",
+            lambda: st.number_input(_lbl_dt, value=_def_dt, step=5.0, key="design_temp"),
+            mode=ui_mode,
+        )
         _lbl_ca = f"Corrosion allowance ({unit_label('length_mm', unit_system)})"
         _def_ca = display_value(1.5, "length_mm", unit_system)
         _stp_ca = display_value(0.5, "length_mm", unit_system)
-        out["corrosion"]       = st.number_input(_lbl_ca, value=_def_ca, step=_stp_ca, key="corrosion")
-        st.markdown("*Radiography (ASME UW-11)*")
-        rc1, rc2 = st.columns(2)
-        with rc1:
-            out["shell_radio"] = st.selectbox("Shell", RADIOGRAPHY_OPTIONS, index=2, key="sh_r")
-            st.caption(f"E = {JOINT_EFFICIENCY[out['shell_radio']]:.2f}")
-        with rc2:
-            out["head_radio"]  = st.selectbox("Head",  RADIOGRAPHY_OPTIONS, index=2, key="hd_r")
-            st.caption(f"E = {JOINT_EFFICIENCY[out['head_radio']]:.2f}")
+        out["corrosion"] = read_hidden_input(
+            "corrosion",
+            lambda: st.number_input(_lbl_ca, value=_def_ca, step=_stp_ca, key="corrosion"),
+            mode=ui_mode,
+        )
+        if mode_allows("shell_radio", ui_mode):
+            st.markdown("*Radiography (ASME UW-11)*")
+            rc1, rc2 = st.columns(2)
+            with rc1:
+                out["shell_radio"] = st.selectbox("Shell", RADIOGRAPHY_OPTIONS, index=2, key="sh_r")
+                st.caption(f"E = {JOINT_EFFICIENCY[out['shell_radio']]:.2f}")
+            with rc2:
+                out["head_radio"] = st.selectbox("Head", RADIOGRAPHY_OPTIONS, index=2, key="hd_r")
+                st.caption(f"E = {JOINT_EFFICIENCY[out['head_radio']]:.2f}")
+        else:
+            out["shell_radio"] = str(st.session_state.get("sh_r", "FULL"))
+            out["head_radio"] = str(st.session_state.get("hd_r", "FULL"))
         if is_engineer_mode():
             st.markdown("*Thickness overrides* (**0** = use ASME-calculated thickness)")
             _lbl_ov_sh = f"Shell t override ({unit_label('length_mm', unit_system)})"
@@ -443,12 +468,23 @@ def render_sidebar(
             out["ov_head"] = 0.0
         _lbl_sd = f"Steel density ({unit_label('density_kg_m3', unit_system)})"
         _def_sd = display_value(float(STEEL_DENSITY_KG_M3), "density_kg_m3", unit_system)
-        out["steel_density"]= st.number_input(_lbl_sd, value=_def_sd, key="steel_density")
+        out["steel_density"] = read_hidden_input(
+            "steel_density",
+            lambda: st.number_input(_lbl_sd, value=_def_sd, key="steel_density"),
+            mode=ui_mode,
+        )
 
-        st.markdown("**Internal protection**")
-        out["protection_type"] = st.selectbox("Protection type", PROTECTION_TYPES, index=1, key="prot_type")
+        if mode_allows("protection_type", ui_mode):
+            st.markdown("**Internal protection**")
+            out["protection_type"] = st.selectbox(
+                "Protection type", PROTECTION_TYPES, index=1, key="prot_type"
+            )
+        else:
+            out["protection_type"] = str(
+                st.session_state.get("prot_type", "Rubber lining")
+            )
 
-        if out["protection_type"] == "Rubber lining":
+        if mode_allows("protection_type", ui_mode) and out["protection_type"] == "Rubber lining":
             out["rubber_type_sel"] = st.selectbox("Rubber type", list(RUBBER_TYPES.keys()), index=1, key="rub_type")
             _lbl_rub = f"Rubber thickness / layer ({unit_label('length_mm', unit_system)})"
             _def_rub = display_value(4.0, "length_mm", unit_system)
@@ -465,7 +501,7 @@ def render_sidebar(
             out["lining_mm"] = 0.0; out["rubber_type_sel"] = "EPDM"; out["rubber_layers"] = 2
             out["rubber_cost_m2"] = 0.0; out["rubber_labor_m2"] = DEFAULT_LABOR_RUBBER_M2
 
-        if out["protection_type"] == "Epoxy coating":
+        if mode_allows("protection_type", ui_mode) and out["protection_type"] == "Epoxy coating":
             out["epoxy_type_sel"]  = st.selectbox("Epoxy type", list(EPOXY_TYPES.keys()), index=1, key="epx_type")
             _epx_cat               = EPOXY_TYPES[out["epoxy_type_sel"]]
             out["epoxy_dft_um"]    = st.number_input("DFT per coat (µm)", value=float(_epx_cat["default_dft_um"]),
@@ -481,7 +517,7 @@ def render_sidebar(
             out["epoxy_type_sel"] = "High-build epoxy"; out["epoxy_dft_um"] = 350.0
             out["epoxy_coats"] = 2; out["epoxy_cost_m2"] = 0.0; out["epoxy_labor_m2"] = DEFAULT_LABOR_EPOXY_M2
 
-        if out["protection_type"] == "Ceramic coating":
+        if mode_allows("protection_type", ui_mode) and out["protection_type"] == "Ceramic coating":
             out["ceramic_type_sel"]  = st.selectbox("Ceramic type", list(CERAMIC_TYPES.keys()), index=0, key="cer_type")
             _cer_cat                 = CERAMIC_TYPES[out["ceramic_type_sel"]]
             cc1, cc2                 = st.columns(2)

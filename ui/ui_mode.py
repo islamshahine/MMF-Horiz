@@ -314,3 +314,19 @@ def show_engineer_tools(mode: str | None = None) -> bool:
 def show_tier_c_tools(mode: str | None = None) -> bool:
     """Expert only: Monte Carlo, digital twin, design optim, etc."""
     return normalize_mode(mode or current_ui_mode()) == "expert"
+
+
+def is_client_mode(mode: str | None = None) -> bool:
+    return normalize_mode(mode or current_ui_mode()) == "client"
+
+
+def is_engineer_mode(mode: str | None = None) -> bool:
+    return show_engineer_tools(mode)
+
+
+def is_expert_mode(mode: str | None = None) -> bool:
+    return show_tier_c_tools(mode)
+
+
+def merge_client_sidebar_defaults(out: dict[str, Any]) -> dict[str, Any]:
+    return merge_hidden_input_defaults(out, current_ui_mode())

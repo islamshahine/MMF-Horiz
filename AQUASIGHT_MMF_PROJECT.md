@@ -545,7 +545,7 @@ Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-targe
 | C3 P&ID OCR | Aspirational — tag CSV lite done |
 | C5 DCS / MES export | Backlog — `milp_lite` done |
 | External media pricing API | Backlog — region factors only |
-| Client / Engineer / Expert UI mode | **In progress** — `ui/ui_mode.py` (3 modes); Client hides BW/Econ sidebar tabs + Compare; Expert = §6.3 knobs + Tier-C results |
+| Client / Engineer / Expert UI mode | **Done** — `ui/ui_mode.py`, `ui/sidebar_input_helpers.py`; Client: slim vessel + 3 sidebar tabs; Expert: §6.3 knobs + Tier-C (MC, twin, CFD, stagger compare) |
 
 #### G.4 Key files (May 2026 sprint)
 

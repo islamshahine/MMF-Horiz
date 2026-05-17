@@ -300,13 +300,13 @@ def render_tab_backwash(inputs: dict, computed: dict):
 
     from ui.bw_duty_timeline_section import render_bw_duty_timeline_section
 
-    from ui.ui_profile import is_engineer_mode
+    from ui.ui_mode import is_expert_mode
 
     bw_timeline = render_bw_duty_timeline_section(
         inputs,
         computed,
         bw_timeline=bw_timeline,
-        show_compare_panel=is_engineer_mode(),
+        show_compare_panel=is_expert_mode(),
     )
 
     with st.expander("6 · Underdrain / nozzle plate (1D screening)", expanded=False):

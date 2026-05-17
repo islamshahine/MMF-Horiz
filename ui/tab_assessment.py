@@ -254,7 +254,7 @@ def render_tab_assessment(inputs: dict, computed: dict):
 
     st.divider()
 
-    from ui.ui_profile import is_expert_mode
+    from ui.ui_mode import is_expert_mode
 
     if is_expert_mode():
         with st.expander(

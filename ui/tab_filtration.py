@@ -441,7 +441,7 @@ def render_tab_filtration(inputs: dict, computed: dict):
                 except ImportError:
                     pass
 
-    from ui.ui_profile import is_expert_mode
+    from ui.ui_mode import is_expert_mode
 
     if is_expert_mode():
         with st.expander("Monte Carlo lite — optional cycle sampling (N scenario)", expanded=False):
