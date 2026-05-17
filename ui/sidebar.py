@@ -1426,25 +1426,9 @@ def render_sidebar(
             render_collector_bw_envelope_form()
 
             st.markdown("**Optional — perforation staging (advisory)**")
-            _staged_opts = [0, 2, 3, 4]
-            _prev_sg = st.session_state.get("collector_staged_orifice_groups_sel", 0)
-            if _prev_sg not in _staged_opts:
-                _prev_sg = 0
-            _staged_idx = _staged_opts.index(int(_prev_sg))
-            out["collector_staged_orifice_groups"] = st.selectbox(
-                "Staged perforation Ø bands per lateral",
-                options=_staged_opts,
-                index=_staged_idx,
-                format_func=lambda x: (
-                    "Off"
-                    if x == 0
-                    else f"{x} contiguous Ø bands (drill schedule)"
-                ),
-                key="collector_staged_orifice_groups_sel",
-                help=(
-                    "Advisory drill table from frozen per-hole flows — does not re-run the 1B solver."
-                ),
-            )
+            from ui.collector_staged_form import render_collector_staged_orifice_form
+
+            render_collector_staged_orifice_form()
 
     # ── Tab 5: Econ ───────────────────────────────────────────────────────
     with econ_tab:

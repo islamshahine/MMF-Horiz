@@ -534,6 +534,7 @@ Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-targe
 | **P5.3** | Nozzle QA | **Done** — `test_client_density_regression_pack` at ρ = 40/50/60 /m² (axial ≥95%, triangular stagger) |
 | **P5.4** | Filtration spatial map | **Done** — `computed["spatial_distribution_filtration"]`; Filtration tab expander; Backwash map unchanged |
 | **P5.5** | Collector BW-flow sweep UX | **Done** — sweep removed from `compute_all`; sidebar form + **Run BW-flow sweep**; `_envelope_fast` in `app.py`; `ui/collector_envelope_cache.py` |
+| **P5.6** | Staged orifice UX | **Done** — drill schedule on **Run staged orifice schedule** only; `ui/collector_staged_cache.py` |
 | **Docs** | Keep §3 / §11 / §12 aligned after each PR | Both MD files + `tests/README.md` |
 
 #### G.3 Medium-term backlog (non-blocking)

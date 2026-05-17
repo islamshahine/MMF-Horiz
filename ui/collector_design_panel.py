@@ -20,6 +20,132 @@ from ui.collector_hyd_schematic import (
 from ui.spatial_loading_panel import render_spatial_loading_panel
 
 
+def _render_collector_bw_envelope_block(computed: dict, *, expanded: bool = False) -> None:
+    _bw_env = computed.get("collector_bw_envelope")
+    if isinstance(_bw_env, dict) and _bw_env.get("active"):
+        with st.expander(
+            "BW flow operating envelope (1D sweep)",
+            expanded=expanded,
+        ):
+            st.caption(localize_engine_message(str(_bw_env.get("note", ""))))
+            _qx = list(_bw_env.get("q_bw_m3h") or [])
+            _pref = f"({ulbl('flow_m3h')})"
+            if not _qx:
+                st.info("No sweep points returned.")
+            else:
+                try:
+                    import plotly.graph_objects as go
+
+                    _imb = list(_bw_env.get("flow_imbalance_pct") or [])
+                    _hv = list(_bw_env.get("header_velocity_max_m_s") or [])
+                    _ov = list(_bw_env.get("orifice_velocity_max_m_s") or [])
+                    _feas = list(_bw_env.get("feasible") or [])
+                    fig1 = go.Figure()
+                    _imb_y = [float(x) if x is not None else None for x in _imb]
+                    fig1.add_trace(
+                        go.Scatter(
+                            x=_qx,
+                            y=_imb_y,
+                            mode="lines+markers",
+                            name="Lateral imbalance %",
+                        )
+                    )
+                    fig1.update_layout(
+                        title="BW flow vs lateral imbalance",
+                        xaxis_title=f"BW flow {_pref}",
+                        yaxis_title="Imbalance %",
+                        template="plotly_white",
+                        height=320,
+                    )
+                    st.plotly_chart(fig1, use_container_width=True, key="collector_bw_env_imb_lite")
+                    fig2 = go.Figure()
+                    fig2.add_trace(
+                        go.Scatter(
+                            x=_qx,
+                            y=[float(x) if x is not None else None for x in _hv],
+                            mode="lines+markers",
+                            name=f"Header Vmax ({ulbl('velocity_m_s')})",
+                        )
+                    )
+                    fig2.add_trace(
+                        go.Scatter(
+                            x=_qx,
+                            y=[float(x) if x is not None else None for x in _ov],
+                            mode="lines+markers",
+                            name=f"Orifice Vmax ({ulbl('velocity_m_s')})",
+                        )
+                    )
+                    fig2.update_layout(
+                        title="BW flow vs peak velocities",
+                        xaxis_title=f"BW flow {_pref}",
+                        yaxis_title=f"Velocity ({ulbl('velocity_m_s')})",
+                        template="plotly_white",
+                        height=320,
+                    )
+                    st.plotly_chart(fig2, use_container_width=True, key="collector_bw_env_vel_lite")
+                    if any(bool(f) for f in _feas):
+                        _ok = sum(1 for f in _feas if f)
+                        st.caption(
+                            localize_engine_message(
+                                f"**Feasible** points (converged, imbalance cap): **{_ok}** / **{len(_feas)}**."
+                            )
+                        )
+                except Exception:
+                    st.info("Install **plotly** for BW envelope charts.")
+                    st.dataframe(pd.DataFrame(_bw_env.get("sweep_rows") or []), hide_index=True)
+
+
+def _render_collector_staged_orifice_block(computed: dict, *, expanded: bool = False) -> None:
+    _stg = computed.get("collector_staged_orifices")
+    if isinstance(_stg, dict) and _stg.get("active"):
+        with st.expander(
+            "Staged perforation Ø (advisory drill schedule)",
+            expanded=expanded,
+        ):
+            st.caption(localize_engine_message(str(_stg.get("method", ""))))
+            for _n in _stg.get("notes") or []:
+                st.caption(localize_engine_message(str(_n)))
+            _groups = _stg.get("groups") or []
+            if _groups:
+                st.markdown("**Bands (per lateral)**")
+                st.dataframe(
+                    staged_orifice_bands_display_df(_groups),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+            v0 = _stg.get("estimated_velocity_spread_baseline_m_s")
+            v1 = _stg.get("estimated_velocity_spread_after_snap_m_s")
+            if isinstance(v0, dict) and isinstance(v1, dict):
+                st.caption(
+                    localize_engine_message(
+                        f"Estimated jet **v** span (model split): "
+                        f"{v0.get('min_m_s', '—')}–{v0.get('max_m_s', '—')} **m/s** → "
+                        f"after snap (frozen **Q**): "
+                        f"{v1.get('min_m_s', '—')}–{v1.get('max_m_s', '—')} **m/s**."
+                    )
+                )
+            _ph = _stg.get("per_hole") or []
+            if _ph and st.checkbox("Show per-hole detail", key="collector_staged_show_holes_lite"):
+                st.dataframe(
+                    staged_orifice_hole_display_df(_ph),
+                    use_container_width=True,
+                    hide_index=True,
+                )
+    elif isinstance(_stg, dict) and (_stg.get("note") or ""):
+        with st.expander(
+            "Staged perforation Ø (advisory) — unavailable for this case",
+            expanded=expanded,
+        ):
+            st.warning(localize_engine_message(str(_stg.get("note", ""))))
+
+
+def render_collector_studies_lightweight(computed: dict) -> None:
+    """Optional collector studies only — used on fast envelope / staged reruns."""
+    st.markdown("**Underdrain / collector optional studies**")
+    _render_collector_bw_envelope_block(computed, expanded=True)
+    _render_collector_staged_orifice_block(computed, expanded=True)
+
+
 def render_collector_design_panel(computed: dict, inputs: dict) -> None:
     """Vessel intelligence, nozzle-plate BW hydraulics, legacy lateral surrogate, studies."""
     _np = computed.get("collector_nozzle_plate") or {}
@@ -505,119 +631,8 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
                         st.info(localize_engine_message(str(_vrisk["plugging_hint"])))
                     if _vrisk.get("sand_carryover_hint"):
                         st.warning(localize_engine_message(str(_vrisk["sand_carryover_hint"])))
-            _bw_env = computed.get("collector_bw_envelope")
-            if isinstance(_bw_env, dict) and _bw_env.get("active"):
-                with st.expander(
-                    "BW flow operating envelope (1D sweep)",
-                    expanded=False,
-                ):
-                    st.caption(localize_engine_message(str(_bw_env.get("note", ""))))
-                    _qx = list(_bw_env.get("q_bw_m3h") or [])
-                    _pref = f"({ulbl('flow_m3h')})"
-                    if not _qx:
-                        st.info("No sweep points returned.")
-                    else:
-                        try:
-                            import plotly.graph_objects as go
-
-                            _imb = list(_bw_env.get("flow_imbalance_pct") or [])
-                            _hv = list(_bw_env.get("header_velocity_max_m_s") or [])
-                            _ov = list(_bw_env.get("orifice_velocity_max_m_s") or [])
-                            _feas = list(_bw_env.get("feasible") or [])
-                            fig1 = go.Figure()
-                            _imb_y = [float(x) if x is not None else None for x in _imb]
-                            fig1.add_trace(
-                                go.Scatter(
-                                    x=_qx,
-                                    y=_imb_y,
-                                    mode="lines+markers",
-                                    name="Lateral imbalance %",
-                                )
-                            )
-                            fig1.update_layout(
-                                title="BW flow vs lateral imbalance",
-                                xaxis_title=f"BW flow {_pref}",
-                                yaxis_title="Imbalance %",
-                                template="plotly_white",
-                                height=320,
-                            )
-                            st.plotly_chart(fig1, use_container_width=True, key="collector_bw_env_imb")
-                            fig2 = go.Figure()
-                            fig2.add_trace(
-                                go.Scatter(
-                                    x=_qx,
-                                    y=[float(x) if x is not None else None for x in _hv],
-                                    mode="lines+markers",
-                                    name=f"Header Vmax ({ulbl('velocity_m_s')})",
-                                )
-                            )
-                            fig2.add_trace(
-                                go.Scatter(
-                                    x=_qx,
-                                    y=[float(x) if x is not None else None for x in _ov],
-                                    mode="lines+markers",
-                                    name=f"Orifice Vmax ({ulbl('velocity_m_s')})",
-                                )
-                            )
-                            fig2.update_layout(
-                                title="BW flow vs peak velocities",
-                                xaxis_title=f"BW flow {_pref}",
-                                yaxis_title=f"Velocity ({ulbl('velocity_m_s')})",
-                                template="plotly_white",
-                                height=320,
-                            )
-                            st.plotly_chart(fig2, use_container_width=True, key="collector_bw_env_vel")
-                            if any(bool(f) for f in _feas):
-                                _ok = sum(1 for f in _feas if f)
-                                st.caption(
-                                    localize_engine_message(
-                                        f"**Feasible** points (converged, imbalance cap): **{_ok}** / **{len(_feas)}**."
-                                    )
-                                )
-                        except Exception:
-                            st.info("Install **plotly** for BW envelope charts.")
-                            st.dataframe(pd.DataFrame(_bw_env.get("sweep_rows") or []), hide_index=True)
-            _stg = computed.get("collector_staged_orifices")
-            if isinstance(_stg, dict) and _stg.get("active"):
-                with st.expander(
-                    "Staged perforation Ø (advisory drill schedule)",
-                    expanded=False,
-                ):
-                    st.caption(localize_engine_message(str(_stg.get("method", ""))))
-                    for _n in _stg.get("notes") or []:
-                        st.caption(localize_engine_message(str(_n)))
-                    _groups = _stg.get("groups") or []
-                    if _groups:
-                        st.markdown("**Bands (per lateral)**")
-                        st.dataframe(
-                            staged_orifice_bands_display_df(_groups),
-                            use_container_width=True,
-                            hide_index=True,
-                        )
-                    v0 = _stg.get("estimated_velocity_spread_baseline_m_s")
-                    v1 = _stg.get("estimated_velocity_spread_after_snap_m_s")
-                    if isinstance(v0, dict) and isinstance(v1, dict):
-                        st.caption(
-                            localize_engine_message(
-                                f"Estimated jet **v** span (model split): "
-                                f"{v0.get('min_m_s', '—')}–{v0.get('max_m_s', '—')} **m/s** → "
-                                f"after snap (frozen **Q**): "
-                                f"{v1.get('min_m_s', '—')}–{v1.get('max_m_s', '—')} **m/s**."
-                            )
-                        )
-                    _ph = _stg.get("per_hole") or []
-                    if _ph and st.checkbox("Show per-hole detail", key="collector_staged_show_holes"):
-                        st.dataframe(
-                            staged_orifice_hole_display_df(_ph),
-                            use_container_width=True,
-                            hide_index=True,
-                        )
-            elif isinstance(_stg, dict) and (_stg.get("note") or ""):
-                with st.expander(
-                    "Staged perforation Ø (advisory) — unavailable for this case",
-                    expanded=False,
-                ):
-                    st.warning(localize_engine_message(str(_stg.get("note", ""))))
+            _render_collector_bw_envelope_block(computed, expanded=False)
+            _render_collector_staged_orifice_block(computed, expanded=False)
             for _rec in _ch.get("recommendations") or []:
                 st.markdown(f"- {localize_engine_message(str(_rec))}")
             with st.expander("1A/1B regression benchmarks", expanded=False):

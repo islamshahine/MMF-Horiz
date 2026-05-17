@@ -118,6 +118,7 @@ sync_linked_collector_header_session(
 _ctx_collapsed = bool(st.session_state.get("mmf_ctx_collapsed"))
 _duty_only = bool(st.session_state.pop("_bw_duty_only_rerun", False))
 _envelope_only = bool(st.session_state.pop("_collector_envelope_rerun", False))
+_staged_only = bool(st.session_state.pop("_collector_staged_rerun", False))
 st.session_state.pop("_bw_duty_fast_ui", None)  # legacy flag — no longer hides tabs
 
 inputs: dict = {}
@@ -170,12 +171,32 @@ from ui.collector_envelope_cache import (
     refresh_collector_envelope_in_computed,
     restore_collector_envelope_if_valid,
 )
+from ui.collector_staged_cache import (
+    refresh_collector_staged_in_computed,
+    restore_collector_staged_if_valid,
+)
 
 _last = st.session_state.get("mmf_last_computed")
 _duty_fast = _duty_only and isinstance(_last, dict) and bool(_last)
 _envelope_fast = _envelope_only and isinstance(_last, dict) and bool(_last)
+_staged_fast = _staged_only and isinstance(_last, dict) and bool(_last)
 
-if _envelope_fast:
+if _staged_fast:
+    computed = dict(_last)
+    with st.spinner("Building staged orifice schedule…"):
+        refresh_collector_staged_in_computed(_inputs_for_compute, computed)
+elif _staged_only:
+    st.warning(
+        "No saved plant model in this session — running a **full** calculation once. "
+        "After that, **Run staged orifice schedule** only rebuilds the drill table (fast)."
+    )
+    computed = compute_all_cached(
+        inputs_for_compute_cache(_inputs_for_compute),
+        _COMPUTE_CACHE_VERSION,
+    )
+    with st.spinner("Building staged orifice schedule…"):
+        refresh_collector_staged_in_computed(_inputs_for_compute, computed)
+elif _envelope_fast:
     computed = dict(_last)
     with st.spinner("Running BW-flow sweep (1D)…"):
         refresh_collector_envelope_in_computed(_inputs_for_compute, computed)
@@ -225,7 +246,7 @@ if not st.session_state.get("_bw_duty_applied"):
         "bw_maintenance_blackout_t1_h": 0.0,
     }
 
-if not _duty_only and not _envelope_only:
+if not _duty_only and not _envelope_only and not _staged_only:
     from engine.design_basis import build_design_basis
     from engine.explainability import build_explainability_index
     from engine.lifecycle_degradation import build_lifecycle_degradation
@@ -309,6 +330,7 @@ if not _duty_only and not _envelope_only:
     else:
         computed["equipment_tag_registry"] = {"enabled": False}
     restore_collector_envelope_if_valid(_inputs_for_compute, computed)
+    restore_collector_staged_if_valid(_inputs_for_compute, computed)
 
 st.session_state["mmf_last_computed"] = computed
 
@@ -346,10 +368,19 @@ def _render_main_results_stack(
         label_visibility="collapsed",
     )
     _active_tab = st.session_state.get("mmf_main_tabs", _active_tab)
-    if duty_fast and _active_tab == "🔄 Backwash":
-        from ui.bw_duty_timeline_section import render_bw_duty_timeline_section
+    _collector_fast = duty_fast or _staged_only or _envelope_only
+    if _collector_fast and _active_tab == "🔄 Backwash":
+        if duty_fast:
+            from ui.bw_duty_timeline_section import render_bw_duty_timeline_section
 
-        render_bw_duty_timeline_section(inputs, computed, expanded=True)
+            render_bw_duty_timeline_section(inputs, computed, expanded=True)
+        else:
+            st.caption(
+                "⚡ **Collector study updated** — open the underdrain / collector expanders below."
+            )
+            from ui.collector_design_panel import render_collector_studies_lightweight
+
+            render_collector_studies_lightweight(computed)
         return
     _render_tab = _MAIN_TAB_RENDERERS.get(_active_tab)
     if _render_tab is not None:

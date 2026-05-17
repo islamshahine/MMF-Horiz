@@ -1263,15 +1263,6 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
         collector_bw_envelope = None
         collector_staged_orifices = None
 
-        _sg = int(_work.get("collector_staged_orifice_groups", 0) or 0)
-        if _sg >= 2 and _sg <= 4:
-            from engine.collector_staged_orifices import recommend_staged_orifice_schedule
-
-            collector_staged_orifices = recommend_staged_orifice_schedule(
-                collector_hyd,
-                n_groups=_sg,
-            )
-
         collector_intel = analyse_collector_performance(
             bw_col=bw_col,
             bw_hyd=bw_hyd,
