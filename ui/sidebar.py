@@ -112,29 +112,10 @@ def render_sidebar(
     SUPPORT_TYPES, NOZZLE_DENSITY_DEFAULT,
     ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS, HOUSING_CAPACITY_OPTIONS,
     DEFAULT_ELEMENTS_PER_HOUSING, SAFETY_FACTOR_CIP, SAFETY_FACTOR_STD,
-    *,
-    lightweight_duty_refresh: bool = False,
 ) -> dict:
     """Render all sidebar input tabs. Returns dict of every input value in SI."""
     _ensure_presets()
     out = {}
-
-    if lightweight_duty_refresh:
-        from ui.bw_duty_form import render_bw_duty_chart_form
-
-        unit_system = st.session_state.get("unit_system", "metric")
-        st.caption(
-            "⚡ **Fast duty-chart refresh** — only settings below are active. "
-            "Plant inputs are frozen until you change them elsewhere."
-        )
-        out = dict(st.session_state.get("mmf_last_inputs") or {})
-        if not out:
-            st.warning("No saved inputs — run a full pass with the input column visible first.")
-        render_bw_duty_chart_form(out)
-        merge_feed_hydraulics_into_out(out, unit_system)
-        out = convert_inputs(out, unit_system)
-        out["unit_system"] = unit_system
-        return out
 
     # ── Unit system toggle ─────────────────────────────────────────────────
     _us_radio = st.session_state.get("unit_system")

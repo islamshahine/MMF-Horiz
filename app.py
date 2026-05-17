@@ -142,7 +142,6 @@ else:
             SUPPORT_TYPES, NOZZLE_DENSITY_DEFAULT,
             ELEMENT_SIZE_LABELS, RATING_UM_OPTIONS, HOUSING_CAPACITY_OPTIONS,
             DEFAULT_ELEMENTS_PER_HOUSING, SAFETY_FACTOR_CIP, SAFETY_FACTOR_STD,
-            lightweight_duty_refresh=_duty_only,
         )
         st.session_state["mmf_last_inputs"] = inputs
 
@@ -309,8 +308,8 @@ def _render_main_results_stack(
     st.caption(_INTRO_CAPTION)
     if duty_fast:
         st.caption(
-            "⚡ **Duty chart updated** — timeline refreshed from sidebar settings. "
-            "All tabs show your last full model; change plant inputs then rerun from sidebar as usual."
+            "⚡ **Duty chart updated** — timeline refreshed. Sidebar **Process / Vessel / Media / BW / Econ** "
+            "tabs stay available; plant inputs are unchanged until you edit them."
         )
     render_section_guide_row()
     render_compute_validation_banners(computed)

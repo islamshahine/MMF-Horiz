@@ -39,6 +39,10 @@ def render_bw_duty_chart_form(out: dict) -> None:
 
     Widget changes do **not** rerun the app until **Update duty chart** is clicked.
     """
+    if st.session_state.pop("_bw_duty_flash", False):
+        st.success(
+            "Duty chart updated — open **Backwash** (main tab) → **§5 Filter duty timeline**."
+        )
     if "_bw_duty_applied" not in st.session_state:
         st.session_state["_bw_duty_applied"] = _default_bw_duty_applied()
     _applied = dict(st.session_state["_bw_duty_applied"])
@@ -135,6 +139,7 @@ def render_bw_duty_chart_form(out: dict) -> None:
             }
             st.session_state["_bw_duty_dirty"] = True
             st.session_state["_bw_duty_only_rerun"] = True
+            st.session_state["_bw_duty_flash"] = True
             st.session_state["mmf_pending_main_tab"] = "🔄 Backwash"
 
     out.update(st.session_state["_bw_duty_applied"])
