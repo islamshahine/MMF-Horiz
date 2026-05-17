@@ -13,7 +13,9 @@ def _default_staged_applied() -> dict:
 def render_collector_staged_orifice_form() -> None:
     if st.session_state.pop("_collector_staged_flash", False):
         st.success(
-            "Staged orifice schedule updated — open **Backwash** → underdrain / collector studies."
+            "Staged orifice schedule updated — **Backwash** → expand "
+            "**Optional collector studies — BW sweep & staged perforation Ø** "
+            "(just below Collector intelligence)."
         )
     if "_collector_staged_applied" not in st.session_state:
         st.session_state["_collector_staged_applied"] = _default_staged_applied()
@@ -51,4 +53,6 @@ def render_collector_staged_orifice_form() -> None:
             }
             st.session_state["_collector_staged_rerun"] = True
             st.session_state["_collector_staged_flash"] = True
+            st.session_state["_collector_studies_expand"] = True
             st.session_state["mmf_pending_main_tab"] = "🔄 Backwash"
+            st.session_state["mmf_scroll_to_id"] = "mmf-anchor-collector-optional-studies"

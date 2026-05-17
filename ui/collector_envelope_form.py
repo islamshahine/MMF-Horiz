@@ -75,4 +75,6 @@ def render_collector_bw_envelope_form() -> None:
             }
             st.session_state["_collector_envelope_rerun"] = True
             st.session_state["_collector_envelope_flash"] = True
+            st.session_state["_collector_studies_expand"] = True
             st.session_state["mmf_pending_main_tab"] = "🔄 Backwash"
+            st.session_state["mmf_scroll_to_id"] = "mmf-anchor-collector-optional-studies"

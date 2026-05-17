@@ -18,6 +18,7 @@ from ui.collector_hyd_schematic import (
     build_nozzle_plate_plan_figure,
 )
 from ui.spatial_loading_panel import render_spatial_loading_panel
+from ui.scroll_markers import inject_anchor
 
 
 def _render_collector_bw_envelope_block(computed: dict, *, expanded: bool = False) -> None:
@@ -139,11 +140,43 @@ def _render_collector_staged_orifice_block(computed: dict, *, expanded: bool = F
             st.warning(localize_engine_message(str(_stg.get("note", ""))))
 
 
+def render_collector_optional_studies_panel(computed: dict) -> None:
+    """
+    BW-flow sweep + staged Ø — sidebar-triggered studies (not inside legacy lateral expander).
+    """
+    inject_anchor("mmf-anchor-collector-optional-studies")
+    _stg = computed.get("collector_staged_orifices")
+    _env = computed.get("collector_bw_envelope")
+    _has_stg = isinstance(_stg, dict) and (
+        _stg.get("active") or bool(_stg.get("note"))
+    )
+    _has_env = isinstance(_env, dict) and _env.get("active")
+    _force_expand = bool(st.session_state.pop("_collector_studies_expand", False))
+    with st.expander(
+        "Optional collector studies — BW sweep & staged perforation Ø",
+        expanded=_force_expand or _has_stg or _has_env,
+    ):
+        st.caption(
+            "Triggered from the sidebar **Optional — collector studies** section "
+            "(**Run BW-flow sweep** / **Run staged orifice schedule**). "
+            "Not the same as **Collector intelligence** above (vessel nozzles & freeboard)."
+        )
+        if not (_has_stg or _has_env):
+            st.info(
+                "No study results yet — pick bands or sweep settings in the sidebar, then click the "
+                "**Run** button. Requires **Apply** first so collector hydraulics exist."
+            )
+        _render_collector_bw_envelope_block(computed, expanded=_force_expand or _has_env)
+        _render_collector_staged_orifice_block(computed, expanded=_force_expand or _has_stg)
+
+
 def render_collector_studies_lightweight(computed: dict) -> None:
     """Optional collector studies only — used on fast envelope / staged reruns."""
-    st.markdown("**Underdrain / collector optional studies**")
-    _render_collector_bw_envelope_block(computed, expanded=True)
-    _render_collector_staged_orifice_block(computed, expanded=True)
+    st.caption(
+        "⚡ **Collector study updated** — results are in the panel below (not inside "
+        "**Collector intelligence**, which is vessel-nozzle screening only)."
+    )
+    render_collector_optional_studies_panel(computed)
 
 
 def render_collector_design_panel(computed: dict, inputs: dict) -> None:
@@ -410,6 +443,8 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
                 else:
                     st.info(_msg)
 
+    render_collector_optional_studies_panel(computed)
+
     _ch = computed.get("collector_hyd") or {}
     if _ch:
         with st.expander(
@@ -631,8 +666,6 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
                         st.info(localize_engine_message(str(_vrisk["plugging_hint"])))
                     if _vrisk.get("sand_carryover_hint"):
                         st.warning(localize_engine_message(str(_vrisk["sand_carryover_hint"])))
-            _render_collector_bw_envelope_block(computed, expanded=False)
-            _render_collector_staged_orifice_block(computed, expanded=False)
             for _rec in _ch.get("recommendations") or []:
                 st.markdown(f"- {localize_engine_message(str(_rec))}")
             with st.expander("1A/1B regression benchmarks", expanded=False):

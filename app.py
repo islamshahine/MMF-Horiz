@@ -375,9 +375,6 @@ def _render_main_results_stack(
 
             render_bw_duty_timeline_section(inputs, computed, expanded=True)
         else:
-            st.caption(
-                "⚡ **Collector study updated** — open the underdrain / collector expanders below."
-            )
             from ui.collector_design_panel import render_collector_studies_lightweight
 
             render_collector_studies_lightweight(computed)
