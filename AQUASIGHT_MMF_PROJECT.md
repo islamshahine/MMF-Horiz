@@ -1,6 +1,6 @@
 # AQUASIGHT™ MMF — Project Context Document
 
-> **Purpose:** Share this file with Claude.ai chat to discuss enhancements, new features, or design decisions with full project context. For **equations, models, input/display philosophy, and enhancement brainstorming**, see **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md`**. For **unit-system gaps & contributor rules**, see **§ Unit system — architecture, gaps & best practices (2026)**. For **roadmap delivery vs backlog**, see **§ Platform status — accomplished vs remaining (2026)**, **§F Phase 4 roadmap**, and **§G What to do next (2026-05-16)** near the end.
+> **Purpose:** Share this file with Claude.ai chat to discuss enhancements, new features, or design decisions with full project context. For **equations, models, input/display philosophy, and enhancement brainstorming**, see **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md`**. For **unit-system gaps & contributor rules**, see **§ Unit system — architecture, gaps & best practices (2026)**. For **roadmap delivery vs backlog**, see **§ Platform status — accomplished vs remaining (2026)**, **§F Phase 4 roadmap**, and **§G What to do next (2026-05-17)** near the end.
 
 ---
 
@@ -402,6 +402,7 @@ Single place to see **what is done in repo + tests**, what is **engine-only** (n
 | `engine/` coverage (`pytest --cov=engine --cov-report=term-missing`) | **~78%** lines — strong on `compute.py`, `economics.py`, `units.py`; modules not hit in that run show **0%** (e.g. `drawing.py`, `pdf_report.py`, `sensitivity.py` when only `engine/` is measured); thinner coverage on `coating.py`, `media.py`, `project_io.py` (widget map branches), `validators.py` |
 | Headless API | `uvicorn api.main:app` — `GET /health`, `POST /compute` (SI `inputs` JSON), Open **`/docs`** |
 | Baseline milestone | Empty commit **`perf(infrastructure): regression verified platform baseline`** marks a verified test pass on `main` |
+| May 2026 sprint release | **`ad49e3d`** on `main` — triangular nozzles (`layout_revision` 6), BW duty timeline cache, Tier B/C lite modules, Egypt/Middle East media regions, `.github/workflows/ci.yml` |
 
 ---
 
@@ -444,7 +445,7 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | **Optimisation (grid MVP)** | `engine/optimisation.py` — `constraint_check`, `evaluate_candidate`, `optimise_design` (merge patches, rank by `capex` / `opex` / `steel` / `carbon`); **`pareto_capex_opex`** (non-dominated feasible subset on CAPEX vs annual OPEX). Uses **`compute_all` only**. Default EBCT rule: **min layer EBCT ≥ 0.8 × `ebct_threshold`** (documented soft band); optional **`max_dp_dirty_bar`**, steel cap, etc. | `tests/test_optimisation.py`, `tests/test_optimisation_pareto.py` |
 | **Media fill budget (indicative)** | `engine/media_pricing.py` — plant-wide media inventory USD from layer volumes + economics keys + region factor (**Egypt**, **Middle East**, GCC, …); Media tab expander. | `tests/test_media_pricing.py` |
 | **Triangular nozzle-plate layout** | `engine/nozzle_plate_distribution.py` — `N = round(ρ × A_plate)` from sidebar hole density; triangular stagger; `layout_revision` 6; feeds spatial map + schematic. | `tests/test_nozzle_distribution.py`, `tests/test_collector_nozzle_plate.py` |
-| **BW duty-chart cache (UX)** | `ui/bw_timeline_cache.py` — duty-only rerun, timeline merge, stagger compare; requires prior **Apply** for `mmf_last_computed`. | manual + `tests/test_bw_scheduler.py` |
+| **BW duty-chart cache (UX)** | `ui/bw_timeline_cache.py` — duty-only rerun, timeline merge, stagger compare; requires prior **Apply** for `mmf_last_computed`. | `tests/test_bw_stagger_compare.py`, `tests/test_bw_scheduler.py` |
 
 **requirements.txt** (API): `fastapi`, `uvicorn[standard]`, `httpx`. **`.gitignore`:** `aquasight.db`, `logs/`, `__pycache__/`, `.pytest_cache/`, `.coverage`, `htmlcov/` (bytecode and coverage not tracked in git).
 
@@ -487,8 +488,8 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | 11 | **Shaded uncertainty charts (B4)** | **Done** — `cycle_uncertainty_charts`, Filtration Plotly bands (§3.27) |
 | 12 | **Optional CI** | **Done** — `.github/workflows/ci.yml` (`pytest -m "not slow"`) |
 
-**Narrative (updated 2026-05-16)**  
-Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-target, spatial distribution, blower maps, BW v3, revisions, uncertainty bands). Tier **C lite** is **delivered** (Monte Carlo, CFD CSV compare, tag CSV, digital twin, MILP lite). **Next:** Phase **5 — UX & layout polish** — see **§G** and **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md` §12**. Backlog: C2 full in-app CFD, C3 OCR, C5 DCS, external media API.
+**Narrative (updated 2026-05-17)**  
+Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-target, spatial distribution, blower maps, BW v3, revisions, uncertainty bands). Tier **C lite** is **delivered** (Monte Carlo, CFD CSV compare, tag CSV, digital twin, MILP lite). Sprint **`ad49e3d`** is on **`origin/main`**. **Next:** Phase **5 — UX & layout polish** — see **§G** and **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md` §12**. Backlog: C2 full in-app CFD, C3 OCR, C5 DCS, external media API.
 
 ---
 
@@ -512,16 +513,18 @@ Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-targe
 
 ---
 
-### G. **What to do next (2026-05-16)**
+### G. **What to do next (2026-05-17)**
 
 > Full checklist with architecture rules: **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md` §12**.
 
 #### G.1 This week
 
-1. **Git** — commit and push uncommitted `engine/`, `ui/`, `tests/` (exclude `__pycache__/`, `logs/`, `.pytest_cache/`).
-2. **Test** — `pytest tests/test_nozzle_distribution.py tests/test_collector_nozzle_plate.py tests/test_media_pricing.py -q`
-3. **Smoke UI** — `python -m streamlit run app.py` → **Apply** → Backwash → change stagger → **Update duty chart** (all main tabs must remain visible).
-4. **Density contract** — sidebar **Hole density (/m²)** is the only source for hole count (`round(ρ × plate_area)`); never hardcode **N**.
+| # | Action | Status |
+|---|--------|--------|
+| 1 | **Git** — commit and push sprint (`engine/`, `ui/`, `tests/`, docs, CI) | **Done** — `ad49e3d` on `origin/main` (2026-05-17) |
+| 2 | **Targeted pytest** — nozzle + media + spatial smoke | **Done** — 24 passed (`test_nozzle_distribution`, `test_collector_nozzle_plate`, `test_media_pricing`, `test_spatial_distribution`) |
+| 3 | **Smoke UI** — `python -m streamlit run app.py` → **Apply** → Backwash → change stagger → **Update duty chart** (all main tabs visible) | **Verify on your machine** |
+| 4 | **Density contract** — sidebar **Hole density (/m²)** is the only source for `N = round(ρ × A_plate)` | **Enforced in code** — regression at ρ = 40/50/60 optional (P5.3) |
 
 #### G.2 Short term (2–4 weeks)
 

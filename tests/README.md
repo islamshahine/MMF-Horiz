@@ -44,8 +44,12 @@ tests/
   test_collector_manifold.py     Dual-end + CFD export normalize
   test_collector_benchmarks.py   Hand-calc regression pack
   test_collector_staged_orifices.py  Staged orifice advisory
-  test_bw_scheduler.py           BW scheduler v2 (stream-aware, peak windows)
+  test_bw_scheduler.py           BW scheduler v2 (stream-aware, peak windows) [@pytest.mark.slow]
   test_bw_scheduler_v3.py        BW scheduler v3 (tariff + maintenance blackouts)
+  test_bw_scheduler_milp.py      C5 MILP-lite BW schedule export
+  test_bw_stagger_compare.py     Cached stagger comparison (duty-chart UX)
+  test_media_pricing.py          Region factors (Egypt, Middle East, GCC, …)
+  test_equipment_tag_import.py   C3 lite equipment tag CSV import
   test_operating_envelope.py     LV × EBCT feasibility grid (Phase 4 A2)
   test_design_targets.py         Design-to-target caps + grid search (Phase 4 A3)
   test_spatial_distribution.py   Voronoi nozzle loading map (Phase 4 A4)
@@ -110,9 +114,13 @@ All expected values are derived from:
 | `AQUASIGHT_MMF_PROJECT.md` | Architecture, file map, `inputs` / `computed` contracts; **§G What to do next** |
 | `AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md` | Equations, models, enhancement compass; **§12 What to do next** |
 
-## What to do next (2026-05-16)
+## What to do next (2026-05-17)
 
-1. Run targeted tests after nozzle or BW changes:  
-   `pytest tests/test_nozzle_distribution.py tests/test_collector_nozzle_plate.py tests/test_media_pricing.py -q`
-2. Add new modules to the structure list above and a row in **§12** / **§G** of the MD docs.
-3. Full CI locally (optional slow): `pytest tests/ -m "not slow"` — multi-day BW suite is `@pytest.mark.slow`.
+| # | Action | Status |
+|---|--------|--------|
+| 1 | Nozzle/BW smoke after layout or scheduler edits | **Baseline passed** — `pytest tests/test_nozzle_distribution.py tests/test_collector_nozzle_plate.py tests/test_media_pricing.py tests/test_spatial_distribution.py -q` (24 passed, 2026-05-17) |
+| 2 | Full CI locally (matches GitHub Actions) | `pytest tests/ -m "not slow"` |
+| 3 | Slow BW timeline suite (optional) | `pytest tests/test_bw_scheduler.py` (~25 min, `@pytest.mark.slow`) |
+| 4 | New test module | Add to structure list above + row in **§12** / **§G** of both MD files |
+
+**Release:** sprint shipped on `main` as **`ad49e3d`** (triangular nozzles, BW duty cache, Tier B/C lite, CI).

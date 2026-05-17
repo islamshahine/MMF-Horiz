@@ -1172,7 +1172,7 @@ Statements the platform should *not* overclaim:
 
 | ID | Item | Owner files | Status |
 |----|------|-------------|--------|
-| **P5.1** | Git hygiene — commit/push uncommitted engine/UI/tests | repo root | **Do first** |
+| **P5.1** | Git hygiene — commit/push uncommitted engine/UI/tests | repo root | **Done** — `ad49e3d` on `origin/main` (2026-05-17) |
 | **P5.2** | BW duty chart — confirm duty-only path <3 s on typical laptop | `bw_timeline_cache.py`, `app.py` | **Verify**; lazy tabs if not |
 | **P5.3** | Triangular nozzle QA at client densities (40–60 /m²) | `nozzle_plate_distribution.py` | **User-validated** sample; add regression cases |
 | **P5.4** | Filtration-phase spatial map | `spatial_distribution.py` | **Backlog** |
@@ -1322,21 +1322,22 @@ Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.
 | **Triangular nozzle plate (§3.33)** | Density-driven **N**, triangular pitch, full-plate stagger, `layout_revision` **6**; spatial map + schematic aligned. |
 | **Duty-chart UX (§3.34)** | Timeline cache + duty-only rerun; stagger compare cache; tab-hiding regression removed. |
 | **Media regions** | Egypt / Middle East `REGION_FACTOR` keys on Media tab. |
+| **Release `ad49e3d` (2026-05-17)** | Pushed to `origin/main`: triangular nozzles, BW duty cache, Tier B/C lite, `pytest.ini`, GitHub Actions CI; pitch test allows shrink below ideal when boundary clip limits placement. |
 
 ---
 
-## 12. What to do next (2026-05-16)
+## 12. What to do next (2026-05-17)
 
-Use this section as the **single checklist** after the May 2026 nozzle-layout and BW-performance sprint. Phases **0–4** and Tier **B/C lite** are largely complete; focus shifts to **verification, git, and selective backlog**.
+Use this section as the **single checklist** after the May 2026 nozzle-layout and BW-performance sprint. Phases **0–4** and Tier **B/C lite** are **shipped on `main`** (`ad49e3d`); focus shifts to **UI verification, performance tuning, and selective backlog**.
 
 ### 12.1 Immediate (this week)
 
-| # | Action | Why | How |
-|---|--------|-----|-----|
-| 1 | **Commit & push** working tree | Many engine/UI files were untracked in local sessions | Stage `engine/`, `ui/`, `tests/` — exclude `__pycache__/`, `logs/`, `.pytest_cache/` |
-| 2 | **Run targeted pytest** | Lock triangular layout + regions | `pytest tests/test_nozzle_distribution.py tests/test_collector_nozzle_plate.py tests/test_media_pricing.py tests/test_spatial_distribution.py -q` |
-| 3 | **Smoke Streamlit** | Confirm all tabs visible after Apply | `python -m streamlit run app.py` → Apply → change BW stagger → **Update duty chart** only |
-| 4 | **Confirm hole density** | Avoid regression to fixed hole count | Media sidebar **Hole density (/m²)** must drive `N = round(ρ × A_plate)` end-to-end |
+| # | Action | Status | How |
+|---|--------|--------|-----|
+| 1 | **Commit & push** sprint to `origin/main` | **Done** | `ad49e3d` — triangular nozzles, BW duty cache, Tier B/C lite, docs, CI |
+| 2 | **Targeted pytest** (nozzle + media + spatial) | **Done** | 24 passed — `pytest tests/test_nozzle_distribution.py tests/test_collector_nozzle_plate.py tests/test_media_pricing.py tests/test_spatial_distribution.py -q` |
+| 3 | **Smoke Streamlit** | **Verify** | `python -m streamlit run app.py` → Apply → Backwash → change stagger → **Update duty chart** (all main tabs visible) |
+| 4 | **Hole density contract** | **Enforced** | Sidebar **Hole density (/m²)** → `N = round(ρ × A_plate)` only; optional regression at ρ = 40/50/60 (§12.2 **B**) |
 
 ### 12.2 Short term (next 2–4 weeks)
 
@@ -1365,18 +1366,16 @@ Use this section as the **single checklist** after the May 2026 nozzle-layout an
 4. **Cache version bump** when layout or enrichment shape changes (`_COMPUTE_CACHE_VERSION`).
 5. **No second hole-count source** — sidebar density is authoritative.
 
-### 12.5 Suggested commit message (when user asks)
+### 12.5 Last release commit (reference)
 
-```text
-feat: triangular nozzle plate layout, duty-chart cache, media regions
-
-- Density-driven triangular stagger (layout_revision 6)
-- BW timeline duty-only rerun and stagger compare cache
-- Egypt / Middle East media pricing factors
-- Docs §3.33–3.34, §12 next steps; tests for distribution
-```
+| Field | Value |
+|-------|--------|
+| **SHA** | `ad49e3d` |
+| **Branch** | `main` → `origin/main` |
+| **Date** | 2026-05-17 |
+| **Summary** | Triangular nozzle layout (`layout_revision` 6), BW duty timeline cache, Tier B/C lite modules, Egypt/Middle East media regions, CI workflow |
 
 ---
 
-*Document version: 2026-05-16 — Phase 4 complete; Phase 5 (UX/layout); §3.33 triangular nozzles, §3.34 duty-chart UX, §12 what to do next.*
+*Document version: 2026-05-17 — Phase 4 complete; Phase 5 active (P5.1 done); §3.33–3.34 shipped; §12 verification checklist.*
 
