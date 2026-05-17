@@ -1421,52 +1421,9 @@ def render_sidebar(
                 "Screening tools on top of the 1D model — not required for a basic BW sizing run."
             )
             st.markdown("**Optional — collector flow study (1D)**")
-            out["collector_bw_envelope_enable"] = st.checkbox(
-                "Compute BW-flow sweep vs imbalance / velocities",
-                value=bool(st.session_state.get("collector_bw_envelope_enable", False)),
-                key="collector_bw_envelope_enable",
-                help=(
-                    "Runs the 1D collector model several times at scaled total BW flow (same geometry). "
-                    "For optioneering only; each sweep adds extra work to each compute_all run."
-                ),
-            )
-            _env_dis = not out["collector_bw_envelope_enable"]
-            _e1, _e2 = st.columns(2)
-            with _e1:
-                out["collector_bw_envelope_n_points"] = int(st.number_input(
-                    "Sweep base points (3–25)",
-                    value=int(st.session_state.get("collector_bw_envelope_n_points", 7)),
-                    min_value=3,
-                    max_value=25,
-                    step=1,
-                    key="collector_bw_envelope_n_points",
-                    disabled=_env_dis,
-                ))
-            with _e2:
-                out["collector_bw_envelope_q_low_frac"] = float(st.number_input(
-                    "Low flow / design",
-                    value=float(st.session_state.get("collector_bw_envelope_q_low_frac", 0.55)),
-                    min_value=0.05,
-                    max_value=0.98,
-                    step=0.05,
-                    format="%.2f",
-                    key="collector_bw_envelope_q_low_frac",
-                    disabled=_env_dis,
-                ))
-            out["collector_bw_envelope_q_high_frac"] = float(st.number_input(
-                "High flow / design",
-                value=float(st.session_state.get("collector_bw_envelope_q_high_frac", 1.15)),
-                min_value=1.02,
-                max_value=1.80,
-                step=0.05,
-                format="%.2f",
-                key="collector_bw_envelope_q_high_frac",
-                disabled=_env_dis,
-            ))
-            st.caption(
-                "Design-point BW flow is always included. "
-                "Feasible = converged distribution and imbalance ≤ 55% (screening cap)."
-            )
+            from ui.collector_envelope_form import render_collector_bw_envelope_form
+
+            render_collector_bw_envelope_form()
 
             st.markdown("**Optional — perforation staging (advisory)**")
             _staged_opts = [0, 2, 3, 4]

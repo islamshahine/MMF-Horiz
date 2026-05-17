@@ -117,6 +117,7 @@ sync_linked_collector_header_session(
 
 _ctx_collapsed = bool(st.session_state.get("mmf_ctx_collapsed"))
 _duty_only = bool(st.session_state.pop("_bw_duty_only_rerun", False))
+_envelope_only = bool(st.session_state.pop("_collector_envelope_rerun", False))
 st.session_state.pop("_bw_duty_fast_ui", None)  # legacy flag — no longer hides tabs
 
 inputs: dict = {}
@@ -165,11 +166,31 @@ from ui.bw_timeline_cache import (
     refresh_bw_timeline_in_computed,
     _repair_bw_timeline_slot,
 )
+from ui.collector_envelope_cache import (
+    refresh_collector_envelope_in_computed,
+    restore_collector_envelope_if_valid,
+)
 
 _last = st.session_state.get("mmf_last_computed")
 _duty_fast = _duty_only and isinstance(_last, dict) and bool(_last)
+_envelope_fast = _envelope_only and isinstance(_last, dict) and bool(_last)
 
-if _duty_fast:
+if _envelope_fast:
+    computed = dict(_last)
+    with st.spinner("Running BW-flow sweep (1D)…"):
+        refresh_collector_envelope_in_computed(_inputs_for_compute, computed)
+elif _envelope_only:
+    st.warning(
+        "No saved plant model in this session — running a **full** calculation once. "
+        "After that, **Run BW-flow sweep** only reruns the sweep (fast)."
+    )
+    computed = compute_all_cached(
+        inputs_for_compute_cache(_inputs_for_compute),
+        _COMPUTE_CACHE_VERSION,
+    )
+    with st.spinner("Running BW-flow sweep (1D)…"):
+        refresh_collector_envelope_in_computed(_inputs_for_compute, computed)
+elif _duty_fast:
     computed = dict(_last)
     _repair_bw_timeline_slot(computed)
     _merged = merge_bw_duty_applied(_inputs_for_compute)
@@ -204,7 +225,7 @@ if not st.session_state.get("_bw_duty_applied"):
         "bw_maintenance_blackout_t1_h": 0.0,
     }
 
-if not _duty_only:
+if not _duty_only and not _envelope_only:
     from engine.design_basis import build_design_basis
     from engine.explainability import build_explainability_index
     from engine.lifecycle_degradation import build_lifecycle_degradation
@@ -287,6 +308,7 @@ if not _duty_only:
         )
     else:
         computed["equipment_tag_registry"] = {"enabled": False}
+    restore_collector_envelope_if_valid(_inputs_for_compute, computed)
 
 st.session_state["mmf_last_computed"] = computed
 

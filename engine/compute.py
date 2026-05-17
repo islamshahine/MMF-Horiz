@@ -1262,16 +1262,6 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
 
         collector_bw_envelope = None
         collector_staged_orifices = None
-        if bool(_work.get("collector_bw_envelope_enable", False)) and _q_bw_est > 1e-6:
-            from engine.collector_envelope import build_collector_bw_flow_envelope
-
-            collector_bw_envelope = build_collector_bw_flow_envelope(
-                compute_kwargs=_col_kwargs,
-                reference_q_bw_m3h=float(_q_bw_est),
-                n_points=int(_work.get("collector_bw_envelope_n_points", 7) or 7),
-                q_low_frac=float(_work.get("collector_bw_envelope_q_low_frac", 0.55) or 0.55),
-                q_high_frac=float(_work.get("collector_bw_envelope_q_high_frac", 1.15) or 1.15),
-            )
 
         _sg = int(_work.get("collector_staged_orifice_groups", 0) or 0)
         if _sg >= 2 and _sg <= 4:
