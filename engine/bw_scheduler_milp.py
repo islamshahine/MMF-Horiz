@@ -145,15 +145,18 @@ def optimize_bw_phases_milp(
     blackouts = list(maintenance_blackouts or [])
     m_slots = max(4, min(int(n_slots or min(n, _MAX_SLOTS)), _MAX_SLOTS))
 
-    # Long horizons: v3 heuristic is fast enough; MILP CBC can freeze the UI on multi-day charts.
+    # Long horizons: skip ILP and v3 coordinate descent — use feasibility-train spacing (instant).
     if horizon > 48.0:
-        ph, meta = optimize_bw_phases_v3(
-            n, period_h=period, bw_duration_h=bd, bw_trains=bw_trains, horizon_h=horizon,
-            peak_tariff_windows=peak_w, tariff_peak_multiplier=tariff_peak_multiplier,
-            maintenance_blackouts=blackouts,
-        )
-        meta["method"] = "fallback_v3_horizon_gt_48h"
-        return ph, meta
+        k = max(1, min(int(bw_trains), n))
+        phases = [((i * bd) / float(k)) % period for i in range(n)]
+        return phases, {
+            "method": "fallback_feasibility_horizon_gt_48h",
+            "bw_trains_target": k,
+            "note": (
+                "MILP lite runs the discrete ILP for horizons ≤ 2 d only; "
+                f"{horizon:.0f} h uses feasibility-train BW spacing (fast)."
+            ),
+        }
 
     if n > _MAX_FILTERS:
         return optimize_bw_phases_v3(
@@ -296,6 +299,11 @@ def build_bw_schedule_assessment_milp(
             0,
             f"MILP lite ({meta.get('solver_status', '—')}): discrete phase slots — "
             "not DCS/MES integration.",
+        )
+    elif meta.get("method") == "fallback_feasibility_horizon_gt_48h":
+        notes.insert(
+            0,
+            str(meta.get("note") or "Long horizon — feasibility-train spacing (MILP ILP is ≤2 d only)."),
         )
     elif "fallback" in str(meta.get("method", "")):
         notes.insert(0, "MILP unavailable — fell back to tariff-aware v3 heuristic.")

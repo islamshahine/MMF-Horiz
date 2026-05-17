@@ -76,11 +76,19 @@ def _concurrent_bw_at(
     return c
 
 
+def scheduler_dt_h(horizon_h: float, dt_h: float | None = None) -> float:
+    """Coarser time step on long horizons — keeps peak scans UI-friendly (~≤400 samples)."""
+    if dt_h is not None and float(dt_h) > 0:
+        return max(0.01, float(dt_h))
+    h = max(1.0, float(horizon_h))
+    return max(0.05, min(0.5, h / 400.0))
+
+
 def peak_concurrent_bw(
     filters: list[dict],
     *,
     horizon_h: float,
-    dt_h: float = 0.05,
+    dt_h: float | None = None,
 ) -> int:
     """Peak count of filters in BW state over ``[0, horizon_h]``."""
     prof = peak_concurrent_bw_profile(filters, horizon_h=horizon_h, dt_h=dt_h)
@@ -91,14 +99,14 @@ def peak_concurrent_bw_profile(
     filters: list[dict],
     *,
     horizon_h: float,
-    dt_h: float = 0.05,
+    dt_h: float | None = None,
 ) -> Dict[str, Any]:
     """Peak concurrent BW and time of first peak (scheduling aid)."""
     horizon = float(horizon_h)
     if not filters or horizon <= 0:
         return {"peak": 0, "peak_time_h": 0.0, "samples": []}
 
-    step = max(float(dt_h), 0.01)
+    step = scheduler_dt_h(horizon, dt_h)
     peak = 0
     peak_t = 0.0
     samples: List[Tuple[float, int]] = []
@@ -121,7 +129,7 @@ def find_peak_bw_windows(
     filters: list[dict],
     *,
     horizon_h: float,
-    dt_h: float = 0.05,
+    dt_h: float | None = None,
     max_windows: int = 3,
 ) -> List[Dict[str, float]]:
     """Contiguous intervals where concurrent BW equals the horizon peak."""
@@ -156,10 +164,12 @@ def scheduler_max_passes(horizon_h: float, n_filters: int = 1) -> int:
     """Fewer coordinate-descent passes on long horizons / many filters (UI responsiveness)."""
     h = float(horizon_h)
     n = int(max(1, n_filters))
+    if h > 120.0 or (h > 72.0 and n > 12):
+        return 1
     if h > 72.0 or n > 12:
-        return 3
+        return 2
     if h > 48.0 or n > 8:
-        return 5
+        return 3
     return 8
 
 
@@ -615,6 +625,8 @@ def _optimize_bw_phases_v3_single(
 
     phases = [((i * bd) / float(k)) % period for i in range(n)]
     grid = _candidate_phases(period, bd, k, n)
+    if horizon > 48.0 and len(grid) > 12:
+        grid = grid[:12]
 
     def _obj(ph: list[float]) -> Dict[str, Any]:
         return schedule_objective_v3(

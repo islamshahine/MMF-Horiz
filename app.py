@@ -346,6 +346,11 @@ def _render_main_results_stack(
         label_visibility="collapsed",
     )
     _active_tab = st.session_state.get("mmf_main_tabs", _active_tab)
+    if duty_fast and _active_tab == "🔄 Backwash":
+        from ui.bw_duty_timeline_section import render_bw_duty_timeline_section
+
+        render_bw_duty_timeline_section(inputs, computed, expanded=True)
+        return
     _render_tab = _MAIN_TAB_RENDERERS.get(_active_tab)
     if _render_tab is not None:
         _render_tab(inputs, computed)

@@ -107,6 +107,20 @@ def test_timeline_milp_lite_integration():
     assert len(tl["filters"]) == 6
 
 
+def test_milp_long_horizon_uses_feasibility_not_v3():
+    n, tc, bd, k = 16, 6.0, 0.4, 2
+    period = tc + bd
+    phases, meta = optimize_bw_phases_milp(
+        n,
+        period_h=period,
+        bw_duration_h=bd,
+        bw_trains=k,
+        horizon_h=168.0,
+    )
+    assert meta.get("method") == "fallback_feasibility_horizon_gt_48h"
+    assert len(phases) == n
+
+
 def test_milp_fallback_no_pulp(monkeypatch):
     """When PuLP is missing, optimizer delegates to v3."""
     import builtins

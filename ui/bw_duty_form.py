@@ -15,7 +15,7 @@ _STAGGER_LABELS = {
     "feasibility_trains": "Feasibility BW trains (recommended)",
     "optimized_trains": "Optimized trains (peak only)",
     "tariff_aware_v3": "Tariff-aware v3 (peak + off-peak + blackouts)",
-    "milp_lite": "MILP lite (C5) — 1 d ILP; 3+ d uses fast v3",
+    "milp_lite": "MILP lite (C5) — ILP ≤2 d; 3+ d uses feasibility spacing",
     "uniform": "Uniform (legacy comparison)",
 }
 
@@ -73,7 +73,7 @@ def render_bw_duty_chart_form(out: dict) -> None:
             options=list(_STAGGER_OPTS),
             index=list(_STAGGER_OPTS).index(_stagger_cur),
             format_func=lambda x: _STAGGER_LABELS[x],
-            help="MILP CBC runs only for 1–2 d horizons; longer horizons use tariff-aware v3 automatically.",
+            help="MILP CBC runs only for 1–2 d horizons; 3+ d uses fast feasibility-train spacing (not full v3 search).",
         )
         _pt1, _pt2, _pt3 = st.columns(3)
         _f_pt0 = float(
@@ -145,5 +145,6 @@ def render_bw_duty_chart_form(out: dict) -> None:
     out.update(st.session_state["_bw_duty_applied"])
     st.caption(
         "**Workflow:** pick stagger → **Update duty chart** → view timeline. "
-        "**Feasibility** is fastest; **v3 / optimized** a few seconds on 7 d."
+        "**Feasibility** is fastest on 7 d. **MILP lite** solves ILP only for 1–2 d horizons. "
+        "**Tariff-aware v3** on 7 d may take ~10–30 s with many filters."
     )
