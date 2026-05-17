@@ -1173,7 +1173,7 @@ Statements the platform should *not* overclaim:
 | ID | Item | Owner files | Status |
 |----|------|-------------|--------|
 | **P5.1** | Git hygiene — commit/push uncommitted engine/UI/tests | repo root | **Done** — `ad49e3d` on `origin/main` (2026-05-17) |
-| **P5.2** | BW duty chart — confirm duty-only path <3 s on typical laptop | `bw_timeline_cache.py`, `app.py` | **Verify**; lazy tabs if not |
+| **P5.2** | BW duty chart — duty-only fast UI | `bw_timeline_cache.py`, `app.py` | **Done** — `_duty_fast` skips eight main tabs; renders §5 timeline only |
 | **P5.3** | Triangular nozzle QA at client densities (40–60 /m²) | `nozzle_plate_distribution.py` | **User-validated** sample; add regression cases |
 | **P5.4** | Filtration-phase spatial map | `spatial_distribution.py` | **Backlog** |
 | **P5.5** | External media pricing API | `media_pricing.py` | **Backlog** |
@@ -1343,7 +1343,7 @@ Use this section as the **single checklist** after the May 2026 nozzle-layout an
 
 | # | Topic | Detail |
 |---|--------|--------|
-| **A** | **Duty-chart performance** | If still slow: (1) profile post-hooks in `app.py`; (2) skip enrichment except Backwash when `_bw_duty_only_rerun`; (3) lazy-render non-active tabs; (4) keep `build_bw_timeline_cached` scalar args only (`UnhashableParamError` guard). |
+| **A** | **Duty-chart performance** | **Fast path shipped** — `_duty_fast` in `app.py` renders §5 timeline only; post-hooks skipped on duty-only rerun. Verify latency on your laptop after **Update duty chart**. |
 | **B** | **Nozzle layout QA** | Add pytest cases at ρ = 40, 50, 60 /m² for a reference plate area; assert axial coverage ≥95%, `layout_mode == triangular_stagger`, `len(hole_network) ≈ N`. |
 | **C** | **Spatial map polish** | Optional: Filtration-tab service-phase map using same `spatial_distribution` engine; document `ASM-SPATIAL-02` if added. |
 | **D** | **Documentation drift** | After each feature: update §3 equation row, §11 Phase table, §12 checklist, `tests/README.md`. |

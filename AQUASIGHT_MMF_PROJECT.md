@@ -530,7 +530,7 @@ Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-targe
 
 | Priority | Work | Files / notes |
 |----------|------|----------------|
-| **P5.2** | Duty-chart speed | If >~3 s after Apply: lazy tabs in `app.py`; skip non-Backwash post-hooks when `_bw_duty_only_rerun` |
+| **P5.2** | Duty-chart speed | **Done (fast path)** — `_duty_fast` renders Backwash §5 timeline only; post-hooks already skipped on duty-only rerun |
 | **P5.3** | Nozzle QA | Regression at ρ = 40, 50, 60 /m²; axial coverage ≥95% |
 | **P5.4** | Filtration spatial map | Reuse `spatial_distribution.py` on service flow (optional) |
 | **Docs** | Keep §3 / §11 / §12 aligned after each PR | Both MD files + `tests/README.md` |

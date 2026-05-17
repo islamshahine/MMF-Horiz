@@ -279,6 +279,16 @@ def bw_timeline_schedule_summary_html(bw_timeline: dict) -> str:
     )
 
 
+def clogging_pct_display(val) -> str:
+    """Arrow-safe display for support layers (—) vs filterable layers (numeric %)."""
+    if val is None or val == "—":
+        return "—"
+    try:
+        return f"{float(val):.1f}"
+    except (TypeError, ValueError):
+        return str(val)
+
+
 def pressure_drop_layers_display_frames(rows: list) -> tuple:
     """
     Convert pressure_drop()['layers'] rows (SI) to display-unit DataFrames.
@@ -314,7 +324,7 @@ def pressure_drop_layers_display_frames(rows: list) -> tuple:
             f"Solid vol ({ulbl('length_m')})": round(
                 dv(svol_si, "length_m"), 6),
             "ΔεF": r["ΔεF"],
-            "Clogging (%)": r["Clogging (%)"],
+            "Clogging (%)": clogging_pct_display(r["Clogging (%)"]),
             f"Depth ({ulbl('length_m')})": round(dv(depth_si, "length_m"), 3),
             f"LV ({ulbl('velocity_m_h')})": round(dv(lv_si, "velocity_m_h"), 2),
             "ε clean": r["ε clean"],
@@ -338,7 +348,7 @@ def pressure_drop_layers_display_frames(rows: list) -> tuple:
             f"Solid load ({ulbl('loading_kg_m2')})": full[f"Solid load ({ulbl('loading_kg_m2')})"],
             f"Solid vol ({ulbl('length_m')})": full[f"Solid vol ({ulbl('length_m')})"],
             "ΔεF": r["ΔεF"],
-            "Clogging (%)": r["Clogging (%)"],
+            "Clogging (%)": clogging_pct_display(r["Clogging (%)"]),
             "ε clean": r["ε clean"],
             f"Cake ΔP mod ({ulbl('pressure_bar')})": full[f"Cake ΔP mod ({ulbl('pressure_bar')})"],
             f"Cake ΔP dirty ({ulbl('pressure_bar')})": full[f"Cake ΔP dirty ({ulbl('pressure_bar')})"],

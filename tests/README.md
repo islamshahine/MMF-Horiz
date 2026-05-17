@@ -36,6 +36,7 @@ tests/
   test_nozzle_plate_catalogue.py Pressurized catalogue (9 products), legacy ID removal
   test_nozzle_system.py          Underdrain coherence advisory
   test_strainer_materials.py     Salinity-driven strainer defaults
+  test_ui_helpers.py             Display helpers (clogging % Arrow-safe strings)
   test_collector_nozzle_plate.py Nozzle plate triangular stagger layout (layout_revision 6)
   test_nozzle_distribution.py   Density-driven N, pitch, full-plate coverage, stagger
   test_collector_hydraulics.py   1D collector header/lateral
