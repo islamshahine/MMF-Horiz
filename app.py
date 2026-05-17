@@ -103,6 +103,8 @@ sync_linked_collector_header_session(
 )
 
 _ctx_collapsed = bool(st.session_state.get("mmf_ctx_collapsed"))
+_duty_only = bool(st.session_state.pop("_bw_duty_only_rerun", False))
+st.session_state.pop("_bw_duty_fast_ui", None)  # legacy flag — no longer hides tabs
 
 inputs: dict = {}
 
@@ -152,8 +154,6 @@ from ui.bw_timeline_cache import (
     _repair_bw_timeline_slot,
 )
 
-_duty_only = bool(st.session_state.pop("_bw_duty_only_rerun", False))
-st.session_state.pop("_bw_duty_fast_ui", None)  # legacy flag — no longer hides tabs
 _last = st.session_state.get("mmf_last_computed")
 _duty_fast = _duty_only and isinstance(_last, dict) and bool(_last)
 
@@ -293,23 +293,14 @@ def _render_main_results_stack(
     column_marker("main")
     render_project_toolbar(inputs, computed)
     render_quick_jump_bar(inputs_collapsed=inputs_collapsed)
+    st.caption(_INTRO_CAPTION)
     if duty_fast:
         st.caption(
-            "**Duty chart refresh** — showing **Backwash §5 timeline** only for speed. "
-            "Other tabs still reflect your last **Apply**; use **Apply** for a full model rerun."
+            "⚡ **Duty chart updated** — timeline refreshed from sidebar settings. "
+            "All tabs show your last full model; change plant inputs then rerun from sidebar as usual."
         )
-    else:
-        st.caption(_INTRO_CAPTION)
     render_section_guide_row()
     render_compute_validation_banners(computed)
-    if duty_fast:
-        from ui.bw_duty_timeline_section import render_bw_duty_timeline_section
-
-        render_bw_duty_timeline_section(
-            inputs, computed, expanded=True, show_compare_panel=False,
-        )
-        return
-
     (tab_filtration, tab_backwash, tab_mechanical, tab_media, tab_pumps,
      tab_economics, tab_assessment, tab_report, tab_compare) = st.tabs(
         [
@@ -344,16 +335,14 @@ if _ctx_collapsed:
     _render_main_results_stack(
         inputs=inputs, computed=computed, inputs_collapsed=True, duty_fast=_duty_fast,
     )
-    if not _duty_fast:
-        render_readiness_strip(inputs, computed)
+    render_readiness_strip(inputs, computed)
 else:
     with main:
         _render_main_results_stack(
             inputs=inputs, computed=computed, inputs_collapsed=False, duty_fast=_duty_fast,
         )
     with ctx:
-        if not _duty_fast:
-            render_readiness_strip(inputs, computed)
+        render_readiness_strip(inputs, computed)
 
 _guide_tip = st.session_state.pop("mmf_guide_banner", None)
 
