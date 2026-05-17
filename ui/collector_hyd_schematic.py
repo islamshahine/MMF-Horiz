@@ -559,19 +559,33 @@ def build_nozzle_plate_plan_figure(
     v_cap = max(0.01, float(v_max or 1.0))
     hinset = float(head_inset_m or 0.0)
     bore_m = max(0.001, float(bore_d_mm or 50.0) / 1000.0)
-    # Marker size ∝ bore on equal-aspect plan (reference pitch ~100 mm)
-    _mk_px = max(4, min(14, 5.0 * bore_m / 0.05))
-
     fx0 = float(field_x_start_m) if field_x_start_m else hinset
     fx1 = float(field_x_end_m) if field_x_end_m else L - hinset
     y_plot0 = float(field_y_plot_start_m) if field_y_plot_start_m else -W / 2.0
     y_plot1 = float(field_y_plot_end_m) if field_y_plot_end_m else W / 2.0
 
-    # Plot all holes when modest count; stratify only for very large networks
-    if len(hole_network) <= 8000:
+    # Plot every hole up to 8k (typical MMF layouts). Subsample only for extreme counts.
+    _n_total = len(hole_network)
+    _plot_all_up_to = 8000
+    _stratified_cap = 5000
+    _subsamp_note = ""
+    if _n_total <= _plot_all_up_to:
         sample = hole_network
     else:
-        sample = _stratified_hole_sample(hole_network, max_per_row=250)
+        _mpr = max(24, _stratified_cap // max(1, n_rows_across))
+        sample = _stratified_hole_sample(hole_network, max_per_row=_mpr)
+        _subsamp_note = f" · {len(sample):,}/{_n_total:,} markers"
+
+    _n_plot = len(sample)
+    if _n_plot > 3500:
+        _mk_px = max(2, min(5, 3.0 * bore_m / 0.05))
+        _mk_opacity = 0.78
+    elif _n_plot > 1500:
+        _mk_px = max(3, min(8, 4.0 * bore_m / 0.05))
+        _mk_opacity = 0.86
+    else:
+        _mk_px = max(4, min(14, 5.0 * bore_m / 0.05))
+        _mk_opacity = 0.92
     even_x, even_y, even_v, even_hov = [], [], [], []
     odd_x, odd_y, odd_v, odd_hov = [], [], [], []
 
@@ -633,7 +647,7 @@ def build_nozzle_plate_plan_figure(
 
     _mk = dict(
         size=_mk_px, cmin=0, cmax=v_cap, colorscale="Turbo",
-        line=dict(width=0.5, color="#0f172a"), opacity=0.92,
+        line=dict(width=0.5, color="#0f172a"), opacity=_mk_opacity,
     )
     if even_x:
         fig.add_trace(go.Scatter(
@@ -651,9 +665,10 @@ def build_nozzle_plate_plan_figure(
         ))
 
     p_long_m = max(0.001, float(pitch_long_mm or 100.0) / 1000.0)
+    _dim_net = hole_network
     even_xs = sorted(
         float(h.get("station_m", 0))
-        for h in hole_network
+        for h in _dim_net
         if not h.get("staggered")
     )
     if len(even_xs) >= 2:
@@ -670,7 +685,7 @@ def build_nozzle_plate_plan_figure(
             label_html=f"P<sub>long</sub> = {fmt(p_long_m, 'length_m', 2)}",
             tick_h=0.02 * W, color="#0369a1", label_above=False,
         )
-    y_centres = sorted({round(float(h.get("y_plot_m", 0)), 4) for h in hole_network})
+    y_centres = sorted({round(float(h.get("y_plot_m", 0)), 4) for h in _dim_net})
     if len(y_centres) >= 2:
         dy = y_centres[1] - y_centres[0]
         _add_plan_vertical_dimension(
@@ -707,7 +722,7 @@ def build_nozzle_plate_plan_figure(
     _y_pad = max(0.18 * W, 0.35)
     fig.update_layout(
         title=dict(
-            text="Nozzle plate — plan (brick / staggered layout)",
+            text=f"Nozzle plate — triangular stagger layout{_subsamp_note}",
             font=dict(size=13),
         ),
         xaxis=dict(

@@ -6,6 +6,10 @@ from engine.media_pricing import REGION_FACTOR, estimate_media_inventory_budget
 def test_region_factors():
     assert REGION_FACTOR["global"] == 1.0
     assert REGION_FACTOR["gcc"] > 1.0
+    assert REGION_FACTOR["egypt"] > 1.0
+    assert REGION_FACTOR["middle_east"] > 1.0
+    assert "egypt" in REGION_FACTOR
+    assert "middle_east" in REGION_FACTOR
 
 
 def test_estimate_positive():

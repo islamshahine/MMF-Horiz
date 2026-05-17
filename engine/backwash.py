@@ -453,6 +453,7 @@ def filter_bw_timeline_24h(
     stagger_model: str = "feasibility_trains",
     sim_demand: float | None = None,
     n_streams: int = 1,
+    scheduler_inputs: dict | None = None,
 ) -> dict:
     """
     Filter duty chart: operate vs backwash over ``horizon_h``.
@@ -466,6 +467,13 @@ def filter_bw_timeline_24h(
     * ``stagger_model="optimized_trains"`` — **scheduling aid**: coordinate descent on
       per-filter phases (see ``engine/bw_scheduler.py``) to reduce peak concurrent BW
       over ``horizon_h`` while keeping the same cycle period.
+
+    * ``stagger_model="tariff_aware_v3"`` — **B2**: v3 optimizer — peak trains + shift BW
+      toward off-peak electricity windows + avoid maintenance blackouts (heuristic).
+      Pass tariff/blackout settings via ``scheduler_inputs`` dict.
+
+    * ``stagger_model="milp_lite"`` — **C5**: discrete-phase ILP (PuLP) minimizing peak,
+      peak-tariff filter-hours, and blackout overlap; falls back to v3 if solver unavailable.
     """
     if n_filters_total < 1:
         return {
@@ -498,13 +506,123 @@ def filter_bw_timeline_24h(
     min_k = int(math.ceil(n_int * bd / max(period, 1e-9)))
     notes: list[str] = []
 
-    use_optimized = stagger_model == "optimized_trains" and bw_trains is not None and K_raw >= 1
+    _sched_in = dict(scheduler_inputs or {})
+    use_milp = (
+        stagger_model == "milp_lite"
+        and bw_trains is not None
+        and K_raw >= 1
+    )
+    use_tariff_v3 = (
+        not use_milp
+        and stagger_model == "tariff_aware_v3"
+        and bw_trains is not None
+        and K_raw >= 1
+    )
+    use_optimized = (
+        not use_milp
+        and not use_tariff_v3
+        and stagger_model == "optimized_trains"
+        and bw_trains is not None
+        and K_raw >= 1
+    )
     use_uniform = (
-        not use_optimized
+        not use_milp
+        and not use_optimized
         and (stagger_model == "uniform" or bw_trains is None or K_raw < 1)
     )
     train_shortfall = False
     opt_meta: dict = {}
+
+    if use_milp:
+        from engine.bw_scheduler_milp import build_bw_schedule_assessment_milp
+
+        assess = build_bw_schedule_assessment_milp(
+            n_int,
+            period_h=period,
+            bw_duration_h=bd,
+            bw_trains=K,
+            horizon_h=horizon_h,
+            inputs=_sched_in,
+            n_streams=max(1, int(n_streams)),
+        )
+        filters = assess["filters"]
+        opt_meta = assess.get("optimizer") or {}
+        peak = int(assess["peak_concurrent_bw"])
+        notes.extend(assess.get("advisory_notes") or [])
+        stagger_model_out = "milp_lite"
+        bw_trains_out = K
+        train_shortfall = K < min_k
+        if sim_demand is not None and math.isfinite(float(sim_demand)):
+            notes.append(f"Feasibility sim_demand ≈ {float(sim_demand):.2f}.")
+        return {
+            "filters": filters,
+            "peak_concurrent_bw": peak,
+            "horizon_h": horizon_h,
+            "t_cycle_h": tc,
+            "bw_duration_h": bd,
+            "period_h": period,
+            "stagger_model": stagger_model_out,
+            "bw_trains": bw_trains_out,
+            "sim_demand": sim_demand,
+            "note": " ".join(notes),
+            "optimizer": opt_meta,
+            "peak_windows": assess.get("peak_windows") or [],
+            "meets_bw_trains_cap": assess.get("meets_bw_trains_cap"),
+        }
+
+    if use_tariff_v3:
+        from engine.bw_scheduler import build_bw_schedule_assessment_v3
+
+        assess = build_bw_schedule_assessment_v3(
+            n_int,
+            period_h=period,
+            bw_duration_h=bd,
+            bw_trains=K,
+            horizon_h=horizon_h,
+            inputs=_sched_in,
+            n_streams=max(1, int(n_streams)),
+        )
+        filters = assess["filters"]
+        opt_meta = assess.get("optimizer") or {}
+        peak = int(assess["peak_concurrent_bw"])
+        notes.append(
+            "Tariff-aware v3 stagger: minimizes peak concurrent BW, peak-tariff filter-hours, "
+            "and maintenance blackout overlap (scheduling aid)."
+        )
+        if int(opt_meta.get("improvement_filters", 0) or 0) > 0:
+            notes.append(
+                f"v3 vs feasibility spacing: peak reduced by {opt_meta['improvement_filters']} filter(s)."
+            )
+        stagger_model_out = "tariff_aware_v3"
+        bw_trains_out = K
+        train_shortfall = K < min_k
+        if train_shortfall:
+            notes.append(
+                f"⚠ bw_trains={K} < ceil(N·Δt_bw/T)={min_k} — demand may exceed this schematic."
+            )
+        if sim_demand is not None and math.isfinite(float(sim_demand)):
+            notes.append(f"Feasibility sim_demand ≈ {float(sim_demand):.2f}.")
+
+        return {
+            "filters": filters,
+            "peak_concurrent_bw": int(peak),
+            "horizon_h": horizon_h,
+            "t_cycle_h": round(tc, 3),
+            "bw_duration_h": round(bd, 4),
+            "period_h": round(period, 3),
+            "stagger_model": stagger_model_out,
+            "bw_trains": bw_trains_out,
+            "sim_demand": None if sim_demand is None else round(float(sim_demand), 3),
+            "min_bw_trains_theory": min_k,
+            "train_shortfall": train_shortfall,
+            "optimizer": opt_meta,
+            "peak_time_h": assess.get("peak_time_h"),
+            "peak_windows": assess.get("peak_windows"),
+            "meets_bw_trains_cap": bool(assess.get("meets_bw_trains_cap", peak <= K)),
+            "tariff_v3": assess.get("tariff_v3"),
+            "advisory_notes": assess.get("advisory_notes"),
+            "note": " ".join(notes),
+        }
 
     if use_optimized:
         from engine.bw_scheduler import filters_from_phases, optimize_bw_phases, peak_concurrent_bw

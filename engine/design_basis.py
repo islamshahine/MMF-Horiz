@@ -97,7 +97,10 @@ def _build_assumptions_catalog(inputs: dict, computed: dict) -> List[dict[str, A
         {
             "id": "ASM-BW-02",
             "category": "Backwash",
-            "text": "Multi-day BW scheduler is heuristic (midpoint grid / stream-aware); not MILP or DCS-optimised.",
+            "text": (
+                "Multi-day BW scheduler: feasibility / optimized / tariff v3 / optional MILP lite "
+                "(discrete ILP); not plant DCS-optimised."
+            ),
         },
         {
             "id": "ASM-COLL-01",
@@ -147,6 +150,23 @@ def _build_assumptions_catalog(inputs: dict, computed: dict) -> List[dict[str, A
             "text": (
                 "Local orifice velocity from Q_basis × (A_service / ΣA) / A_open; "
                 "dead-zone heuristic uses edge distance and loading factor."
+            ),
+        },
+        {
+            "id": "ASM-BLOWER-01",
+            "category": "Backwash / energy",
+            "text": (
+                "Air blower: adiabatic ideal-gas compression in bw_system_sizing; "
+                "optional generic vendor map + VFD affinity for screening comparison only."
+            ),
+        },
+        {
+            "id": "ASM-BW-SCHED-02",
+            "category": "Backwash / scheduling",
+            "text": (
+                "BW scheduler v3 (tariff_aware_v3): heuristic phase search minimizing peak "
+                "concurrent BW, peak-tariff filter-hours, and maintenance blackout overlap — "
+                "not MILP or DCS-linked."
             ),
         },
     ]

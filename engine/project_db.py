@@ -5,7 +5,9 @@ Default file: ``aquasight.db`` in the process working directory.
 Stores the same *inputs* payload as JSON export (``engine.project_io``); optional
 *computed* snapshot excludes non-serialisable tab callables (severity fns).
 
-Tables: ``projects``, ``snapshots``, ``scenarios``.
+Tables: ``projects``, ``cases``, ``revisions``, ``snapshots`` (legacy), ``scenarios``.
+
+B3 hierarchy: **Project** → **Case** → **Revision** (report hash per revision).
 """
 from __future__ import annotations
 
@@ -77,8 +79,131 @@ def _create_tables(conn: sqlite3.Connection) -> None:
 
         CREATE INDEX IF NOT EXISTS idx_projects_updated ON projects(updated_at DESC);
         CREATE INDEX IF NOT EXISTS idx_snapshots_project ON snapshots(project_id, created_at DESC);
+
+        CREATE TABLE IF NOT EXISTS cases (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            project_id INTEGER NOT NULL,
+            case_name TEXT NOT NULL,
+            description TEXT NOT NULL DEFAULT '',
+            is_default INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            UNIQUE(project_id, case_name),
+            FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+
+        CREATE TABLE IF NOT EXISTS revisions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            case_id INTEGER NOT NULL,
+            revision_code TEXT NOT NULL DEFAULT '',
+            label TEXT NOT NULL DEFAULT '',
+            notes TEXT NOT NULL DEFAULT '',
+            report_hash TEXT NOT NULL DEFAULT '',
+            inputs_json TEXT,
+            computed_json TEXT,
+            parent_revision_id INTEGER,
+            created_at TEXT NOT NULL,
+            FOREIGN KEY (case_id) REFERENCES cases(id) ON DELETE CASCADE,
+            FOREIGN KEY (parent_revision_id) REFERENCES revisions(id) ON DELETE SET NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_cases_project ON cases(project_id, is_default DESC);
+        CREATE INDEX IF NOT EXISTS idx_revisions_case ON revisions(case_id, created_at DESC);
         """
     )
+
+
+_SCHEMA_VERSION = 3
+
+
+def _migrate_schema_v3(conn: sqlite3.Connection) -> None:
+    """Migrate legacy projects/snapshots into cases/revisions (idempotent)."""
+    ver = int(conn.execute("PRAGMA user_version").fetchone()[0])
+    if ver >= _SCHEMA_VERSION:
+        return
+
+    from engine.project_revisions import revision_report_hash
+
+    projects = conn.execute("SELECT id, inputs_json, computed_json FROM projects").fetchall()
+    for prow in projects:
+        pid = int(prow["id"])
+        existing = conn.execute(
+            "SELECT id FROM cases WHERE project_id = ? AND is_default = 1",
+            (pid,),
+        ).fetchone()
+        if existing:
+            case_id = int(existing["id"])
+        else:
+            now = _utc_now()
+            conn.execute(
+                """INSERT INTO cases (project_id, case_name, description, is_default, created_at, updated_at)
+                   VALUES (?,?,?,?,?,?)""",
+                (pid, "Main", "Default case (migrated)", 1, now, now),
+            )
+            case_id = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+
+        n_rev = conn.execute(
+            "SELECT COUNT(*) AS n FROM revisions WHERE case_id = ?", (case_id,),
+        ).fetchone()["n"]
+        if int(n_rev) == 0:
+            snaps = conn.execute(
+                """SELECT label, notes, inputs_json, computed_json, created_at
+                   FROM snapshots WHERE project_id = ? ORDER BY created_at ASC, id ASC""",
+                (pid,),
+            ).fetchall()
+            if snaps:
+                for s in snaps:
+                    inp_j = s["inputs_json"]
+                    comp_j = s["computed_json"]
+                    inputs = None
+                    computed = None
+                    if inp_j:
+                        inputs = _pio.engine_inputs_dict(_pio.json_to_inputs(inp_j))
+                    if comp_j:
+                        computed = json.loads(comp_j)
+                    rh = revision_report_hash(inputs, computed) if inputs else ""
+                    conn.execute(
+                        """INSERT INTO revisions (
+                               case_id, revision_code, label, notes, report_hash,
+                               inputs_json, computed_json, parent_revision_id, created_at)
+                           VALUES (?,?,?,?,?,?,?,?,?)""",
+                        (
+                            case_id,
+                            "",
+                            s["label"] or "",
+                            s["notes"] or "",
+                            rh,
+                            inp_j,
+                            comp_j,
+                            None,
+                            s["created_at"],
+                        ),
+                    )
+            elif prow["inputs_json"]:
+                inputs = _pio.engine_inputs_dict(_pio.json_to_inputs(prow["inputs_json"]))
+                computed = json.loads(prow["computed_json"]) if prow["computed_json"] else None
+                doc_rev = str(inputs.get("revision") or "A1")
+                rh = revision_report_hash(inputs, computed)
+                now = _utc_now()
+                conn.execute(
+                    """INSERT INTO revisions (
+                           case_id, revision_code, label, notes, report_hash,
+                           inputs_json, computed_json, parent_revision_id, created_at)
+                       VALUES (?,?,?,?,?,?,?,?,?)""",
+                    (
+                        case_id,
+                        doc_rev,
+                        "Head",
+                        "",
+                        rh,
+                        prow["inputs_json"],
+                        prow["computed_json"],
+                        None,
+                        now,
+                    ),
+                )
+
+    conn.execute(f"PRAGMA user_version = {_SCHEMA_VERSION}")
 
 
 def init_db(db_path: str = "aquasight.db") -> None:
@@ -86,6 +211,7 @@ def init_db(db_path: str = "aquasight.db") -> None:
     conn = _connect(db_path)
     try:
         _create_tables(conn)
+        _migrate_schema_v3(conn)
         conn.commit()
     finally:
         conn.close()
@@ -302,6 +428,241 @@ def update_project_notes(db_path: str, project_id: int, notes: str) -> None:
         conn.close()
 
 
+def ensure_default_case(db_path: str, project_id: int) -> int:
+    """Return default case id for a project, creating ``Main`` if needed."""
+    init_db(db_path)
+    conn = _connect(db_path)
+    try:
+        row = conn.execute(
+            "SELECT id FROM cases WHERE project_id = ? AND is_default = 1",
+            (project_id,),
+        ).fetchone()
+        if row is not None:
+            return int(row["id"])
+        proj = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if proj is None:
+            raise KeyError("project not found")
+        now = _utc_now()
+        conn.execute(
+            """INSERT INTO cases (project_id, case_name, description, is_default, created_at, updated_at)
+               VALUES (?,?,?,1,?,?)""",
+            (project_id, "Main", "", now, now),
+        )
+        conn.commit()
+        return int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+    finally:
+        conn.close()
+
+
+def list_cases(db_path: str, project_id: int) -> list[dict[str, Any]]:
+    init_db(db_path)
+    ensure_default_case(db_path, project_id)
+    conn = _connect(db_path)
+    try:
+        cur = conn.execute(
+            """SELECT id, project_id, case_name, description, is_default, created_at, updated_at
+               FROM cases WHERE project_id = ?
+               ORDER BY is_default DESC, case_name ASC""",
+            (project_id,),
+        )
+        return [dict(r) for r in cur.fetchall()]
+    finally:
+        conn.close()
+
+
+def create_case(
+    db_path: str,
+    project_id: int,
+    case_name: str,
+    *,
+    description: str = "",
+) -> dict[str, Any]:
+    init_db(db_path)
+    name = (case_name or "").strip()
+    if not name:
+        raise ValueError("case_name required")
+    now = _utc_now()
+    conn = _connect(db_path)
+    try:
+        proj = conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone()
+        if proj is None:
+            raise KeyError("project not found")
+        conn.execute(
+            """INSERT INTO cases (project_id, case_name, description, is_default, created_at, updated_at)
+               VALUES (?,?,?,0,?,?)""",
+            (project_id, name, description, now, now),
+        )
+        conn.commit()
+        cid = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        return {"id": cid, "project_id": project_id, "case_name": name, "created_at": now}
+    finally:
+        conn.close()
+
+
+def save_revision(
+    db_path: str,
+    case_id: int,
+    inputs: Optional[dict] = None,
+    computed: Optional[dict] = None,
+    *,
+    label: str = "",
+    notes: str = "",
+    revision_code: str = "",
+    parent_revision_id: Optional[int] = None,
+    ui_session_overrides: Optional[dict[str, Any]] = None,
+) -> dict[str, Any]:
+    """Append a revision under a case (B3)."""
+    from engine.project_revisions import revision_report_hash
+
+    init_db(db_path)
+    now = _utc_now()
+    inputs_json = (
+        _pio.inputs_to_json(inputs, ui_session_overrides=ui_session_overrides)
+        if inputs is not None
+        else None
+    )
+    computed_json = _serialize_computed(computed)
+    rh = revision_report_hash(inputs, computed) if inputs is not None else ""
+    code = (revision_code or "").strip()
+    if not code and inputs is not None:
+        code = str(inputs.get("revision") or "")
+
+    conn = _connect(db_path)
+    try:
+        case = conn.execute("SELECT id, project_id FROM cases WHERE id = ?", (case_id,)).fetchone()
+        if case is None:
+            raise KeyError("case not found")
+        conn.execute(
+            """INSERT INTO revisions (
+                   case_id, revision_code, label, notes, report_hash,
+                   inputs_json, computed_json, parent_revision_id, created_at)
+               VALUES (?,?,?,?,?,?,?,?,?)""",
+            (
+                case_id,
+                code,
+                label,
+                notes,
+                rh,
+                inputs_json,
+                computed_json,
+                parent_revision_id,
+                now,
+            ),
+        )
+        conn.commit()
+        rid = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
+        return {
+            "id": rid,
+            "case_id": case_id,
+            "project_id": int(case["project_id"]),
+            "report_hash": rh,
+            "revision_code": code,
+            "created_at": now,
+        }
+    finally:
+        conn.close()
+
+
+def list_revisions(
+    db_path: str,
+    case_id: int,
+    *,
+    metadata_only: bool = True,
+) -> list[dict[str, Any]]:
+    init_db(db_path)
+    conn = _connect(db_path)
+    try:
+        if metadata_only:
+            cur = conn.execute(
+                """SELECT id, case_id, revision_code, label, notes, report_hash,
+                          inputs_json, computed_json, parent_revision_id, created_at
+                   FROM revisions WHERE case_id = ?
+                   ORDER BY created_at DESC, id DESC""",
+                (case_id,),
+            )
+        else:
+            cur = conn.execute(
+                "SELECT * FROM revisions WHERE case_id = ? ORDER BY created_at DESC, id DESC",
+                (case_id,),
+            )
+        rows = []
+        for r in cur.fetchall():
+            row = {
+                "id": int(r["id"]),
+                "case_id": int(r["case_id"]),
+                "revision_code": r["revision_code"],
+                "label": r["label"],
+                "notes": r["notes"],
+                "report_hash": r["report_hash"],
+                "created_at": r["created_at"],
+                "parent_revision_id": r["parent_revision_id"],
+                "has_inputs": r["inputs_json"] is not None,
+                "has_computed": r["computed_json"] is not None,
+            }
+            if not metadata_only:
+                row["inputs_json"] = r["inputs_json"]
+                row["computed_json"] = r["computed_json"]
+            rows.append(row)
+        return rows
+    finally:
+        conn.close()
+
+
+def load_revision(db_path: str, revision_id: int) -> dict[str, Any]:
+    init_db(db_path)
+    conn = _connect(db_path)
+    try:
+        r = conn.execute(
+            """SELECT r.*, c.project_id
+               FROM revisions r
+               JOIN cases c ON c.id = r.case_id
+               WHERE r.id = ?""",
+            (revision_id,),
+        ).fetchone()
+        if r is None:
+            raise KeyError("revision not found")
+        out: dict[str, Any] = {
+            "id": int(r["id"]),
+            "case_id": int(r["case_id"]),
+            "project_id": int(r["project_id"]),
+            "revision_code": r["revision_code"],
+            "label": r["label"],
+            "notes": r["notes"],
+            "report_hash": r["report_hash"],
+            "created_at": r["created_at"],
+            "parent_revision_id": r["parent_revision_id"],
+            "inputs": None,
+            "computed": None,
+        }
+        if r["inputs_json"]:
+            document = _pio.json_to_inputs(r["inputs_json"])
+            out["document"] = document
+            out["inputs"] = _pio.engine_inputs_dict(document)
+        if r["computed_json"]:
+            out["computed"] = json.loads(r["computed_json"])
+        return out
+    finally:
+        conn.close()
+
+
+def diff_revisions(db_path: str, revision_id_a: int, revision_id_b: int) -> dict[str, Any]:
+    from engine.project_revisions import diff_revision_inputs, diff_revision_summary
+
+    a = load_revision(db_path, revision_id_a)
+    b = load_revision(db_path, revision_id_b)
+    if a.get("inputs") is None or b.get("inputs") is None:
+        raise ValueError("Both revisions must include inputs for diff")
+    rows = diff_revision_inputs(a["inputs"], b["inputs"])
+    return {
+        "revision_a": revision_id_a,
+        "revision_b": revision_id_b,
+        "report_hash_a": a.get("report_hash"),
+        "report_hash_b": b.get("report_hash"),
+        "rows": rows,
+        "summary": diff_revision_summary(rows),
+    }
+
+
 def save_snapshot(
     db_path: str,
     project_id: int,
@@ -312,7 +673,7 @@ def save_snapshot(
     notes: str = "",
     ui_session_overrides: Optional[dict[str, Any]] = None,
 ) -> dict[str, Any]:
-    """Append a history snapshot for a project (inputs/computed JSON optional each)."""
+    """Append a history snapshot (legacy table) and matching case revision (B3)."""
     init_db(db_path)
     now = _utc_now()
     inputs_json = (
@@ -321,6 +682,16 @@ def save_snapshot(
         else None
     )
     computed_json = _serialize_computed(computed)
+    case_id = ensure_default_case(db_path, project_id)
+    rev = save_revision(
+        db_path,
+        case_id,
+        inputs=inputs,
+        computed=computed,
+        label=label,
+        notes=notes,
+        ui_session_overrides=ui_session_overrides,
+    )
     conn = _connect(db_path)
     try:
         conn.execute(
@@ -330,14 +701,45 @@ def save_snapshot(
         )
         conn.commit()
         sid = int(conn.execute("SELECT last_insert_rowid()").fetchone()[0])
-        return {"id": sid, "project_id": project_id, "created_at": now}
+        return {
+            "id": rev["id"],
+            "snapshot_id": sid,
+            "project_id": project_id,
+            "case_id": case_id,
+            "report_hash": rev.get("report_hash"),
+            "created_at": now,
+        }
     finally:
         conn.close()
 
 
 def project_history(db_path: str, project_id: int) -> list[dict[str, Any]]:
-    """List snapshots for a project, newest first."""
+    """List revisions for the project's default case (newest first)."""
     init_db(db_path)
+    conn = _connect(db_path)
+    try:
+        if conn.execute("SELECT id FROM projects WHERE id = ?", (project_id,)).fetchone() is None:
+            return []
+    finally:
+        conn.close()
+    case_id = ensure_default_case(db_path, project_id)
+    revs = list_revisions(db_path, case_id, metadata_only=True)
+    if revs:
+        return [
+            {
+                "id": r["id"],
+                "project_id": project_id,
+                "case_id": case_id,
+                "label": r["label"],
+                "notes": r["notes"],
+                "revision_code": r.get("revision_code", ""),
+                "report_hash": r.get("report_hash", ""),
+                "created_at": r["created_at"],
+                "has_inputs": r["has_inputs"],
+                "has_computed": r["has_computed"],
+            }
+            for r in revs
+        ]
     conn = _connect(db_path)
     try:
         cur = conn.execute(
@@ -354,6 +756,8 @@ def project_history(db_path: str, project_id: int) -> list[dict[str, Any]]:
                     "project_id": int(r["project_id"]),
                     "label": r["label"],
                     "notes": r["notes"],
+                    "revision_code": "",
+                    "report_hash": "",
                     "created_at": r["created_at"],
                     "has_inputs": r["inputs_json"] is not None,
                     "has_computed": r["computed_json"] is not None,
@@ -365,8 +769,12 @@ def project_history(db_path: str, project_id: int) -> list[dict[str, Any]]:
 
 
 def load_snapshot(db_path: str, snapshot_id: int) -> dict[str, Any]:
-    """Load full snapshot row including JSON blobs."""
+    """Load revision by id (B3); falls back to legacy ``snapshots`` table."""
     init_db(db_path)
+    try:
+        return load_revision(db_path, snapshot_id)
+    except KeyError:
+        pass
     conn = _connect(db_path)
     try:
         r = conn.execute("SELECT * FROM snapshots WHERE id = ?", (snapshot_id,)).fetchone()
@@ -439,6 +847,13 @@ __all__ = [
     "list_projects",
     "delete_project",
     "update_project_notes",
+    "ensure_default_case",
+    "list_cases",
+    "create_case",
+    "save_revision",
+    "list_revisions",
+    "load_revision",
+    "diff_revisions",
     "save_snapshot",
     "project_history",
     "load_snapshot",

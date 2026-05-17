@@ -782,6 +782,12 @@ def render_sidebar(
         _stp_sl = display_value(0.1, "loading_kg_m2", unit_system)
         out["solid_loading"]          = st.number_input(_lbl_sl, value=_def_sl, step=_stp_sl, key="solid_loading")
 
+        with st.expander("Monte Carlo lite (optional)", expanded=False):
+            st.caption(
+                "Enable sampling and view the histogram on the **💧 Filtration** tab → "
+                "*Monte Carlo lite — optional cycle sampling*. Press **Apply** after toggling."
+            )
+
         with st.expander("Calibration, fouling assistant & cake resistance (α)", expanded=False):
             with st.expander("Advanced — pilot / field calibration factors", expanded=False):
                 st.caption(
@@ -829,7 +835,6 @@ def render_sidebar(
                     key="expansion_calibration_scale",
                     help="Scales only the **expanded height increment** above settled depth per layer (1 = model).",
                 )
-
             with st.expander("Fouling assistant — guided workflow (SDI / MFI → M_max)", expanded=False):
                 render_fouling_guided_workflow(
                     out,
@@ -1031,25 +1036,130 @@ def render_sidebar(
         out["bw_total_min"] = (out["bw_s_drain"] + out["bw_s_air"] + out["bw_s_airw"]
                                + out["bw_s_hw"] + out["bw_s_settle"] + out["bw_s_fill"])
         st.metric("Total BW duration", f"{out['bw_total_min']} min")
-        out["bw_schedule_horizon_days"] = int(
-            st.selectbox(
-                "Duty chart horizon (days)",
-                options=[1, 3, 7, 14],
-                index=2,
-                key="bw_schedule_horizon_days_sel",
-                help="Multi-day Gantt on Backwash tab · scheduling aid only (not DCS).",
+        _stagger_opts = [
+            "feasibility_trains",
+            "optimized_trains",
+            "tariff_aware_v3",
+            "milp_lite",
+            "uniform",
+        ]
+        _stagger_labels = {
+            "feasibility_trains": "Feasibility BW trains (recommended)",
+            "optimized_trains": "Optimized trains (peak only)",
+            "tariff_aware_v3": "Tariff-aware v3 (peak + off-peak + blackouts)",
+            "milp_lite": "MILP lite (C5) — discrete ILP; needs PuLP",
+            "uniform": "Uniform (legacy comparison)",
+        }
+        if "_bw_duty_applied" not in st.session_state:
+            st.session_state["_bw_duty_applied"] = {
+                "bw_schedule_horizon_days": 7,
+                "bw_timeline_stagger": "feasibility_trains",
+                "bw_peak_tariff_start_h": 14.0,
+                "bw_peak_tariff_end_h": 22.0,
+                "bw_tariff_peak_multiplier": 1.5,
+                "bw_maintenance_blackout_enabled": False,
+                "bw_maintenance_blackout_t0_h": 0.0,
+                "bw_maintenance_blackout_t1_h": 0.0,
+            }
+        _applied = dict(st.session_state["_bw_duty_applied"])
+        _hz_opts = [1, 3, 7, 14]
+        try:
+            _hz_idx = _hz_opts.index(int(_applied.get("bw_schedule_horizon_days", 7)))
+        except ValueError:
+            _hz_idx = 2
+        with st.form("bw_duty_chart_form", clear_on_submit=False):
+            st.caption(
+                "Duty chart settings apply when you click **Update duty chart** "
+                "(avoids freezing the app while you change options)."
             )
-        )
-        out["bw_timeline_stagger"] = st.radio(
-            "Duty chart stagger (Backwash tab)",
-            options=["feasibility_trains", "optimized_trains", "uniform"],
-            format_func=lambda x: {
-                "feasibility_trains": "Feasibility BW trains (recommended)",
-                "optimized_trains": "Optimized trains (scheduling aid)",
-                "uniform": "Uniform (legacy comparison)",
-            }[x],
-            horizontal=False,
-            key="bw_timeline_stagger_sel",
+            _f_horizon = int(
+                st.selectbox(
+                    "Duty chart horizon (days)",
+                    options=_hz_opts,
+                    index=_hz_idx,
+                    help="Multi-day Gantt on Backwash tab · scheduling aid only (not DCS).",
+                )
+            )
+            _f_stagger = st.radio(
+                "Duty chart stagger (Backwash tab)",
+                options=_stagger_opts,
+                format_func=lambda x: _stagger_labels[x],
+                horizontal=False,
+                index=_stagger_opts.index(str(_applied.get("bw_timeline_stagger", "feasibility_trains")))
+                if str(_applied.get("bw_timeline_stagger")) in _stagger_opts
+                else 0,
+            )
+            _pt1, _pt2, _pt3 = st.columns(3)
+            _f_pt0 = float(
+                _pt1.number_input(
+                    "Peak tariff from (h)",
+                    min_value=0.0,
+                    max_value=23.5,
+                    value=float(_applied.get("bw_peak_tariff_start_h", 14.0)),
+                    step=0.5,
+                )
+            )
+            _f_pt1 = float(
+                _pt2.number_input(
+                    "Peak tariff to (h)",
+                    min_value=0.5,
+                    max_value=24.0,
+                    value=float(_applied.get("bw_peak_tariff_end_h", 22.0)),
+                    step=0.5,
+                )
+            )
+            _f_mult = float(
+                _pt3.number_input(
+                    "Peak tariff × vs off-peak",
+                    min_value=1.0,
+                    max_value=5.0,
+                    value=float(_applied.get("bw_tariff_peak_multiplier", 1.5)),
+                    step=0.1,
+                )
+            )
+            _f_maint = bool(
+                st.checkbox(
+                    "Maintenance blackout on duty horizon",
+                    value=bool(_applied.get("bw_maintenance_blackout_enabled", False)),
+                )
+            )
+            _f_mb0, _f_mb1 = 0.0, 0.0
+            if _f_maint:
+                _mb1, _mb2 = st.columns(2)
+                _f_mb0 = float(
+                    _mb1.number_input(
+                        "Blackout start (h from t=0)",
+                        min_value=0.0,
+                        value=float(_applied.get("bw_maintenance_blackout_t0_h", 0.0)),
+                        step=1.0,
+                    )
+                )
+                _f_mb1 = float(
+                    _mb2.number_input(
+                        "Blackout end (h)",
+                        min_value=0.0,
+                        value=float(_applied.get("bw_maintenance_blackout_t1_h", 24.0)),
+                        step=1.0,
+                    )
+                )
+            if st.form_submit_button("Update duty chart", type="primary"):
+                st.session_state["_bw_duty_applied"] = {
+                    "bw_schedule_horizon_days": _f_horizon,
+                    "bw_timeline_stagger": _f_stagger,
+                    "bw_peak_tariff_start_h": _f_pt0,
+                    "bw_peak_tariff_end_h": _f_pt1,
+                    "bw_tariff_peak_multiplier": _f_mult,
+                    "bw_maintenance_blackout_enabled": _f_maint,
+                    "bw_maintenance_blackout_t0_h": _f_mb0,
+                    "bw_maintenance_blackout_t1_h": _f_mb1,
+                }
+                st.session_state["_bw_duty_dirty"] = True
+                st.session_state["_bw_duty_only_rerun"] = True
+                st.session_state["mmf_pending_main_tab"] = "🔄 Backwash"
+        out.update(st.session_state["_bw_duty_applied"])
+        st.caption(
+            "**Workflow:** pick stagger → **Update duty chart** → open **Backwash → §5 duty timeline**. "
+            "**Feasibility** is instant; **v3 / optimized** take a few seconds on 7 d; **MILP** uses v3 on long horizons."
         )
 
         st.markdown("**Equipment sizing**")
@@ -1204,7 +1314,8 @@ def render_sidebar(
         ):
             st.caption(
                 "Header DN may link to §4 BW inlet/outlet nozzle pipe ID. "
-                "Optional: link **filtration maldistribution factor** to the 1D distribution factor in **Media → Advanced calibration**."
+                "Optional: link **filtration maldistribution factor** to the 1D distribution factor under "
+                "**🧱 Media** (sidebar) → *Calibration…* → *Advanced — pilot / field calibration*."
             )
             st.markdown("**Sizes & hydraulics**")
             _lbl_chid = f"Header internal diameter ({unit_label('length_m', unit_system)})"

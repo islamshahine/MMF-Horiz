@@ -1,6 +1,6 @@
 # AQUASIGHT™ MMF — Project Context Document
 
-> **Purpose:** Share this file with Claude.ai chat to discuss enhancements, new features, or design decisions with full project context. For **equations, models, input/display philosophy, and enhancement brainstorming**, see **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md`**. For **unit-system gaps & contributor rules**, see **§ Unit system — architecture, gaps & best practices (2026)**. For **roadmap delivery vs backlog**, see **§ Platform status — accomplished vs remaining (2026)** and **§F Phase 4 roadmap** near the end.
+> **Purpose:** Share this file with Claude.ai chat to discuss enhancements, new features, or design decisions with full project context. For **equations, models, input/display philosophy, and enhancement brainstorming**, see **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md`**. For **unit-system gaps & contributor rules**, see **§ Unit system — architecture, gaps & best practices (2026)**. For **roadmap delivery vs backlog**, see **§ Platform status — accomplished vs remaining (2026)**, **§F Phase 4 roadmap**, and **§G What to do next (2026-05-16)** near the end.
 
 ---
 
@@ -151,7 +151,8 @@ MMF-Horiz/
 │   ├── default_media_presets.py  # Single source for DEFAULT_MEDIA_PRESETS (sidebar + new project)
 │   ├── pump_performance.py   # Feed/BW pump duty, curves, engineering notes → computed["pump_perf"]
 │   ├── pump_datasheet_export.py  # RFQ / datasheet bundles (feed pump, air blower)
-│   ├── project_db.py         # SQLite: init_db, save/load project, snapshots, scenarios (stdlib)
+│   ├── project_db.py         # SQLite: projects / cases / revisions / snapshots / scenarios (stdlib)
+│   ├── project_revisions.py  # report_hash, revision input diff (B3)
 │   ├── optimisation.py       # constraint_check, evaluate_candidate, optimise_design (grid MVP)
 │   ├── fouling.py            # SDI/MFI/TSS/LV → solids loading, run time, severity, BW interval (empirical)
 │   ├── logger.py             # File logging: compute + validation + JSON/DB project events (configure for tests)
@@ -321,7 +322,7 @@ Three-tier system applied to every scenario × layer combination:
 - **BW frequency is user-input** (`bw_cycles_day`), not auto-derived from the cycle model. The feasibility matrix shows whether the chosen frequency is achievable.
 - **Cartridge filter is post-treatment** — sized for `cart_flow` (separate input from the MMF total flow).
 - **Economics are order-of-magnitude** — vendor quotes not included; benchmarks are 2024 Middle East / Mediterranean basis.
-- **Project library (SQLite)** — `engine/project_db.py` persists projects/snapshots/scenarios; the **Project file** toolbar expander (`ui/project_library.py`) provides search, open/update/export/delete, snapshots, and duplicate — same hydrate path as JSON upload (`ui/project_session.py`). Media properties remain hardcoded presets in `engine/media.py` with user-editable overrides via `st.session_state`.
+- **Project library (SQLite)** — `engine/project_db.py` persists projects, **cases**, and **revisions** (report hash per revision; legacy snapshots migrated); the **Project file** toolbar expander (`ui/project_library.py`) provides search, open/update/export/delete, case/revision tree with diff/export, and duplicate — same hydrate path as JSON upload (`ui/project_session.py`). Media properties remain hardcoded presets in `engine/media.py` with user-editable overrides via `st.session_state`.
 - **No multi-page routing** — single-page Streamlit app; state is preserved in `st.session_state`.
 - **Compare tab scope** — Design **B** exposes a fixed subset of inputs (process, key vessel geometry, nozzle plate height, selected BW fields); all other keys are copied from Design **A** at init/reset. **`compare_inputs_b` is kept in SI** (editable fields converted with `si_value` after widgets); do not run `convert_inputs` on the whole B dict. Comparison uses `engine/comparison.py` only (no change to `compute_all` internals).
 - **Input validation (SI engine, display messages)** — `validate_inputs` runs on the post-`convert_inputs` dict; geometry errors use `format_value` with `inputs["unit_system"]` so imperial users see ft/gpm-style thresholds. The engine still computes in SI.
@@ -422,7 +423,7 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | **Explainability registry** | `explainability.py` + `render_metric_explain_panel` on Filtration/Backwash. | `tests/test_explainability.py` |
 | **Lifecycle degradation** | `lifecycle_degradation.py` — Economics §7 sawtooth curves. | `tests/test_lifecycle_degradation.py` |
 | **Underdrain catalogue** | Pressurized-only 9 products; `strainer_materials`, `nozzle_system`, Media sidebar. | `tests/test_nozzle_plate_catalogue.py`, `test_nozzle_system.py`, `test_strainer_materials.py` |
-| **Nozzle plate layout** | `collector_nozzle_plate.py` — brick layout, open area. | `tests/test_collector_nozzle_plate.py` |
+| **Nozzle plate layout** | `collector_nozzle_plate.py` + `nozzle_plate_distribution.py` — triangular stagger, density-driven **N**, open area. | `tests/test_collector_nozzle_plate.py`, `tests/test_nozzle_distribution.py` |
 | **BW scheduler v2** | Stream-aware `optimize_bw_phases`, peak windows. | `tests/test_bw_scheduler.py` |
 | **Fouling workflow** | `ui/fouling_workflow.py` + `build_fouling_assessment`. | `tests/test_fouling_workflow.py`, `test_fouling.py` |
 | **Multi-case compare scale** | Library 20, selection 12, `slice_compare_result`. | `tests/test_compare_workspace.py` |
@@ -441,7 +442,9 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | **Lifecycle financial engine** | `engine/financial_economics.py` — cash flows, NPV/IRR/payback, depreciation, incremental economics, NPV driver scan; `build_econ_financial` from `compute_all`. | `tests/test_financial_economics.py` |
 | **Streamlit compute cache** | `ui/compute_cache.py` — `st.cache_data` on `compute_all` for snappier reruns. | (integration + manual) |
 | **Optimisation (grid MVP)** | `engine/optimisation.py` — `constraint_check`, `evaluate_candidate`, `optimise_design` (merge patches, rank by `capex` / `opex` / `steel` / `carbon`); **`pareto_capex_opex`** (non-dominated feasible subset on CAPEX vs annual OPEX). Uses **`compute_all` only**. Default EBCT rule: **min layer EBCT ≥ 0.8 × `ebct_threshold`** (documented soft band); optional **`max_dp_dirty_bar`**, steel cap, etc. | `tests/test_optimisation.py`, `tests/test_optimisation_pareto.py` |
-| **Media fill budget (indicative)** | `engine/media_pricing.py` — plant-wide media inventory USD from layer volumes + economics keys + region factor; Media tab expander. | `tests/test_media_pricing.py` |
+| **Media fill budget (indicative)** | `engine/media_pricing.py` — plant-wide media inventory USD from layer volumes + economics keys + region factor (**Egypt**, **Middle East**, GCC, …); Media tab expander. | `tests/test_media_pricing.py` |
+| **Triangular nozzle-plate layout** | `engine/nozzle_plate_distribution.py` — `N = round(ρ × A_plate)` from sidebar hole density; triangular stagger; `layout_revision` 6; feeds spatial map + schematic. | `tests/test_nozzle_distribution.py`, `tests/test_collector_nozzle_plate.py` |
+| **BW duty-chart cache (UX)** | `ui/bw_timeline_cache.py` — duty-only rerun, timeline merge, stagger compare; requires prior **Apply** for `mmf_last_computed`. | manual + `tests/test_bw_scheduler.py` |
 
 **requirements.txt** (API): `fastapi`, `uvicorn[standard]`, `httpx`. **`.gitignore`:** `aquasight.db`, `logs/`, `__pycache__/`, `.pytest_cache/`, `.coverage`, `htmlcov/` (bytecode and coverage not tracked in git).
 
@@ -462,7 +465,7 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 
 | Item | Done | Missing / next |
 |------|------|----------------|
-| **Collector 1B+** | Dual-end header screening, per-hole network table, CFD BC export (JSON/CSV; `normalize_cfd_export_format` tolerates legacy UI labels) | In-app CFD solve, 3D tee FEA, nozzle-plate network |
+| **Collector 1B+** | Dual-end header screening, per-hole network table, CFD BC export (JSON/CSV; `normalize_cfd_export_format` tolerates legacy UI labels); **triangular nozzle plate** (density-driven, full plate) | In-app CFD solve, 3D tee FEA |
 | **Global optimiser** | Grid ranker + Assessment apply; **Pareto CAPEX vs annual OPEX** (non-dominated feasible) in Assessment expander | MILP / gradient search; richer multi-objective UI |
 
 ---
@@ -475,17 +478,17 @@ Core modular app after the monolith split — unchanged intent, see **quick inde
 | 2 | **Phase 4 A3 — Design-to-target inverse** | **Done** — `design_targets.py`, Assessment expander, Apply patches |
 | 3 | **Phase 4 A4 — Spatial distribution** | **Done** — `spatial_distribution.py`, loading map, CFD CSV enrich |
 | 4 | **MILP / gradient global optimiser** | Grid ranker + Pareto delivered; MILP/DCS **Tier C** |
-| 5 | **Real blower maps (B1)** | Vendor curves + VFD; beyond adiabatic MVP |
-| 6 | **BW scheduler v3 (B2)** | Peak tariff / maintenance windows |
-| 7 | **Project revision tree (B3)** | Cases / revisions on top of `project_db` |
+| 5 | **Real blower maps (B1)** | **Done** — `engine/blower_maps.py`, §3.25, Pumps & power 4c |
+| 6 | **BW scheduler v3 (B2)** | **Done** — `tariff_aware_v3` stagger + sidebar tariff/blackout inputs |
+| 7 | **Project revision tree (B3)** | **Done** — cases/revisions, report hash, library diff (§3.26) |
 | 8 | **Collector in-app CFD (C2)** | External BC export **done**; solve in-app deferred |
 | 9 | **External media pricing API** | MVP: user USD/m³ + region factor only |
-| 10 | **Monte Carlo lite (C1)** | Deferred — deterministic envelope preferred |
-| 11 | **Shaded uncertainty charts (B4)** | Wire `cycle_uncertainty` to Filtration Plotly |
-| 12 | **Optional CI** | GitHub Actions pytest on push |
+| 10 | **Monte Carlo lite (C1)** | **Done** — optional sidebar flag, `monte_carlo_cycle` (§3.28) |
+| 11 | **Shaded uncertainty charts (B4)** | **Done** — `cycle_uncertainty_charts`, Filtration Plotly bands (§3.27) |
+| 12 | **Optional CI** | **Done** — `.github/workflows/ci.yml` (`pytest -m "not slow"`) |
 
 **Narrative (updated 2026-05-16)**  
-Phases **0–3** delivered (design basis, explainability, catalogue, compare scale-up, lifecycle curves, collector package, fouling workflow). **Next:** Phase **4 — decision intelligence** — see **§F** below. Long-term defer: MILP optimiser, in-app CFD, Monte Carlo lite, digital twin.
+Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-target, spatial distribution, blower maps, BW v3, revisions, uncertainty bands). Tier **C lite** is **delivered** (Monte Carlo, CFD CSV compare, tag CSV, digital twin, MILP lite). **Next:** Phase **5 — UX & layout polish** — see **§G** and **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md` §12**. Backlog: C2 full in-app CFD, C3 OCR, C5 DCS, external media API.
 
 ---
 
@@ -499,11 +502,55 @@ Phases **0–3** delivered (design basis, explainability, catalogue, compare sca
 | **A3** | Design-to-target inverse (ΔP, LCOW, Q_BW) | `design_targets.py` | `design_targets` | Assessment — Apply patches | **Done** |
 | **A4** | Spatial hydraulic distribution (Voronoi loading) | `spatial_distribution.py` | `spatial_distribution` | Backwash nozzle panel | **Done** |
 
-**Tier B:** B1 blower maps · B2 BW scheduler v3 (peak tariff) · B3 project revision tree · B4 shaded uncertainty charts.
+**Tier B:** ~~B1 blower maps~~ **done** · ~~B2 BW scheduler v3~~ **done** · ~~B3 project revision tree~~ **done** · ~~B4 shaded uncertainty charts~~ **done**. **Tier B complete.**
 
-**Tier C (defer):** Monte Carlo · in-app CFD · P&ID OCR · digital twin · MILP/DCS optimiser.
+**Tier C:** ~~C1~~ ~~C2 lite~~ ~~C3 tag CSV~~ ~~C4 twin lite~~ ~~C5 MILP lite~~ **done** · C2 full in-app CFD · C3 P&ID OCR · C5 DCS/MES integration.
 
 **Architecture rule (unchanged):** one `compute_all`; prefer post-compute hooks in `app.py`; register `ASM-*` / explainability for every new metric.
+
+**Phase 4 status:** **Complete** (A2/A3/A4 + Tier B + C lite). Do not re-open A2–A4 unless fixing a regression.
+
+---
+
+### G. **What to do next (2026-05-16)**
+
+> Full checklist with architecture rules: **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md` §12**.
+
+#### G.1 This week
+
+1. **Git** — commit and push uncommitted `engine/`, `ui/`, `tests/` (exclude `__pycache__/`, `logs/`, `.pytest_cache/`).
+2. **Test** — `pytest tests/test_nozzle_distribution.py tests/test_collector_nozzle_plate.py tests/test_media_pricing.py -q`
+3. **Smoke UI** — `python -m streamlit run app.py` → **Apply** → Backwash → change stagger → **Update duty chart** (all main tabs must remain visible).
+4. **Density contract** — sidebar **Hole density (/m²)** is the only source for hole count (`round(ρ × plate_area)`); never hardcode **N**.
+
+#### G.2 Short term (2–4 weeks)
+
+| Priority | Work | Files / notes |
+|----------|------|----------------|
+| **P5.2** | Duty-chart speed | If >~3 s after Apply: lazy tabs in `app.py`; skip non-Backwash post-hooks when `_bw_duty_only_rerun` |
+| **P5.3** | Nozzle QA | Regression at ρ = 40, 50, 60 /m²; axial coverage ≥95% |
+| **P5.4** | Filtration spatial map | Reuse `spatial_distribution.py` on service flow (optional) |
+| **Docs** | Keep §3 / §11 / §12 aligned after each PR | Both MD files + `tests/README.md` |
+
+#### G.3 Medium-term backlog (non-blocking)
+
+| Item | Status |
+|------|--------|
+| C2 full in-app CFD | Backlog — lite CSV compare done |
+| C3 P&ID OCR | Aspirational — tag CSV lite done |
+| C5 DCS / MES export | Backlog — `milp_lite` done |
+| External media pricing API | Backlog — region factors only |
+| Client vs engineer UI mode | Backlog |
+
+#### G.4 Key files (May 2026 sprint)
+
+| Area | Module |
+|------|--------|
+| Nozzle layout | `engine/nozzle_plate_distribution.py`, `engine/collector_nozzle_plate.py` |
+| Spatial map | `engine/spatial_distribution.py`, `ui/collector_design_panel.py` |
+| BW duty UX | `ui/bw_timeline_cache.py`, `ui/sidebar.py`, `engine/bw_timeline_build.py` |
+| Cache bust | `ui/compute_cache.py` (`_COMPUTE_CACHE_VERSION`) |
+| Media regions | `engine/media_pricing.py` (`egypt`, `middle_east`) |
 
 ---
 
@@ -539,7 +586,7 @@ Rows **1–11** match **Section A** (original v2). Rows **12–13** are recent h
 | 24 | **CFD export aliases** + early compare prototype — compare scale-up in row **29** (library **20**, run **12**) | `engine/collector_cfd_export.py`, `engine/compare_workspace.py` |
 | 25 | **Explainability registry** — METRIC_REGISTRY, contributor panels, plain-value UI | `engine/explainability.py`, `ui/helpers.py`, `app.py`, `tests/test_explainability.py` |
 | 26 | **Design basis v1.1** — ASM/TRC traceability; post-compute; Report/Assessment tables | `engine/design_basis.py`, `design_basis_report.py`, `app.py` |
-| 27 | **Pressurized underdrain catalogue** — 9 products, strainer materials, unified Media sidebar | `nozzle_plate_catalogue.py`, `strainer_materials.py`, `nozzle_catalogue_ui.py`, `collector_nozzle_plate.py` |
+| 27 | **Pressurized underdrain catalogue** — 9 products, strainer materials, unified Media sidebar; **triangular density-driven nozzle layout** (`layout_revision` 6) | `nozzle_plate_catalogue.py`, `nozzle_plate_distribution.py`, `strainer_materials.py`, `nozzle_catalogue_ui.py`, `collector_nozzle_plate.py` |
 | 28 | **Lifecycle degradation (advisory)** — sawtooth media/nozzle/collector | `lifecycle_degradation.py`, `ui/tab_economics.py` |
 | 29 | **Multi-case compare scale** — library 20, run 12, pagination | `compare_workspace.py`, `ui/tab_compare.py` |
 | 30 | **BW scheduler v2** + **fouling 5-step workflow** | `bw_scheduler.py`, `ui/fouling_workflow.py`, `engine/fouling.py` |

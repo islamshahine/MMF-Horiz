@@ -20,7 +20,7 @@
 10. [Quick reference — correlations](#10-quick-reference--correlations)
 11. [Development priorities — reconciled view](#11-development-priorities--reconciled-view-vs-external-roadmap) *(end of §11: **Shipped deltas (2026-05)**)*
 
-**Also in §3:** multi-case compare (**§3.15**), CFD BC export (**§3.16**), collector schematic (**§3.17**), pressurized underdrain catalogue (**§3.18**), explainability registry (**§3.19**), lifecycle degradation curves (**§3.20**), design basis traceability v1.1 (**§3.21**), spatial hydraulic distribution — spec (**§3.22**), operating envelope map (**§3.23**), design-to-target search (**§3.24**).
+**Also in §3:** multi-case compare (**§3.15**), CFD BC export (**§3.16**), collector schematic (**§3.17**), pressurized underdrain catalogue (**§3.18**), explainability registry (**§3.19**), lifecycle degradation curves (**§3.20**), design basis traceability v1.1 (**§3.21**), spatial hydraulic distribution (**§3.22**), operating envelope map (**§3.23**), design-to-target search (**§3.24**), blower performance maps (**§3.25**), project revision tree (**§3.26**), Filtration uncertainty chart bands (**§3.27**), Monte Carlo lite (**§3.28**), external CFD import compare (**§3.29**), digital twin lite (**§3.30**), MILP BW scheduler lite (**§3.31**), equipment tag CSV (**§3.32**), **triangular nozzle-plate distribution (**§3.33**)**, Streamlit UX / duty-chart performance (**§3.34**).
 
 ## 1. Platform philosophy
 
@@ -47,10 +47,10 @@
 ### 1.3 What it is *not* (yet)
 
 - Biofouling / SDI prediction from first principles (fouling module is empirical advisory; 5-step workflow is screening only).
-- MILP / gradient global optimiser or DCS-linked scheduling (grid ranker + heuristic BW scheduler v2 only).
+- MILP **full** plant optimiser or DCS-linked scheduling (**lite** `milp_lite` + heuristic BW v2/v3 delivered; DCS export backlog).
 - In-app CFD solve, 3D manifold FEA, or nozzle-manufacturer CFD validation.
 - **Filtration-phase spatial map** on underdrain (BW map delivered in §3.22; set `flow_basis=filtration` if extended).
-- **Target-driven inverse design UX** (“LCOW < X → suggest N and ID”) — engine grid exists (`optimisation.py`); dedicated Assessment workflow is Phase 4 A3.
+- **Target-driven inverse beyond caps** — `design_targets.py` (A3) delivers capped search + Apply; full “LCOW < X → auto N and ID” without user caps remains enhancement fodder.
 - Live operations / digital twin (24 h Gantt is schematic duty, not optimised plant control).
 
 ---
@@ -424,9 +424,10 @@ Pure-Python matrix on top of existing `compute_all` outputs — no second physic
 | `strainer_materials.py` | Salinity-driven metal default (SS316 → duplex → super duplex); polymer bodies → PP/HDPE |
 | `nozzle_system.py` | `build_underdrain_system_advisory` — coherence of ρ, strainer, catalogue |
 | `ui/nozzle_catalogue_ui.py` | Unified **Media** sidebar block: plate geometry + catalogue + strainer; **Apply catalogue** via `on_click` (Streamlit-safe session patch) |
-| `collector_nozzle_plate.py` | Brick/staggered layout, open area %, mechanical weight; `layout_revision` for cache busting |
+| `collector_nozzle_plate.py` | Triangular stagger layout (`staggered_plate_layout` → `nozzle_plate_distribution.py`), open area %, mechanical weight; `layout_revision` **6** |
+| `nozzle_plate_distribution.py` | Density-driven pitch **P**, full-plate triangular grid, boundary clip, subsample / pitch iterate |
 
-**Inputs:** `nozzle_catalogue_id`, `np_density` (35–100 /m² input range; drilled false-bottom band 45–55 only for manual drilled plate), `strainer_mat`, plate geometry keys.
+**Inputs:** `nozzle_catalogue_id`, **`np_density`** (sidebar **Hole density (/m²)** — user value, e.g. 50, not a fixed constant), `strainer_mat`, plate geometry keys. **N_total = round(ρ × plate_area_m²)** governs hole count.
 
 **Legacy IDs** (`generic_drilled_*`, `leopold_imt_2mm`, …) resolve to `None` with a one-time UI warning — users must re-pick a valid product or **Custom (manual)**.
 
@@ -491,7 +492,7 @@ Built **after** full `compute_all` in `app.py` (schema **`1.1`**).
 
 ### 3.22 Spatial hydraulic distribution (`engine/spatial_distribution.py`) — **Delivered (Phase 4 A4)**
 
-> **Status (2026-05):** Implemented as **post-compute enrichment** in `app.py` (after `compute_all`), using `collector_nozzle_plate.hole_network` positions from `staggered_plate_layout`.
+> **Status (2026-05):** Implemented as **post-compute enrichment** in `app.py` (after `compute_all`), using `collector_nozzle_plate.hole_network` positions from **`staggered_plate_layout`** (triangular engine §3.33). UI: vessel outline on loading map; plot caps only for >12k markers (metrics use all holes).
 
 #### Purpose
 
@@ -596,6 +597,154 @@ Post-compute in `app.py` (before `build_design_basis` so traceability can resolv
 | Governance | `ASM-DTARGET-01`; explainability `design_targets_lcow` |
 
 **Limits:** MVP grid only (no MILP). Dirty ΔP from Ruth/Ergun screening — may exceed trigger; set caps accordingly. Explicit Apply — no auto-write to sidebar.
+
+---
+
+### 3.25 Blower performance maps (`engine/blower_maps.py`) — **Delivered (Phase 4 B1)**
+
+| Block | Contents |
+|-------|----------|
+| Catalog | **`oem_vendor_motor`** (default): ROBOX ES, GRBS-CRBS, package tables — **nameplate motor kW**; legacy generic lobe/centrifugal grids retained |
+| Fleet split | **`pp_n_blowers`** (§3): Q_per_machine = Q_plant ÷ installed count; **`pp_blower_mode`** affects annual kWh only |
+| Auto curve | If per-machine Q > lobe max → **centrifugal** (`blower_map_auto_curve`) |
+| VFD | Affinity: exponent 1 (PD) or 3 (centrifugal); `blower_vfd_speed_frac` |
+| `computed["blower_map"]` | `fleet`, `extrapolated` flags, `adiabatic` vs `curve_map` vs `vfd`; `curve_plot` |
+| Custom | `import_custom_curve_grid()` / `import_custom_curve_from_csv()` + UI CSV paste/upload |
+| UI | Pumps & power → **4c** — blowers on duty, auto-pick, VFD, Plotly, vendor CSV |
+| Governance | `ASM-BLOWER-01`; explainability `blower_map_delta` |
+
+**Limits:** Generic screening maps only — adiabatic `bw_system_sizing` remains primary for energy/OPEX. Not a substitute for OEM datasheets.
+
+---
+
+### 3.26 Project revision tree (`engine/project_db.py`, `engine/project_revisions.py`) — **Delivered (Phase 4 B3)**
+
+| Block | Contents |
+|-------|----------|
+| Hierarchy | **Project** → **Case** → **Revision** (SQLite `aquasight.db`; schema v3) |
+| Migration | Legacy `snapshots` → default case **Main**; `PRAGMA user_version = 3` |
+| `report_hash` | SHA-256 of canonical `project_io` JSON (+ optional `overall_risk`, `nominal_id`) |
+| API | `list_cases`, `create_case`, `save_revision`, `load_revision`, `diff_revisions`; `save_snapshot` dual-writes |
+| UI | `ui/project_library.py` — case picker, revision list (hash), open, diff table, per-revision JSON export |
+| Diff | Top-level tracked input keys (`DIFF_INPUT_KEYS` in `project_revisions.py`) |
+
+**Limits:** Diff is input-key only (not full computed dict). Legacy `snapshots` table retained for compatibility.
+
+---
+
+### 3.27 Filtration uncertainty chart bands (`engine/uncertainty_charts.py`) — **Delivered (Phase 4 B4)**
+
+| Block | Contents |
+|-------|----------|
+| Engine | `dp_vs_loading_envelope` on each `cycle_uncertainty` row; `build_cycle_uncertainty_charts` → `computed["cycle_uncertainty_charts"]` |
+| Charts | N-scenario **cycle duration band**; **per-scenario error-bar band**; **ΔP vs M shaded envelope** + BW trigger line |
+| UI | `ui/filtration_uncertainty_charts.py`; Filtration tab — cycle uncertainty expander + ΔP vs M expander |
+
+**Limits:** Deterministic corners only (same as §11.5 2A); not Monte Carlo.
+
+---
+
+### 3.28 Monte Carlo lite (`engine/monte_carlo_lite.py`) — **Delivered (Tier C1)**
+
+| Block | Contents |
+|-------|----------|
+| Trigger | Sidebar **Media → Advanced → Monte Carlo lite** — off by default (`mc_lite_enabled` in session) |
+| Engine | Post-compute in `app.py`; uniform samples on α, TSS, capture, mal (same ± spans as §2A) |
+| `computed["monte_carlo_cycle"]` | P10/P50/P90, histogram, comparison to deterministic envelope |
+| UI | Filtration expander + Plotly histogram (dashed P10–P90; dotted deterministic corners) |
+
+**Limits:** N scenario only; not a confidence interval; ~50–500 extra `filtration_cycle` calls when enabled.
+
+---
+
+### 3.29 External CFD results import (`engine/cfd_import.py`) — **Delivered (Tier C2 lite)**
+
+| Block | Contents |
+|-------|----------|
+| Scope | **Not** in-app CFD solve — import consultant CSV and compare to 1D `orifice_network` |
+| CSV | `lateral_index`, `hole_index`, `velocity_m_s` and/or `flow_m3h` (aliases accepted) |
+| `computed["cfd_import_comparison"]` | Match stats, per-hole Δ%, scatter plot data |
+| UI | Backwash / collector panel → *External CFD results — import & compare* |
+
+**Workflow:** Download orifice CSV (§3.16) → run external CFD → upload solved velocities → review Δ% vs screening model.
+
+**Limits:** Index join only; no mesh ingest; full 3D solve remains out of scope.
+
+---
+
+### 3.30 Digital twin lite (`engine/digital_twin_lite.py`) — **Delivered (Tier C4)**
+
+| Block | Contents |
+|-------|----------|
+| Input | Plant CSV: `cycle_hours_h` and/or `dp_dirty_bar`, optional `lv_m_h`, `tss_mg_l` |
+| Engine | Post-compute `build_digital_twin_lite` → `computed["digital_twin_lite"]` |
+| Output | Suggested `alpha_calibration_factor` (cycle or ΔP ratio); optional `tss_avg` patch |
+| UI | Assessment → *Digital twin lite* — upload, metrics, **Apply recalibration to sidebar** |
+
+**Limits:** Offline batch only; not live SCADA; explicit Apply + input-column Apply to recompute.
+
+---
+
+### 3.31 BW scheduler MILP lite (`engine/bw_scheduler_milp.py`) — **Delivered (Tier C5 lite)**
+
+| Block | Contents |
+|-------|----------|
+| Input | Same as v3: `bw_peak_tariff_*`, blackout window, `bw_trains`, cycle/BW duration |
+| Engine | Discrete-phase ILP (PuLP/CBC) minimizing peak concurrent BW, peak-tariff filter-hours, blackout overlap |
+| Fallback | `optimize_bw_phases_v3` when PuLP missing or solver fails |
+| Timeline | `stagger_model="milp_lite"` in `filter_bw_timeline_24h` / sidebar duty chart |
+| UI | Sidebar → *MILP lite (C5) — discrete ILP; needs PuLP* |
+
+**Limits:** Scheduling aid only — not plant DCS/MES; ≤24 filters; discrete phase slots (not continuous MILP).
+
+---
+
+### 3.32 Equipment tag registry (`engine/equipment_tag_import.py`) — **Delivered (Tier C3 lite)**
+
+| Block | Contents |
+|-------|----------|
+| Input | CSV: `tag`, optional `equipment_type`, `parameter`, `design_value`, `unit` |
+| Engine | Post-compute `build_equipment_tag_registry` → `computed["equipment_tag_registry"]` |
+| Output | Per-tag match / mismatch vs model (`n_filters_total`, `q_feed_m3h`, `q_bw_m3h`, `q_air_m3h`) |
+| UI | Assessment → *Equipment tag registry — CSV import (C3 lite)* |
+
+**Limits:** Structured CSV only — **not** P&ID image OCR; 10% tolerance advisory cross-check.
+
+**Backlog (C3 full):** OCR / drawing parser — aspirational, separate validation effort.
+
+---
+
+### 3.33 Triangular nozzle-plate distribution (`engine/nozzle_plate_distribution.py`) — **Delivered (2026-05-16)**
+
+| Block | Contents |
+|-------|----------|
+| **Trigger** | Sidebar **Hole density (/m²)** → `inputs["np_density"]` → `np_density_per_m2` in hydraulics + layout |
+| **Hole count** | `N = round(ρ × A_plate)` — **never** a hardcoded count; user may enter e.g. **50** or **55** |
+| **Pitch** | Triangular stagger: `P = sqrt((A_plate/N) / (√3/2))`; enforce `P_min = max(2.5×d_hole, d_hole + 0.05 m)` |
+| **Grid** | Full-plate candidate rows/columns; odd/even row offset `P/2`; clip to plate boundary via `chord_at_axial_x` |
+| **Convergence** | If too few holes: shrink pitch ×0.98 (max 50 iter); if too many: even subsample to target **N** |
+| **Integration** | `collector_nozzle_plate.staggered_plate_layout` → `build_triangular_plate_layout`; `layout_revision` **6**; `layout_mode = "triangular_stagger"` |
+| **UI** | Backwash collector panel + `collector_hyd_schematic` plot all holes (caps 12k / 8k markers); spatial LF map uses row-stratified sampling + data-driven color scale |
+| **Cache** | `ui/compute_cache._COMPUTE_CACHE_VERSION` bumped when layout revision changes |
+
+**Limits (`ASM-NP-01`):** 2D plan distribution; does not replace 3D CFD maldistribution in the vessel. Voronoi service areas (§3.22) assume hole positions from this layout.
+
+**Tests:** `tests/test_nozzle_distribution.py`, `tests/test_collector_nozzle_plate.py`.
+
+---
+
+### 3.34 Streamlit UX — duty chart & compute performance (`ui/bw_timeline_cache.py`, `app.py`, `ui/sidebar.py`) — **Delivered (partial)**
+
+| Block | Contents |
+|-------|----------|
+| **Problem** | Full `compute_all` + post-enrichment on every BW radio change made **Update duty chart** feel stuck (spinner / Stop). |
+| **Duty-only path** | Sidebar form: BW settings + **Update duty chart** button; sets `_bw_duty_only_rerun` + `_bw_duty_applied`; reuses `st.session_state["mmf_last_computed"]` when present. |
+| **Timeline cache** | `build_bw_timeline_cached` (hashable scalars); `refresh_bw_timeline_in_computed`, `merge_bw_duty_applied`; `overlay_bw_timeline` must return timeline dict (not full `computed`). |
+| **Stagger compare** | `engine/bw_stagger_compare.py` + panel — cached comparison without re-running full physics. |
+| **Long horizons** | `scheduler_max_passes()` in `bw_scheduler.py` caps MILP/heuristic cost on multi-day windows. |
+| **Regression guard** | Do **not** hide main tabs on duty refresh (removed `_bw_duty_fast_ui` early-return). |
+
+**Still slow?** Next levers: lazy tab render in `app.py`; defer non-Backwash post-hooks on duty-only flag; profile `compute_all` with `engine.logger` timing.
 
 ---
 
@@ -734,7 +883,7 @@ These let experienced users tune models without forking code:
 |-----|--------|
 | Fouling guided workflow | **Delivered** — `ui/fouling_workflow.py`; Apply buttons for selected suggestions only |
 | Design basis import | JSON project + built basis export; no DBR/P&ID import wizard |
-| **Target-driven inverse design** | **Partial** — `optimise_design` grid + Assessment sweep/Pareto exist; no “target LCOW / ΔP / Q_BW → ranked recommendations” UX (**Phase 4 A3**) |
+| **Target-driven inverse design** | **Delivered (A3)** — `design_targets.py` + Assessment expander; grid/Pareto via `optimise_design` remains complementary |
 | Layer threshold round-trip | Per-layer setpoints in session; not all keys in `project_io` JSON |
 | **Imperial edge cases** | Compare B uses `compare_units.py`; rare SI-only strings in validators — see §2.3 |
 
@@ -777,10 +926,13 @@ These let experienced users tune models without forking code:
 | **Design basis panel** | **Delivered** | v1.1 — `ASM-*` / `TRC-*` on Report + Assessment |
 | **Traceability / explainability** | **Delivered** | `METRIC_REGISTRY` + contributor panels (Filtration / Backwash) |
 | **Lifecycle degradation** | **Delivered** | Economics expander §7 — advisory sawtooth curves |
-| **Uncertainty bands on charts** | **Backlog (B4)** | `cycle_uncertainty` exists; shaded Plotly regions not wired |
+| **Uncertainty bands on charts** | **Delivered (B4)** | §3.27 — shaded Plotly on Filtration (`cycle_uncertainty_charts`) |
 | **Operating envelope chart** | **Delivered (A2)** | `operating_envelope.py`; Filtration heatmap + scenario slider |
 | **Design-to-target inverse UX** | **Delivered (A3)** | `design_targets.py`; Assessment caps + Apply |
-| **Spatial loading heatmap** | **Backlog (A4)** | §3.22 spec — `spatial_distribution` post-compute |
+| **Spatial loading heatmap** | **Delivered (A4)** | §3.22 — Voronoi map on Backwash; uses triangular hole positions (§3.33) |
+| **Triangular nozzle plate layout** | **Delivered** | §3.33 — density-driven full-plate stagger; `layout_revision` 6 |
+| **BW duty chart fast refresh** | **Delivered (partial)** | §3.34 — duty-only rerun; tune further if still > few seconds |
+| **Media pricing regions** | **Delivered** | `REGION_FACTOR`: **Egypt** (1.09), **Middle East** (1.11) in `media_pricing.py` |
 | **Media life narrative** | **Backlog** | Link cycle → replacement → OPEX in one caption block |
 | **Client / engineer modes** | **Backlog** | Hide calibration vs expose raw SI |
 
@@ -800,11 +952,11 @@ Use these prompts with AI or workshops. Each axis is independent — mix and mat
 |-----------|--------|-------------|
 | **Design library** | **Delivered (MVP)** | `engine/project_db.py` + `ui/project_library.py` — SQLite projects / snapshots |
 | **Multi-case workspace** | **Delivered** | Library **20**, run **12**, pagination **4**/page (`compare_workspace.py`) |
-| **Project revision tree** | **Backlog (B3)** | Projects → Cases → Revisions → report hash; diff/export |
+| **Project revision tree** | **Delivered (B3)** | §3.26 — cases/revisions, report hash, library diff/export |
 | **Requirements traceability** | **Backlog** | Link inputs to P&ID tag / DBR line item beyond `TRC-*` |
 | **Collaboration** | **Backlog** | Comments on assessment drivers; JSON revision diff |
 | **API-first clients** | **Partial** | FastAPI `POST /compute`; no PDF-only ERP contract |
-| **Digital twin lite** | **Backlog (C4)** | Import ops LV, ΔP, BW times → recalibrate α |
+| **Digital twin lite** | **Delivered (C4)** | §3.30 — plant CSV → α calibration Apply |
 | **Regulatory packs** | **Backlog** | Client-specific report section templates |
 
 ### 8.2 Core engineering ideas (deeper physics)
@@ -814,8 +966,8 @@ Use these prompts with AI or workshops. Each axis is independent — mix and mat
 | **1D collector hydraulics (1A/1B/1B+)** | **Delivered** | `collector_hydraulics.py`, manifold, auto maldistribution, CFD BC export |
 | **Spatial nozzle loading (2D plan)** | **Delivered (A4)** | `spatial_distribution.py`; Backwash nozzle panel heatmap |
 | **Biofouling / GAC breakthrough** | **Backlog** | First-principles growth or adsorption curves |
-| **Air scour + blower** | **MVP delivered** | `auto_expansion`, thermo kW; **Backlog (B1):** vendor maps, VFD affinity |
-| **BW scheduler** | **MVP delivered (v2)** | Heuristic stream-aware; **Backlog:** MILP/DCS (C5), peak-tariff v3 (B2) |
+| **Air scour + blower** | **Delivered** | `auto_expansion`, thermo kW; **B1:** generic maps + VFD affinity vs adiabatic (§3.25) |
+| **BW scheduler** | **v3 delivered (B2)** | `tariff_aware_v3`: peak trains + off-peak tariff + maintenance blackouts; MILP/DCS → C5 |
 | **CFD export** | **Delivered (MVP)** | JSON + orifice CSV; in-app solve **backlog (C2)** |
 | **Vertical vessel path** | **Backlog** | Second geometry kernel — major fork |
 
@@ -834,18 +986,19 @@ Use these prompts with AI or workshops. Each axis is independent — mix and mat
 | Direction | Status | Description |
 |-----------|--------|-------------|
 | **Excel import** | **Backlog** | Column mapping to `inputs` |
-| **P&ID OCR** | **Backlog (C3)** | Aspirational |
+| **P&ID / tag registry** | **C3 lite done** §3.32 | OCR still backlog |
 | **Fouling panel** | **Delivered** | SDI/MFI/TSS workflow with Apply pattern |
-| **Design-to-target inverse** | **Backlog (A3)** | LCOW / ΔP / Q_BW targets → ranked design patches |
+| **Design-to-target inverse** | **Delivered (A3)** | `design_targets.py` — caps + grid search + Apply patches |
 | **Unit-aware validation** | **Partial** | Imperial messages in validators; edge cases remain |
 
 ### 8.5 Display ideas
 
 | Direction | Status | Description |
 |-----------|--------|-------------|
-| **Operating envelope map** | **Backlog (A2)** | LV vs EBCT heatmap + severity regions |
-| **Scenario N animation** | **Backlog (A2)** | N → N−1 → N−2 on one chart |
-| **Spatial loading heatmap** | **Backlog (A4)** | Plan view of `nozzle_loading_factor` |
+| **Operating envelope map** | **Delivered (A2)** | Filtration heatmap + scenario slider |
+| **Scenario N animation** | **Backlog** | N → N−1 → N−2 on one chart (enhancement on A2 data) |
+| **Spatial loading heatmap** | **Delivered (A4)** | Backwash plan view; row-stratified plot sampling when dense |
+| **Filtration-phase spatial map** | **Backlog** | Same Voronoi engine during service (not only BW) |
 | **Vessel sketch interactivity** | **Backlog** | Click layer → media row |
 | **Sankey energy/mass** | **Backlog** | kWh and TSS flow diagrams |
 | **Imperial-native PDF** | **Backlog** | Reports without SI footnotes |
@@ -931,11 +1084,12 @@ Statements the platform should *not* overclaim:
 | Doc name `MODELS_AND_LOGIC.md` | Use **`AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md`** |
 | Collector “no hydraulic model” | **Stale** — 1A/1B/1B+ delivered; no in-app CFD |
 | Fouling “not wired” | **Stale** — 5-step `fouling_workflow.py` delivered |
-| Optimisation “missing UX” | **Stale** — Assessment grid + Pareto + apply; **missing:** target-driven inverse (A3) |
+| Optimisation “missing UX” | **Stale** — Assessment grid + Pareto + apply + **design_targets (A3)** |
 | Multi-case “≤4 only” | **Stale** — library 20 / run 12 / pagination |
-| Spatial nozzle loading | **Spec only** — §3.22; geometric stagger delivered |
-| Monte Carlo lite | **Defer (C1)** — envelope preferred for Streamlit UX |
-| MILP BW scheduler | **Defer (C5)** — heuristic v2 delivered |
+| Spatial nozzle loading | **Stale** — §3.22 A4 delivered; triangular layout §3.33 feeds hole positions |
+| Brick / fixed hole count | **Stale** — density-driven **N** from sidebar; `layout_revision` 6 |
+| Monte Carlo lite | **Delivered (C1)** — optional; §3.28; deterministic envelope remains primary |
+| MILP BW scheduler | **C5 lite delivered** — `milp_lite`; DCS integration backlog |
 
 ### 11.3 Recommended phasing (execution order)
 
@@ -978,12 +1132,12 @@ Statements the platform should *not* overclaim:
 | Lifecycle degradation curves | **Done (advisory)** — `engine/lifecycle_degradation.py`, Economics §7 |
 | Pressurized underdrain catalogue | **Done** — 9 products; gravity/collector rows removed |
 | Uncertainty → economics bands | **Done** — `uncertainty_economics.py` → `cycle_economics` |
-| Monte Carlo lite | **Backlog** — optional, behind checkbox |
-| MILP / DCS BW optimiser | **Backlog** — heuristic scheduler only |
+| Monte Carlo lite | **Done (C1)** — §3.28, optional sidebar flag |
+| MILP / DCS BW optimiser | **C5 lite done** — `milp_lite`; DCS export backlog |
 
-#### Phase 4 — Decision intelligence (2026+) — **NEXT**
+#### Phase 4 — Decision intelligence (2026+) — **COMPLETE**
 
-> **Goal:** Move from “calculator” to **engineering decision platform** without breaking the single `compute_all` path. Recommended build order: **A2 → A3 → A4**.
+> **Goal:** Move from “calculator” to **engineering decision platform** without breaking the single `compute_all` path. Build order **A2 → A3 → A4** — all delivered.
 
 | ID | Item | Engine / UI | `computed[]` key | Status |
 |----|------|-------------|------------------|--------|
@@ -995,20 +1149,37 @@ Statements the platform should *not* overclaim:
 
 | ID | Item | Status |
 |----|------|--------|
-| **B1** | Real blower maps (vendor curves, VFD affinity) | Backlog |
-| **B2** | BW scheduler v3 (peak tariff, maintenance windows) | Backlog |
-| **B3** | Project revision tree on SQLite | Backlog |
-| **B4** | Shaded uncertainty bands on Filtration charts | Backlog |
+| **B1** | Real blower maps (vendor curves, VFD affinity) | **Done** — §3.25 |
+| **B2** | BW scheduler v3 (peak tariff, maintenance windows) | **Done** — `tariff_aware_v3` |
+| **B3** | Project revision tree on SQLite | **Done** — §3.26 |
+| **B4** | Shaded uncertainty bands on Filtration charts | **Done** — §3.27 |
 
-**Tier C (defer — document only)**
+**Tier C**
 
-| ID | Item |
-|----|------|
-| **C1** | Monte Carlo lite |
-| **C2** | In-app CFD / 3D manifold |
-| **C3** | P&ID OCR |
-| **C4** | Digital twin lite |
-| **C5** | MILP / gradient optimiser + DCS scheduler |
+| ID | Item | Status |
+|----|------|--------|
+| **C1** | Monte Carlo lite | **Done** — §3.28 |
+| **C2** | External CFD import & compare (lite); in-app solve | **Lite done** §3.29 · full solve backlog |
+| **C3** | Equipment tag CSV (lite); P&ID OCR | **Lite done** §3.32 · OCR backlog |
+| **C4** | Digital twin lite | **Done** — §3.30 |
+| **C5** | MILP BW scheduler (lite); DCS / global optimiser | **Lite done** §3.31 · DCS backlog |
+
+**Tier C priority order (2026-05):** **P1 C5 lite** (MILP BW) → **P2 C2** (in-app CFD phased) → **P3 C3** (tag CSV shipped; OCR deferred).
+
+#### Phase 5 — UX, layout & ops polish (2026+) — **NEXT**
+
+> **Goal:** Harden what shipped in May 2026 without new physics forks. See **§12** for ordered work packages.
+
+| ID | Item | Owner files | Status |
+|----|------|-------------|--------|
+| **P5.1** | Git hygiene — commit/push uncommitted engine/UI/tests | repo root | **Do first** |
+| **P5.2** | BW duty chart — confirm duty-only path <3 s on typical laptop | `bw_timeline_cache.py`, `app.py` | **Verify**; lazy tabs if not |
+| **P5.3** | Triangular nozzle QA at client densities (40–60 /m²) | `nozzle_plate_distribution.py` | **User-validated** sample; add regression cases |
+| **P5.4** | Filtration-phase spatial map | `spatial_distribution.py` | **Backlog** |
+| **P5.5** | External media pricing API | `media_pricing.py` | **Backlog** |
+| **P5.6** | C2 full in-app CFD | new solver hook | **Backlog** |
+| **P5.7** | C3 P&ID OCR | — | **Aspirational** |
+| **P5.8** | C5 DCS / MES BW export | `milp_lite` | **Backlog** |
 
 ### 11.4 Priority 1 — collector package (refined)
 
@@ -1083,6 +1254,9 @@ Steps 1–4 from external prompt are good; map to **existing** sidebar keys:
 | Operating envelope map (A2) | High | Medium | **Done** |
 | Design-to-target inverse (A3) | High | Medium | **Done** |
 | Spatial distribution (A4) | High | High | **Done** |
+| Triangular nozzle distribution | High | Medium | **Done** — §3.33 |
+| BW duty-chart UX / cache | Medium | Medium | **Done (partial)** — §3.34 |
+| Media region factors (Egypt, Middle East) | Low | Low | **Done** |
 
 ### 11.8 Implementation checklist (every feature)
 
@@ -1100,7 +1274,7 @@ You are extending AQUASIGHT MMF.
 
 Read:
 - AQUASIGHT_MMF_PROJECT.md
-- AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md (§3 equations, §11 Phase 4)
+- AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md (§3 equations, §11 Phase 4–5, §12 what to do next)
 
 Rules:
 - Preserve single compute_all physics path
@@ -1110,7 +1284,7 @@ Rules:
 - Avoid introducing second calculation paths
 - Prefer post-compute enrichment over engine modification when physics is unchanged
 
-Implement [FEATURE] following Phase 4 item [A2|A3|A4|B*|C*].
+Implement [FEATURE] following Phase 4 item [A2|A3|A4|B*|C*] or Phase 5 [P5.*].
 
 Return:
 1. Engine module(s)
@@ -1144,9 +1318,65 @@ Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.
 | **Fouling workflow** | 5-step UI; `build_fouling_assessment`; cycle cross-check. |
 | **CFD export** | Full BC **JSON** bundle + **orifice CSV**; **`normalize_cfd_export_format`** maps legacy UI labels to `json` / `csv_orifices`. |
 | **Schematic** | `collector_hyd_schematic` — dimensions below vessel, cleaner legend/captions (§3.17). |
-| **Tests (indicative)** | `test_compare_workspace`, `test_explainability`, `test_design_basis`, `test_lifecycle_degradation`, `test_nozzle_plate_catalogue`, `test_nozzle_system`, `test_strainer_materials`, `test_fouling_workflow`, `test_bw_scheduler`, `test_collector_nozzle_plate`. |
+| **Tests (indicative)** | `test_compare_workspace`, `test_explainability`, `test_design_basis`, `test_lifecycle_degradation`, `test_nozzle_plate_catalogue`, `test_nozzle_system`, `test_strainer_materials`, `test_fouling_workflow`, `test_bw_scheduler`, `test_collector_nozzle_plate`, **`test_nozzle_distribution`**, `test_media_pricing`, `test_spatial_distribution`, `test_operating_envelope`, `test_design_targets`. |
+| **Triangular nozzle plate (§3.33)** | Density-driven **N**, triangular pitch, full-plate stagger, `layout_revision` **6**; spatial map + schematic aligned. |
+| **Duty-chart UX (§3.34)** | Timeline cache + duty-only rerun; stagger compare cache; tab-hiding regression removed. |
+| **Media regions** | Egypt / Middle East `REGION_FACTOR` keys on Media tab. |
 
 ---
 
-*Document version: 2026-05-16 (Phase 0) — §3.22 spatial spec, §8 compass refresh, §11 Phase 4 roadmap (A2/A3/A4, Tier B/C).*
+## 12. What to do next (2026-05-16)
+
+Use this section as the **single checklist** after the May 2026 nozzle-layout and BW-performance sprint. Phases **0–4** and Tier **B/C lite** are largely complete; focus shifts to **verification, git, and selective backlog**.
+
+### 12.1 Immediate (this week)
+
+| # | Action | Why | How |
+|---|--------|-----|-----|
+| 1 | **Commit & push** working tree | Many engine/UI files were untracked in local sessions | Stage `engine/`, `ui/`, `tests/` — exclude `__pycache__/`, `logs/`, `.pytest_cache/` |
+| 2 | **Run targeted pytest** | Lock triangular layout + regions | `pytest tests/test_nozzle_distribution.py tests/test_collector_nozzle_plate.py tests/test_media_pricing.py tests/test_spatial_distribution.py -q` |
+| 3 | **Smoke Streamlit** | Confirm all tabs visible after Apply | `python -m streamlit run app.py` → Apply → change BW stagger → **Update duty chart** only |
+| 4 | **Confirm hole density** | Avoid regression to fixed hole count | Media sidebar **Hole density (/m²)** must drive `N = round(ρ × A_plate)` end-to-end |
+
+### 12.2 Short term (next 2–4 weeks)
+
+| # | Topic | Detail |
+|---|--------|--------|
+| **A** | **Duty-chart performance** | If still slow: (1) profile post-hooks in `app.py`; (2) skip enrichment except Backwash when `_bw_duty_only_rerun`; (3) lazy-render non-active tabs; (4) keep `build_bw_timeline_cached` scalar args only (`UnhashableParamError` guard). |
+| **B** | **Nozzle layout QA** | Add pytest cases at ρ = 40, 50, 60 /m² for a reference plate area; assert axial coverage ≥95%, `layout_mode == triangular_stagger`, `len(hole_network) ≈ N`. |
+| **C** | **Spatial map polish** | Optional: Filtration-tab service-phase map using same `spatial_distribution` engine; document `ASM-SPATIAL-02` if added. |
+| **D** | **Documentation drift** | After each feature: update §3 equation row, §11 Phase table, §12 checklist, `tests/README.md`. |
+
+### 12.3 Medium term (backlog — do not block release)
+
+| ID | Item | Notes |
+|----|------|-------|
+| **C2 full** | In-app CFD solve | Lite CSV import/compare **done** (§3.29); full solver is separate project |
+| **C3 OCR** | P&ID image → tags | Tag CSV lite **done**; OCR needs validation dataset |
+| **C5 DCS** | Export MILP schedule | `milp_lite` **done**; plant DCS format TBD |
+| **B6** | External media pricing API | Region factors only today |
+| **UX** | Client vs engineer mode | Hide calibration keys in “client” session profile |
+
+### 12.4 Architecture rules (unchanged)
+
+1. **One physics path:** `engine/compute.py` → `ui/compute_cache.compute_all_cached` → `app.py` enrichment.
+2. **SI in `computed[]`** — format only in UI via `fmt` / `dv` / `ulbl`.
+3. **Post-compute preferred** when core Ergun/BW equations unchanged.
+4. **Cache version bump** when layout or enrichment shape changes (`_COMPUTE_CACHE_VERSION`).
+5. **No second hole-count source** — sidebar density is authoritative.
+
+### 12.5 Suggested commit message (when user asks)
+
+```text
+feat: triangular nozzle plate layout, duty-chart cache, media regions
+
+- Density-driven triangular stagger (layout_revision 6)
+- BW timeline duty-only rerun and stagger compare cache
+- Egypt / Middle East media pricing factors
+- Docs §3.33–3.34, §12 next steps; tests for distribution
+```
+
+---
+
+*Document version: 2026-05-16 — Phase 4 complete; Phase 5 (UX/layout); §3.33 triangular nozzles, §3.34 duty-chart UX, §12 what to do next.*
 

@@ -36,6 +36,7 @@ from engine.thresholds import (
     layer_lv_cap_m_h,
 )
 from engine.uncertainty import cycle_uncertainty_by_scenario
+from engine.uncertainty_charts import build_cycle_uncertainty_charts
 from engine.uncertainty_economics import lcow_envelope_from_cycle_uncertainty
 from engine.collector_intelligence import analyse_collector_performance
 from engine.collector_velocity_risk import analyse_collector_velocity_risk
@@ -634,6 +635,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             tss_capture_efficiency=_tss_cap,
             design_tss_mg_l=tss_avg,
         )
+        cycle_uncertainty_charts = build_cycle_uncertainty_charts(cycle_uncertainty)
 
         # ── BW scheduling & feasibility ───────────────────────────────────────────
         _bw_dur_h = bw_total_min / 60.0
@@ -701,10 +703,9 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             _sim_d_tl = float(_cell_tl.get("sim_demand", 0.0))
         except (KeyError, TypeError):
             pass
-        _stag = bw_timeline_stagger if bw_timeline_stagger in (
-            "uniform", "feasibility_trains", "optimized_trains",
-        ) else "feasibility_trains"
-        _horizon_days = int(max(1, min(14, int(_work.get("bw_schedule_horizon_days", 7) or 7))))
+        # Placeholder timeline (feasibility / 7 d) — UI overlays stagger via ``ui.bw_timeline_cache``.
+        _stag = "feasibility_trains"
+        _horizon_days = 7
         _horizon_h = float(_horizon_days * 24)
         bw_timeline = filter_bw_timeline_24h(
             n_filters_total=int(streams * n_filters),
@@ -715,6 +716,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             stagger_model=_stag,
             sim_demand=_sim_d_tl,
             n_streams=max(1, int(streams)),
+            scheduler_inputs=_work,
         )
         bw_timeline["horizon_days"] = _horizon_days
         _n_des_paths = streams * max(1, n_filters - hydraulic_assist)
@@ -1366,6 +1368,7 @@ def _compute_all_impl(_work: dict, input_validation: dict) -> dict:
             "filt_cycles": filt_cycles, "load_data": load_data,
             "cycle_matrix": cycle_matrix,
             "cycle_uncertainty": cycle_uncertainty,
+            "cycle_uncertainty_charts": cycle_uncertainty_charts,
             "cycle_economics": cycle_economics,
             "tss_col_keys": tss_col_keys, "tss_vals": tss_vals,
             "temp_col_keys": temp_col_keys,

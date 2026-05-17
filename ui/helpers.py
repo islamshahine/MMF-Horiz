@@ -145,6 +145,7 @@ def collector_hyd_profile_display_df(profile: list[dict[str, Any]]) -> pd.DataFr
 _BW_TIMELINE_STAGGER_LABELS: Final[dict[str, str]] = {
     "feasibility_trains": "Feasibility BW trains (section 4)",
     "optimized_trains": "Optimized trains (scheduling aid)",
+    "tariff_aware_v3": "Tariff-aware v3 (peak + tariff + blackouts)",
     "uniform": "Uniform stagger (legacy)",
 }
 
@@ -247,10 +248,16 @@ def bw_timeline_schedule_summary_html(bw_timeline: dict) -> str:
         ("Within BW-train cap", f"<b>{_cap_txt}</b>"),
     ]
     _opt = _tl.get("optimizer") or {}
-    if str(_tl.get("stagger_model", "")).lower() == "optimized_trains" and _opt:
+    if str(_tl.get("stagger_model", "")).lower() in ("optimized_trains", "tariff_aware_v3") and _opt:
         rows.extend([
             ("Peak (feasibility spacing)", f"<b>{_opt.get('peak_feasibility_spacing', '—')}</b>"),
             ("Peak reduction (filters)", f"<b>{_opt.get('improvement_filters', 0)}</b>"),
+        ])
+    _tv3 = _tl.get("tariff_v3") or _opt.get("tariff_v3") or {}
+    if str(_tl.get("stagger_model", "")).lower() == "tariff_aware_v3" and _tv3:
+        rows.extend([
+            ("BW filter-h in peak tariff", f"<b>{_tv3.get('peak_tariff_filter_h', '—')}</b>"),
+            ("Blackout overlap (h)", f"<b>{_tv3.get('blackout_overlap_h', 0)}</b>"),
         ])
     _pt = _tl.get("peak_time_h") or _opt.get("peak_time_h")
     if _pt is not None:

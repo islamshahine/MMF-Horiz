@@ -25,7 +25,7 @@ _F_DARCY = 0.02
 _HL_F = 1.0
 
 _MIN_SPACING_BORE_MULT = 1.5
-_LAYOUT_REVISION = 3  # dish-head plate zones with variable chord
+_LAYOUT_REVISION = 6  # triangular density grid — full plate coverage
 
 
 def chord_at_axial_x(
@@ -131,107 +131,70 @@ def staggered_plate_layout(
     plate_area_total_m2: float = 0.0,
     area_cyl_m2: float = 0.0,
     area_one_dish_m2: float = 0.0,
+    np_density_per_m2: float = 0.0,
 ) -> dict[str, Any]:
     """
-    Brick layout on cylindrical section + both dish-head zones (variable chord).
+    Triangular (staggered) nozzle grid — density × plate area, full vessel outline.
+
+    See ``engine.nozzle_plate_distribution`` for pitch and coverage algorithm.
     """
-    del pitch_chord_mm, edge_clearance_mm
+    del pitch_chord_mm, edge_clearance_mm, n_rows_override
+
+    from engine.nozzle_plate_distribution import build_triangular_nozzle_layout
 
     h_d = max(0.0, float(h_dish_m))
-    L_total = max(0.1, float(total_length_m) if total_length_m > 0 else float(cyl_len_m))
-    L_straight = max(
+    l_total = max(0.1, float(total_length_m) if total_length_m > 0 else float(cyl_len_m))
+    l_straight = max(
         0.1,
-        float(straight_cyl_len_m) if straight_cyl_len_m > 0 else max(0.1, L_total - 2.0 * h_d),
+        float(straight_cyl_len_m) if straight_cyl_len_m > 0 else max(0.1, l_total - 2.0 * h_d),
     )
-    if L_total < L_straight + 1e-6:
-        L_total = L_straight + 2.0 * h_d
+    if l_total < l_straight + 1e-6:
+        l_total = l_straight + 2.0 * h_d
 
-    W = max(0.1, float(chord_m))
-    R = max(0.01, float(vessel_id_m) / 2.0) if vessel_id_m > 0 else W
+    w = max(0.1, float(chord_m))
+    r = max(0.01, float(vessel_id_m) / 2.0) if vessel_id_m > 0 else w
     h_plate = max(0.01, float(nozzle_plate_h_m)) if nozzle_plate_h_m > 0 else 0.5
     d_m = max(0.001, float(bore_d_mm) / 1000.0)
-    n_target = max(1, int(n_holes_total))
-    p_min = _MIN_SPACING_BORE_MULT * d_m
 
-    a_cyl = float(area_cyl_m2) if area_cyl_m2 > 0 else W * L_straight
+    a_cyl = float(area_cyl_m2) if area_cyl_m2 > 0 else w * l_straight
     a_dish = float(area_one_dish_m2) if area_one_dish_m2 > 0 else 0.0
     a_plate = max(
-        W * L_total,
+        w * l_total,
         float(plate_area_total_m2) if plate_area_total_m2 > 0 else a_cyl + 2.0 * a_dish,
     )
-    a_per = a_plate / n_target
-    p_long = max(p_min, math.sqrt(a_per))
-    p_trans = max(p_min, math.sqrt(a_per))
 
-    n_rows = max(1, int(math.floor(W / p_trans)))
-    if int(n_rows_override) > 0:
-        n_rows = max(1, int(n_rows_override))
-        p_trans = min(p_trans, W / n_rows)
-
-    n_per_row = max(1, int(math.ceil(n_target / n_rows)))
-    edge_m = max(0.5 * p_long, p_min)
-    if n_per_row > 1:
-        p_long_actual = max(p_min, (L_total - 2.0 * edge_m) / (n_per_row - 1))
-    else:
-        p_long_actual = p_long
-    edge_m = max(0.5 * p_long_actual, p_min)
-    if n_per_row > 1:
-        p_long_actual = max(p_min, (L_total - 2.0 * edge_m) / (n_per_row - 1))
-
-    x_cyl0 = h_d
-    x_cyl1 = h_d + L_straight
-    holes_xy: list[tuple[float, float, int, int, bool]] = []
-    j_col = 0
-    x_col = edge_m
-    while len(holes_xy) < n_target and x_col <= L_total - edge_m + 1e-9:
-        for ri in range(n_rows):
-            if len(holes_xy) >= n_target:
-                break
-            y_plot = -W / 2.0 + (ri + 0.5) * p_trans
-            stagger = ri % 2 == 1
-            x_h = x_col + (p_long_actual / 2.0 if stagger else 0.0)
-            if x_h > L_total - edge_m + 1e-9:
-                continue
-            w_local = chord_at_axial_x(
-                x_h,
-                h_plate_m=h_plate,
-                vessel_radius_m=R,
-                h_dish_m=h_d,
-                straight_cyl_len_m=L_straight,
-            )
-            if w_local < 2.0 * p_min:
-                continue
-            y_lim = w_local / 2.0 - min(edge_m, w_local * 0.08)
-            if abs(y_plot) > y_lim + 1e-9:
-                continue
-            holes_xy.append((round(x_h, 4), round(y_plot, 4), ri + 1, j_col + 1, stagger))
-        j_col += 1
-        x_col = edge_m + j_col * p_long_actual
-
-    if holes_xy:
-        xs = [h[0] for h in holes_xy]
-        ys = [h[1] for h in holes_xy]
-        dx = L_total / 2.0 - (min(xs) + max(xs)) / 2.0
-        dy = 0.0 - (min(ys) + max(ys)) / 2.0
-        holes_xy = [
-            (round(x + dx, 4), round(y + dy, 4), ri, hi, st)
-            for x, y, ri, hi, st in holes_xy
-        ]
-
-    n_placed = len(holes_xy)
-    n_in_dish = sum(1 for x, *_ in holes_xy if x < x_cyl0 - 0.01 or x > x_cyl1 + 0.01)
-    n_in_cyl = n_placed - n_in_dish
+    tri = build_triangular_nozzle_layout(
+        plate_area_m2=a_plate,
+        chord_width_m=w,
+        total_length_m=l_total,
+        straight_cyl_len_m=l_straight,
+        vessel_id_m=float(vessel_id_m),
+        nozzle_plate_h_m=h_plate,
+        h_dish_m=h_d,
+        bore_d_mm=float(bore_d_mm),
+        n_holes_total=int(n_holes_total),
+        np_density_per_m2=float(np_density_per_m2),
+    )
+    holes_xy = tri["holes_xy"]
+    n_target = int(tri["n_target"])
+    n_placed = int(tri["n_placed"])
+    p = float(tri["pitch_m"])
+    edge_x = float(tri["edge_clearance_m"])
+    p_row = float(tri["pitch_row_spacing_m"])
+    n_rows = int(tri["n_rows_across_chord"])
+    x_cyl0 = float(tri["x_cyl_start_m"])
+    x_cyl1 = float(tri["x_cyl_end_m"])
+    n_in_dish = int(tri["n_holes_in_dish_zones"])
+    n_in_cyl = int(tri["n_holes_in_cyl_zone"])
 
     ol_x, ol_top, ol_bot = plate_outline_samples(
-        total_length_m=L_total,
+        total_length_m=l_total,
         h_plate_m=h_plate,
-        vessel_radius_m=R,
+        vessel_radius_m=r,
         h_dish_m=h_d,
-        straight_cyl_len_m=L_straight,
+        straight_cyl_len_m=l_straight,
     )
-    head_inset = h_d
 
-    # Group by row for plate_rows / header stations
     plate_rows: list[dict[str, Any]] = []
     by_row: dict[int, list[tuple[float, float, int, int, bool]]] = {}
     for tup in holes_xy:
@@ -243,7 +206,7 @@ def staggered_plate_layout(
         y_plot = row_holes[0][1]
         plate_rows.append({
             "row_index": ri,
-            "y_chord_m": round(y_plot + W / 2.0, 4),
+            "y_chord_m": round(y_plot + w / 2.0, 4),
             "y_plot_m": round(y_plot, 4),
             "staggered": stagger,
             "x_positions_m": xs,
@@ -253,45 +216,48 @@ def staggered_plate_layout(
     x_counts = Counter(h[0] for h in holes_xy)
     positions_m = sorted(x_counts.keys())
     holes_per_station = [x_counts[x] for x in positions_m]
-
     xs_all = [h[0] for h in holes_xy]
     ys_all = [h[1] for h in holes_xy]
-    field_x0 = min(xs_all) if xs_all else edge_m
-    field_x1 = max(xs_all) if xs_all else L_total - edge_m
-    field_y0 = min(ys_all) if ys_all else -W / 2.0
-    field_y1 = max(ys_all) if ys_all else W / 2.0
+    field_x0 = float(tri["field_x_start_m"])
+    field_x1 = float(tri["field_x_end_m"])
+    field_y0 = float(tri["field_y_plot_start_m"])
+    field_y1 = float(tri["field_y_plot_end_m"])
 
     return {
-        "layout_mode": "brick_rows",
+        "layout_mode": "triangular_stagger",
+        "layout_density_per_m2": float(tri["density_per_m2_actual"]),
+        "layout_axial_utilization": float(tri["axial_utilization"]),
+        "layout_advisories": list(tri.get("advisories") or []),
+        "pitch_triangular_m": round(p, 6),
         "n_rows_across_chord": n_rows,
-        "n_per_row_along_drum": n_per_row,
+        "n_per_row_along_drum": len(positions_m),
         "n_columns": len(positions_m),
         "n_phys_rows": len(positions_m),
         "n_along_chord": n_rows,
-        "holes_per_row": n_per_row,
-        "pitch_long_m": round(p_long_actual, 4),
-        "pitch_trans_m": round(p_trans, 4),
-        "pitch_chord_mm": round(p_long_actual * 1000.0, 1),
-        "pitch_long_mm": round(p_long_actual * 1000.0, 1),
-        "pitch_trans_mm": round(p_trans * 1000.0, 1),
-        "edge_clearance_mm": round(edge_m * 1000.0, 1),
-        "min_spacing_mm": round(p_min * 1000.0, 1),
+        "holes_per_row": len(positions_m),
+        "pitch_long_m": round(p, 4),
+        "pitch_trans_m": round(p_row, 4),
+        "pitch_chord_mm": round(p * 1000.0, 1),
+        "pitch_long_mm": round(p * 1000.0, 1),
+        "pitch_trans_mm": round(p_row * 1000.0, 1),
+        "edge_clearance_mm": round(edge_x * 1000.0, 1),
+        "min_spacing_mm": round(max(2.5 * d_m, d_m + 0.05) * 1000.0, 1),
         "column_pitch_m": round(
-            (positions_m[1] - positions_m[0]) if len(positions_m) > 1 else p_long_actual, 4
+            (positions_m[1] - positions_m[0]) if len(positions_m) > 1 else p, 4
         ),
-        "row_spacing_m": round(p_trans, 4),
+        "row_spacing_m": round(p_row, 4),
         "plate_x_start_m": 0.0,
-        "plate_x_end_m": round(L_total, 4),
+        "plate_x_end_m": round(l_total, 4),
         "field_x_start_m": round(field_x0, 4),
         "field_x_end_m": round(field_x1, 4),
-        "field_y_start_m": round(field_y0 + W / 2.0, 4),
-        "field_y_end_m": round(field_y1 + W / 2.0, 4),
+        "field_y_start_m": round(field_y0 + w / 2.0, 4),
+        "field_y_end_m": round(field_y1 + w / 2.0, 4),
         "field_y_plot_start_m": round(field_y0, 4),
         "field_y_plot_end_m": round(field_y1, 4),
-        "head_inset_m": round(head_inset, 4),
+        "head_inset_m": round(h_d, 4),
         "h_dish_m": round(h_d, 4),
-        "straight_cyl_len_m": round(L_straight, 4),
-        "total_length_m": round(L_total, 4),
+        "straight_cyl_len_m": round(l_straight, 4),
+        "total_length_m": round(l_total, 4),
         "x_cyl_start_m": round(x_cyl0, 4),
         "x_cyl_end_m": round(x_cyl1, 4),
         "n_holes_in_dish_zones": n_in_dish,
@@ -303,17 +269,17 @@ def staggered_plate_layout(
         "plate_area_total_m2": round(a_plate, 4),
         "plate_area_cyl_m2": round(a_cyl, 4),
         "plate_area_one_dish_m2": round(a_dish, 4),
-        "cyl_len_m": round(L_total, 4),
-        "chord_m": W,
-        "plate_area_rect_m2": round(W * L_straight, 4),
+        "cyl_len_m": round(l_total, 4),
+        "chord_m": w,
+        "plate_area_rect_m2": round(w * l_straight, 4),
         "positions_m": positions_m,
         "holes_per_phys_row": holes_per_station,
         "plate_rows": plate_rows,
         "holes_xy": holes_xy,
         "actual_holes_from_layout": n_placed,
         "target_holes": n_target,
-        "edge_margin_x_m": round(edge_m, 4),
-        "edge_margin_y_m": round(W / 2.0 - abs(field_y1), 4) if ys_all else 0.0,
+        "edge_margin_x_m": round(edge_x, 4),
+        "edge_margin_y_m": round(w / 2.0 - abs(field_y1), 4) if ys_all else 0.0,
     }
 
 
@@ -398,12 +364,12 @@ def compute_nozzle_plate_bw_hydraulics(
     cyl = max(0.1, float(cyl_len_m))
     d_header = max(0.02, float(collector_header_id_m))
 
-    if int(n_holes_total) > 0:
+    # Hole count always from sidebar **Hole density (/m²)** × plate area (not a fixed constant).
+    n_holes_target = max(1, int(round(dens * plate_area)))
+    if int(n_holes_total) > 0 and abs(int(n_holes_total) - n_holes_target) > max(
+        5, 0.02 * n_holes_target
+    ):
         n_holes_target = max(1, int(n_holes_total))
-    else:
-        from engine.mechanical import nozzle_plate_bore_layout
-
-        n_holes_target = max(1, nozzle_plate_bore_layout(plate_area, dens)["n_bores"])
 
     geo = lateral_geometry_from_vessel(
         vessel_id_m=nominal_id_m,
@@ -437,6 +403,7 @@ def compute_nozzle_plate_bw_hydraulics(
         area_one_dish_m2=float(area_one_dish_m2),
         n_rows_override=int(n_rows_along_drum) if int(n_rows_along_drum) > 0 else 0,
         bore_d_mm=float(np_bore_dia_mm),
+        np_density_per_m2=dens,
     )
 
     positions = layout["positions_m"]
@@ -522,24 +489,29 @@ def compute_nozzle_plate_bw_hydraulics(
     advisories = _build_advisories(
         n_holes, n_holes_target, layout, v_max, open_frac_pct, imb_pct,
     )
+    for _msg in layout.get("layout_advisories") or []:
+        advisories.append({
+            "severity": "warning",
+            "topic": "Nozzle layout",
+            "detail": str(_msg),
+        })
 
     return {
         "active": True,
         "underdrain_type": "nozzle_plate",
-        "layout": "brick_rows",
+        "layout": str(layout.get("layout_mode", "triangular_stagger")),
         "layout_revision": _LAYOUT_REVISION,
         "method": (
-            f"Nozzle plate (BW) — brick rows: P_long={layout['pitch_long_mm']:.0f} mm, "
-            f"P_trans={layout['pitch_trans_mm']:.0f} mm "
-            f"(≥{layout['min_spacing_mm']:.0f} mm = 1.5×Ø); "
+            f"Nozzle plate (BW) — triangular stagger P={layout['pitch_long_mm']:.0f} mm "
+            f"(row Δ={layout['pitch_trans_mm']:.0f} mm); "
             f"{'dual-end' if feed_mode == 'dual_end' else 'one-end'} header"
         ),
         "screening_note": (
-            f"**Brick layout:** **{n_rows}** rows across **{chord_plate:.2f} m** chord (cyl), "
-            f"**~{n_per_row}** stations along **{layout.get('total_length_m', cyl):.2f} m** "
-            f"(incl. dish heads **{layout.get('n_holes_in_dish_zones', 0)}** + cyl "
-            f"**{layout.get('n_holes_in_cyl_zone', 0)}** holes). "
-            f"P_long={layout['pitch_long_mm']:.0f} mm, P_trans={layout['pitch_trans_mm']:.0f} mm."
+            f"**Triangular layout:** **{n_holes:,}** holes · ρ **{dens:.0f}**/m² · "
+            f"open area **{open_frac_pct:.1f} %** · "
+            f"**{n_rows}** rows · **{layout.get('total_length_m', cyl):.2f} m** plate "
+            f"(dish **{layout.get('n_holes_in_dish_zones', 0):,}** + cyl "
+            f"**{layout.get('n_holes_in_cyl_zone', 0):,}**)."
         ),
         "q_bw_m3h": round(q_bw, 3),
         "hole_d_mm": round(d_m * 1000.0, 2),
@@ -613,6 +585,10 @@ def _layout_summary(
         "plate_outline_x_m": layout.get("plate_outline_x_m"),
         "plate_outline_y_top_m": layout.get("plate_outline_y_top_m"),
         "plate_outline_y_bot_m": layout.get("plate_outline_y_bot_m"),
+        "layout_advisories": list(layout.get("layout_advisories") or []),
+        "layout_axial_utilization": layout.get("layout_axial_utilization"),
+        "pitch_triangular_m": layout.get("pitch_triangular_m"),
+        "layout_mode": layout.get("layout_mode"),
     }
 
 
@@ -623,12 +599,15 @@ def _design_basis_text(
     dens: float,
 ) -> str:
     n_act = int(layout.get("actual_holes_from_layout", 0))
+    mode = str(layout.get("layout_mode", "triangular_stagger"))
+    util = layout.get("layout_axial_utilization")
+    util_s = f" · axial fill **{100.0 * float(util):.0f} %**" if isinstance(util, (int, float)) else ""
     return (
-        f"Brick: **{layout['n_rows_across_chord']}** rows × **~{layout['n_per_row_along_drum']}**/row "
-        f"= **{n_act}** placed (target **{n_target}**) · "
-        f"P_long **{layout['pitch_long_mm']:.0f} mm** · P_trans **{layout['pitch_trans_mm']:.0f} mm** · "
-        f"chord **{layout['chord_m']:.2f} m** × length **{layout['cyl_len_m']:.2f} m** "
-        f"(ρ={dens:.0f}/m² on **{plate_area:.1f} m²** plate area)"
+        f"**{mode}**: **{n_act:,}** placed (target **{n_target:,}**) · "
+        f"P **{layout['pitch_long_mm']:.0f} mm** (Δrow **{layout['pitch_trans_mm']:.0f} mm**) · "
+        f"**{layout['n_rows_across_chord']}** rows · "
+        f"chord **{layout['chord_m']:.2f} m** × **{layout['cyl_len_m']:.2f} m** "
+        f"(ρ **{dens:.0f}**/m² on **{plate_area:.1f} m²**){util_s}"
     )
 
 
@@ -646,8 +625,8 @@ def _build_advisories(
             "severity": "advisory",
             "topic": "Hole count vs density",
             "detail": (
-                f"Brick layout places **{n_holes}** holes vs Media target **{n_target}** — "
-                "adjust density, chord, or vessel length."
+                f"Layout places **{n_holes:,}** holes vs target **{n_target:,}** — "
+                "adjust density, bore, or vessel geometry."
             ),
         })
     if v_max > _HOLE_V_WARN_M_S:

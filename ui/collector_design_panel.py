@@ -19,6 +19,141 @@ from ui.collector_hyd_schematic import (
 )
 
 
+def _spatial_plot_sample(
+    xy: list,
+    lf: list,
+    *,
+    max_points: int = 1500,
+) -> tuple[list, list]:
+    """
+    Downsample for Plotly without stripe artefacts.
+
+    Global stride (``[::step]``) on brick/staggered hole order picks alternating rows
+    and looks like a red/green checkerboard — not a change in the Voronoi model.
+    """
+    n = min(len(xy), len(lf))
+    if n <= max_points:
+        return xy[:n], lf[:n]
+    from collections import defaultdict
+
+    by_row: dict[float, list[int]] = defaultdict(list)
+    for i in range(n):
+        by_row[round(float(xy[i][1]), 3)].append(i)
+    per_row = max(1, max_points // max(1, len(by_row)))
+    picked: list[int] = []
+    for _y in sorted(by_row.keys()):
+        idxs = by_row[_y]
+        if len(idxs) <= per_row:
+            picked.extend(idxs)
+        else:
+            step = max(1, len(idxs) // per_row)
+            picked.extend(idxs[::step])
+    if len(picked) > max_points:
+        picked = picked[:: max(1, len(picked) // max_points)]
+    picked = sorted(set(picked))[:max_points]
+    return [xy[i] for i in picked], [lf[i] for i in picked]
+
+
+def _spatial_loading_color_limits(lf: list[float]) -> tuple[float, float]:
+    """Color scale centred on LF=1; wide enough for true outliers (e.g. edge holes)."""
+    if not lf:
+        return 0.85, 1.15
+    lo = min(lf)
+    hi = max(lf)
+    span = max(hi - lo, 0.12)
+    pad = max(0.08, 0.12 * span)
+    cmin = min(0.85, lo - pad)
+    cmax = max(1.15, hi + pad)
+    if cmax - cmin < 0.2:
+        mid = (hi + lo) / 2.0
+        cmin, cmax = mid - 0.1, mid + 0.1
+    return cmin, cmax
+
+
+def _spatial_loading_figure(
+    xy: list,
+    lf: list[float],
+    np_plate: dict,
+    *,
+    cmin: float,
+    cmax: float,
+) -> "go.Figure":
+    """Voronoi LF markers on top of full plate outline (both dish heads)."""
+    import plotly.graph_objects as go
+
+    fig = go.Figure()
+    ol_x = list(np_plate.get("plate_outline_x_m") or [])
+    ol_top = list(np_plate.get("plate_outline_y_top_m") or [])
+    ol_bot = list(np_plate.get("plate_outline_y_bot_m") or [])
+    if len(ol_x) >= 2 and len(ol_top) == len(ol_x) and len(ol_bot) == len(ol_x):
+        fig.add_trace(
+            go.Scatter(
+                x=ol_x + ol_x[::-1],
+                y=ol_top + ol_bot[::-1],
+                fill="toself",
+                mode="lines",
+                line=dict(color="#64748b", width=1.2),
+                fillcolor="rgba(148, 163, 184, 0.18)",
+                name="Nozzle plate outline (both heads)",
+                hoverinfo="skip",
+            )
+        )
+    x_cyl0 = float(np_plate.get("x_cyl_start_m") or 0)
+    x_cyl1 = float(np_plate.get("x_cyl_end_m") or 0)
+    l_plate = float(
+        np_plate.get("total_length_m") or np_plate.get("cyl_len_m") or 0
+    )
+    w_chord = float(np_plate.get("chord_m") or 0)
+    if x_cyl1 > x_cyl0 and w_chord > 0:
+        for _xv, _lbl in ((x_cyl0, "Cyl start"), (x_cyl1, "Cyl end")):
+            fig.add_shape(
+                type="line",
+                x0=_xv,
+                x1=_xv,
+                y0=-w_chord / 2 - 0.04 * w_chord,
+                y1=w_chord / 2 + 0.04 * w_chord,
+                line=dict(color="#94a3b8", width=1, dash="dot"),
+                layer="below",
+            )
+    fig.add_trace(
+        go.Scatter(
+            x=[p[0] for p in xy],
+            y=[p[1] for p in xy],
+            mode="markers",
+            marker=dict(
+                size=9,
+                color=lf,
+                colorscale="RdYlGn_r",
+                cmin=cmin,
+                cmax=cmax,
+                colorbar=dict(title="Loading factor"),
+            ),
+            text=[f"LF={lf[i]:.2f}" for i in range(len(lf))],
+            hovertemplate="x %{x:.2f} m<br>y %{y:.2f} m<br>%{text}<extra></extra>",
+            name="Loading factor",
+        )
+    )
+    _x_pad = max(0.08 * l_plate, 0.4) if l_plate > 0 else 0.4
+    _y_pad = max(0.12 * w_chord, 0.25) if w_chord > 0 else 0.25
+    fig.update_layout(
+        title="Nozzle loading factor (plan view, SI m)",
+        xaxis_title="Along drum (m)",
+        yaxis_title="Across chord (m)",
+        height=400,
+        margin=dict(t=48, b=40),
+        xaxis=dict(
+            range=[-_x_pad, l_plate + _x_pad] if l_plate > 0 else None,
+        ),
+        yaxis=dict(
+            range=[-w_chord / 2 - _y_pad, w_chord / 2 + _y_pad] if w_chord > 0 else None,
+            scaleanchor="x",
+            scaleratio=1,
+        ),
+        legend=dict(orientation="h", yanchor="bottom", y=1.02),
+    )
+    return fig
+
+
 def render_collector_design_panel(computed: dict, inputs: dict) -> None:
     """Vessel intelligence, nozzle-plate BW hydraulics, legacy lateral surrogate, studies."""
     _np = computed.get("collector_nozzle_plate") or {}
@@ -62,6 +197,8 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
             p1, p2, p3, p4 = st.columns(4)
             p1.metric("BW flow", fmt(_np.get("q_bw_m3h", 0), "flow_m3h", 1))
             p2.metric("Plate holes (total)", str(int(_np.get("n_holes_total", 0))))
+            for _ladv in _np.get("layout_advisories") or []:
+                st.warning(str(_ladv))
             p3.metric(
                 f"Open area ({'%'})",
                 f"{float(_np.get('open_area_fraction_pct', 0)):.1f}",
@@ -148,38 +285,50 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
                     for _flag in _sp.get("advisory_flags") or []:
                         st.warning(_flag.replace("_", " "))
                     try:
-                        import plotly.graph_objects as go
-
-                        _xy = _sp.get("nozzle_xy_m") or []
-                        _lf = _sp.get("nozzle_loading_factor") or []
-                        if _xy and _lf:
-                            _fig_sp = go.Figure(
-                                go.Scatter(
-                                    x=[p[0] for p in _xy],
-                                    y=[p[1] for p in _xy],
-                                    mode="markers",
-                                    marker=dict(
-                                        size=9,
-                                        color=_lf,
-                                        colorscale="RdYlGn_r",
-                                        cmin=0.7,
-                                        cmax=1.3,
-                                        colorbar=dict(title="Loading factor"),
-                                    ),
-                                    text=[
-                                        f"LF={_lf[i]:.2f}" for i in range(len(_lf))
-                                    ],
-                                    hovertemplate=(
-                                        "x %{x:.2f} m<br>y %{y:.2f} m<br>%{text}<extra></extra>"
-                                    ),
-                                )
+                        _xy_full = list(_sp.get("nozzle_xy_m") or [])
+                        _lf_full = [
+                            float(v)
+                            for v in (_sp.get("nozzle_loading_factor") or [])
+                        ]
+                        _n_full = min(len(_xy_full), len(_lf_full))
+                        if _n_full > 12000:
+                            _xy_plot, _lf_plot = _spatial_plot_sample(_xy_full, _lf_full)
+                        else:
+                            _xy_plot, _lf_plot = _xy_full[:_n_full], _lf_full[:_n_full]
+                        _cmin, _cmax = _spatial_loading_color_limits(_lf_plot)
+                        _l_plate = float(
+                            _np.get("total_length_m") or _np.get("cyl_len_m") or 0
+                        )
+                        _x_cyl1 = float(_np.get("x_cyl_end_m") or 0)
+                        _h_d = float(_np.get("h_dish_m") or 0)
+                        _n_dish = int(_np.get("n_holes_in_dish_zones") or 0)
+                        _n_cyl = int(_np.get("n_holes_in_cyl_zone") or 0)
+                        st.caption(
+                            "Grey outline = **full nozzle plate** (left + right dish heads + cylinder). "
+                            "Coloured dots = Voronoi **loading factor** at each placed hole. "
+                            f"Holes: **{_n_cyl}** in cylindrical zone, **{_n_dish}** in dish zones."
+                        )
+                        if _n_full > len(_xy_plot):
+                            st.caption(
+                                f"Markers shown: **{len(_xy_plot)}** of **{_n_full}** "
+                                "(row-stratified sample; metrics use all holes)."
                             )
-                            _fig_sp.update_layout(
-                                title="Nozzle loading factor (plan view, SI m)",
-                                xaxis_title="Along drum (m)",
-                                yaxis_title="Across chord (m)",
-                                height=380,
-                                margin=dict(t=48, b=40),
+                        if _xy_full and _l_plate > 0:
+                            _x_max = max(p[0] for p in _xy_full)
+                            if _h_d > 0.01 and _x_max < _l_plate - _h_d * 0.85:
+                                st.info(
+                                    "No nozzles reach the **right dish head** in this layout — "
+                                    "columns fill from the left until the target hole count is met. "
+                                    "The outline still shows the right head; compare the **nozzle plate plan** "
+                                    "below. Reduce density or increase **N holes** to cover both heads."
+                                )
+                        if _xy_plot and _lf_plot:
+                            _fig_sp = _spatial_loading_figure(
+                                _xy_plot,
+                                _lf_plot,
+                                _np,
+                                cmin=_cmin,
+                                cmax=_cmax,
                             )
                             st.plotly_chart(
                                 _fig_sp,
@@ -190,11 +339,11 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
                         st.info("Install **plotly** for spatial loading map.")
             _holes = list(_np.get("hole_network") or [])
             _layout_rev = int(_np.get("layout_revision", 0) or 0)
-            if _holes and _layout_rev < 3:
+            if _holes and _layout_rev < 6:
                 st.warning(
-                    "Nozzle plate layout is from an **older cached run** (single-row). "
-                    "Change any sidebar input (e.g. density ±1) or use **Clear cache** in "
-                    "Streamlit menu → **Rerun** to refresh the brick layout."
+                    "Nozzle plate layout is from an **older cached run**. "
+                    "Click **Apply** or change **hole density** slightly, or use **Clear cache** "
+                    "→ **Rerun** to refresh the full-plate stagger layout."
                 )
             if _holes:
                 _n_rows = int(_np.get("n_rows_along_drum", 0) or 0)
@@ -836,3 +985,6 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
                             mime=_mime,
                             key="collector_cfd_download",
                         )
+                from ui.cfd_import_panel import render_cfd_import_panel
+
+                render_cfd_import_panel(computed, key_prefix="collector_cfd_import")

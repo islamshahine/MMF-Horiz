@@ -17,6 +17,11 @@ tests/
   test_compare_workspace.py      Multi-case library (20), selection (12), pagination slice
   test_compare_units.py          Compare B SI contract + unit toggle
   test_project_db.py             SQLite project_db save/load, snapshots, scenarios
+  test_project_revisions.py      B3 cases/revisions, report hash, migration, diff
+  test_uncertainty_charts.py     B4 cycle_uncertainty_charts / dp envelope payloads
+  test_monte_carlo_lite.py       C1 optional cycle-duration sampling
+  test_cfd_import.py             C2 lite external CFD CSV vs 1D orifice network
+  test_digital_twin_lite.py      C4 plant telemetry → α calibration suggestion
   test_project_io.py             JSON round-trip, imperial widget map
   test_input_reconcile.py        Collapsed layout: pump widgets → SI before compute
   test_logging.py                engine.logger file output + hooks
@@ -31,7 +36,8 @@ tests/
   test_nozzle_plate_catalogue.py Pressurized catalogue (9 products), legacy ID removal
   test_nozzle_system.py          Underdrain coherence advisory
   test_strainer_materials.py     Salinity-driven strainer defaults
-  test_collector_nozzle_plate.py Nozzle plate brick layout
+  test_collector_nozzle_plate.py Nozzle plate triangular stagger layout (layout_revision 6)
+  test_nozzle_distribution.py   Density-driven N, pitch, full-plate coverage, stagger
   test_collector_hydraulics.py   1D collector header/lateral
   test_distribution_convergence.py  Lateral distribution solver
   test_collector_geometry.py     Lateral reach / screening
@@ -39,9 +45,12 @@ tests/
   test_collector_benchmarks.py   Hand-calc regression pack
   test_collector_staged_orifices.py  Staged orifice advisory
   test_bw_scheduler.py           BW scheduler v2 (stream-aware, peak windows)
+  test_bw_scheduler_v3.py        BW scheduler v3 (tariff + maintenance blackouts)
   test_operating_envelope.py     LV × EBCT feasibility grid (Phase 4 A2)
   test_design_targets.py         Design-to-target caps + grid search (Phase 4 A3)
   test_spatial_distribution.py   Voronoi nozzle loading map (Phase 4 A4)
+  test_blower_maps.py            Blower Q–ΔP maps, VFD affinity, vs adiabatic (Phase 4 B1)
+  test_blower_oem_catalog.py     OEM ROBOX/GRBS motor kW catalog (realistic nameplate)
   test_uncertainty.py            Cycle uncertainty envelopes
   test_uncertainty_economics.py  LCOW band from cycle spread
   test_sensitivity.py            OAT tornado narrative
@@ -59,10 +68,13 @@ pytest tests/ -v                     # all tests, verbose
 pytest tests/test_lifecycle_degradation.py -v
 pytest tests/test_compare_workspace.py -v   # includes compute_all — slower
 pytest tests/ -k "not compare_workspace"    # skip slow multi-compute cases
+pytest tests/ -m "not slow"               # same as GitHub Actions CI (skips test_bw_scheduler.py)
 pytest tests/ --cov=engine             # coverage on engine package
 ```
 
 **Note:** `test_compare_workspace.py` and some integration tests call `compute_all()` multiple times and may take tens of seconds.
+
+**CI:** `.github/workflows/ci.yml` runs `pytest -m "not slow"` on push/PR. The multi-day timeline suite (`test_bw_scheduler.py`) is marked `@pytest.mark.slow` (~25 min); run locally or via **workflow_dispatch** full job.
 
 ## Reference values
 
@@ -95,5 +107,12 @@ All expected values are derived from:
 
 | File | Role |
 |------|------|
-| `AQUASIGHT_MMF_PROJECT.md` | Architecture, file map, `inputs` / `computed` contracts |
-| `AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md` | Equations, models, enhancement compass |
+| `AQUASIGHT_MMF_PROJECT.md` | Architecture, file map, `inputs` / `computed` contracts; **§G What to do next** |
+| `AQUASIGHT_MMF_MODELS_AND_STRATEGIES.md` | Equations, models, enhancement compass; **§12 What to do next** |
+
+## What to do next (2026-05-16)
+
+1. Run targeted tests after nozzle or BW changes:  
+   `pytest tests/test_nozzle_distribution.py tests/test_collector_nozzle_plate.py tests/test_media_pricing.py -q`
+2. Add new modules to the structure list above and a row in **§12** / **§G** of the MD docs.
+3. Full CI locally (optional slow): `pytest tests/ -m "not slow"` — multi-day BW suite is `@pytest.mark.slow`.

@@ -13,6 +13,12 @@ from ui.helpers import (
     ST_DATAFRAME_KW,
 )
 from ui.scroll_markers import inject_anchor
+from ui.filtration_uncertainty_charts import (
+    figure_cycle_duration_band,
+    figure_dp_vs_loading_envelope,
+    figure_scenario_cycle_bands,
+)
+from ui.monte_carlo_charts import figure_cycle_duration_histogram
 
 
 def render_tab_filtration(inputs: dict, computed: dict):
@@ -301,6 +307,23 @@ def render_tab_filtration(inputs: dict, computed: dict):
                     filtration_dp_curve_display_df(first_cyc["dp_curve"]),
                     **ST_DATAFRAME_KW,
                 )
+                _cu_charts = computed.get("cycle_uncertainty_charts") or {}
+                _dp_env = _cu_charts.get("dp_vs_loading_envelope")
+                if _dp_env and _dp_env.get("m_kg_m2"):
+                    try:
+                        _fig_dp = figure_dp_vs_loading_envelope(_dp_env)
+                        if _fig_dp is not None:
+                            st.plotly_chart(
+                                _fig_dp,
+                                use_container_width=True,
+                                key="filtration_dp_vs_m_uncertainty",
+                            )
+                            st.caption(
+                                "Shaded band: **optimistic–conservative** corner cases on α, TSS, "
+                                "capture, and maldistribution (same method as cycle uncertainty)."
+                            )
+                    except ImportError:
+                        pass
         else:
             st.info("No filtration cycle data available.")
 
@@ -341,24 +364,22 @@ def render_tab_filtration(inputs: dict, computed: dict):
                 try:
                     import plotly.graph_objects as go
 
-                    _fig = go.Figure(
-                        go.Bar(
-                            x=["Optimistic", "Expected", "Conservative"],
-                            y=[
-                                dv(_u_n["cycle_optimistic_h"], "time_h"),
-                                dv(_u_n["cycle_expected_h"], "time_h"),
-                                dv(_u_n["cycle_conservative_h"], "time_h"),
-                            ],
-                            marker_color=["#1a7a1a", "#2563eb", "#cc5500"],
-                        )
-                    )
-                    _fig.update_layout(
-                        title=f"N scenario — cycle duration ({ulbl('time_h')})",
-                        yaxis_title=ulbl("time_h"),
-                        height=320,
-                        margin=dict(t=48, b=40),
+                    _fig = figure_cycle_duration_band(
+                        optimistic_h=float(_u_n["cycle_optimistic_h"]),
+                        expected_h=float(_u_n["cycle_expected_h"]),
+                        conservative_h=float(_u_n["cycle_conservative_h"]),
+                        title=f"N scenario — cycle duration band ({ulbl('time_h')})",
                     )
                     st.plotly_chart(_fig, use_container_width=True, key="cycle_unc_band_bar")
+                    _cu_charts = computed.get("cycle_uncertainty_charts") or {}
+                    _sc_band = _cu_charts.get("scenario_cycle_band")
+                    if _cu_charts.get("enabled") and _sc_band and len(_sc_band.get("scenarios") or []) > 1:
+                        _fig_sc = figure_scenario_cycle_bands(_sc_band)
+                        st.plotly_chart(
+                            _fig_sc,
+                            use_container_width=True,
+                            key="cycle_unc_scenario_bands",
+                        )
                     _plot = _dec.get("plot") or {}
                     _labels = _plot.get("driver_labels") or []
                     _d_opt = _plot.get("delta_optimistic_h") or []
@@ -397,6 +418,42 @@ def render_tab_filtration(inputs: dict, computed: dict):
                         )
                 except ImportError:
                     pass
+
+    with st.expander("Monte Carlo lite — optional cycle sampling (N scenario)", expanded=False):
+        from ui.monte_carlo_controls import render_monte_carlo_lite_controls
+
+        render_monte_carlo_lite_controls()
+        _mc = computed.get("monte_carlo_cycle") or {}
+        if not st.session_state.get("mc_lite_enabled"):
+            st.info("Enable the checkbox above, then **Apply** in the input column to run samples.")
+        elif not _mc.get("enabled"):
+            st.warning(
+                _mc.get("reason", "Sampling did not complete — check hydraulics and try **Apply** again.")
+            )
+        else:
+            st.caption(_mc.get("note", ""))
+            pct = _mc.get("percentiles_h") or {}
+            c1, c2, c3, c4 = st.columns(4)
+            c1.metric(f"P10 ({ulbl('time_h')})", fmt(pct.get("p10"), "time_h", 1))
+            c2.metric(f"P50 ({ulbl('time_h')})", fmt(pct.get("p50"), "time_h", 1))
+            c3.metric(f"P90 ({ulbl('time_h')})", fmt(pct.get("p90"), "time_h", 1))
+            c4.metric("Samples", f"{_mc.get('n_samples_finite', 0)} / {_mc.get('n_samples_requested', 0)}")
+            det = _mc.get("deterministic_envelope_h") or {}
+            st.caption(
+                f"Deterministic envelope — optimistic {fmt(det.get('optimistic'), 'time_h', 1)} · "
+                f"expected {fmt(det.get('expected'), 'time_h', 1)} · "
+                f"conservative {fmt(det.get('conservative'), 'time_h', 1)}"
+            )
+            try:
+                _fig_mc = figure_cycle_duration_histogram(_mc)
+                if _fig_mc is not None:
+                    st.plotly_chart(
+                        _fig_mc,
+                        use_container_width=True,
+                        key="monte_carlo_cycle_hist",
+                    )
+            except ImportError:
+                st.info("Install **plotly** for the Monte Carlo histogram.")
 
     _op_env = computed.get("operating_envelope") or {}
     if _op_env.get("enabled"):

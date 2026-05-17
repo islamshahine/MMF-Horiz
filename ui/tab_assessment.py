@@ -276,6 +276,14 @@ def render_tab_assessment(inputs: dict, computed: dict):
 
         render_design_targets_panel(inputs, computed)
 
+    from ui.digital_twin_panel import render_digital_twin_panel
+
+    render_digital_twin_panel(inputs, computed)
+
+    from ui.equipment_tag_panel import render_equipment_tag_panel
+
+    render_equipment_tag_panel(computed)
+
     st.divider()
 
     # ── Sensitivity / Tornado Analysis ───────────────────────────────────────

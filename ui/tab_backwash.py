@@ -13,8 +13,6 @@ from ui.helpers import (
     cycle_matrix_temp_title,
     cycle_matrix_tss_row_title,
     backwash_sequence_steps_display_df,
-    bw_timeline_stagger_label,
-    bw_timeline_schedule_summary_html,
     render_metric_explain_panel,
     fmt_si_range,
 )
@@ -300,145 +298,9 @@ def render_tab_backwash(inputs: dict, computed: dict):
                 st.markdown("*BW systems required (plant-wide)*")
                 st.dataframe(pd.DataFrame(sim_rows).set_index("Feed TSS"), use_container_width=True)
 
-    with st.expander("5 · Filter duty timeline (multi-day schematic)", expanded=False):
-        _sm = bw_timeline.get("stagger_model", "—")
-        _ktr = bw_timeline.get("bw_trains")
-        _ktr_s = str(_ktr) if _ktr is not None else "—"
-        _sd = bw_timeline.get("sim_demand")
-        _sd_s = f"{_sd:.2f}" if isinstance(_sd, (int, float)) else "—"
-        _hdays = int(bw_timeline.get("horizon_days") or max(1, round(float(bw_timeline.get("horizon_h", 24)) / 24)))
-        st.caption(
-            f"**Horizon:** {_hdays} day(s) · **Stagger:** {bw_timeline_stagger_label(_sm)} · "
-            f"**BW trains required** (rated N, design temperature, average TSS): **{_ktr_s}** · "
-            f"**Concurrent demand index:** **{_sd_s}**.  "
-            "Green = operating; red = full backwash sequence. "
-            "**Feasibility-train** mode spaces starts by **Δt_bw ÷ BW trains** (matches section 4). "
-            "**Optimized trains** adjusts start times to reduce peak overlap — *scheduling aid only*, not plant DCS logic. "
-            "**Uniform** is a smooth legacy comparison."
-        )
-        st.markdown(bw_timeline_schedule_summary_html(bw_timeline), unsafe_allow_html=True)
-        render_metric_explain_panel(
-            inputs,
-            computed,
-            ["bw_trains", "peak_concurrent_bw"],
-            title="How scheduling numbers are built",
-        )
-        _opt = bw_timeline.get("optimizer") or {}
-        if _sm == "optimized_trains" and _opt.get("stream_aware"):
-            _psp = _opt.get("per_stream_peak") or []
-            st.caption(
-                f"Stream-aware optimisation ({_opt.get('n_streams', '—')} streams) — "
-                f"per-stream peaks: {', '.join(str(p) for p in _psp)}."
-            )
-        if _sm == "feasibility_trains":
-            st.caption(
-                "Feasibility spacing keeps BW starts **Δt_bw ÷ BW trains** apart — "
-                "switch sidebar to **Optimized trains** to try lowering peak overlap."
-            )
-        _hge = bw_timeline.get("hours_operating_ge_design_n_h")
-        _heq = bw_timeline.get("hours_operating_eq_design_n_h")
-        _hgt = bw_timeline.get("hours_operating_gt_design_n_h")
-        _hn1 = bw_timeline.get("hours_operating_eq_n_minus_1_h")
-        _hlt = bw_timeline.get("hours_operating_below_n_minus_1_h")
-        _ndes = bw_timeline.get("n_design_online_total")
-        _nphys = bw_timeline.get("n_physical_timeline")
-        _horz = float(bw_timeline.get("horizon_h", 24.0))
-        if isinstance(_hge, (int, float)) and _ndes is not None:
-            _n1 = float(_hn1) if isinstance(_hn1, (int, float)) else 0.0
-            _lt = float(_hlt) if isinstance(_hlt, (int, float)) else 0.0
-            _eq = float(_heq) if isinstance(_heq, (int, float)) else float(_hge)
-            _gt = float(_hgt) if isinstance(_hgt, (int, float)) else 0.0
-            _nper = max(1, n_filters - hydraulic_assist_bw)
-            _phys_txt = (
-                f"{_nphys} physical" if isinstance(_nphys, int) else f"{streams}×{n_filters} physical"
-            )
-            _duty_rows = [
-                ("At N (all rated online)", f"{_eq:.1f} h"),
-                ("At N−1 (one in BW)", f"{_n1:.1f} h"),
-                ("Below N−1", f"{_lt:.1f} h"),
-            ]
-            if hydraulic_assist_bw > 0:
-                _duty_rows.append(("N+1 margin", f"{_gt:.1f} h"))
-            _duty_body = "".join(
-                f"<tr><td>{lbl}</td><td style='text-align:right'><b>{val}</b></td></tr>"
-                for lbl, val in _duty_rows
-            )
-            st.markdown(
-                f"<p style='font-size:0.78rem;margin:0.25rem 0 0.15rem 0'>"
-                f"<b>Plant-wide duty</b> — {_phys_txt}, {_hdays} d / {_horz:.0f} h · "
-                f"design N = {_nper}/stream × {streams} → {_ndes} plant-wide.</p>"
-                f"<table style='width:100%;font-size:0.78rem;line-height:1.45;border-collapse:collapse;'>"
-                f"{_duty_body}</table>",
-                unsafe_allow_html=True,
-            )
-        _tl = bw_timeline
-        _frows = _tl.get("filters") or []
-        if not _frows:
-            st.info("No filter rows for timeline (check filter count).")
-        else:
-            try:
-                import plotly.graph_objects as go
-            except ImportError:
-                st.warning("Plotly is not installed — cannot render the duty chart.")
-                _frows = []
-            else:
-                fig = go.Figure()
-                colors = {"operate": "#27ae60", "bw": "#c0392b"}
-                legend_seen: set[str] = set()
-                for row in _frows:
-                    fid = int(row["filter_index"])
-                    y = f"Filter {fid}"
-                    for s in row["segments"]:
-                        stt = str(s["state"])
-                        t0 = float(s["t0"])
-                        t1 = float(s["t1"])
-                        dur = t1 - t0
-                        if dur <= 1e-9:
-                            continue
-                        leg = "Backwash" if stt == "bw" else "Operate / online"
-                        show = leg not in legend_seen
-                        legend_seen.add(leg)
-                        fig.add_trace(
-                            go.Bar(
-                                orientation="h",
-                                y=[y],
-                                x=[dur],
-                                base=t0,
-                                name=leg,
-                                marker_color=colors.get(stt, "#7f8c8d"),
-                                legendgroup=leg,
-                                showlegend=show,
-                                customdata=[[t1]],
-                                hovertemplate=(
-                                    "%{y}<br>%{base:.2f}–%{customdata[0]:.2f} h<br>"
-                                    + leg + "<extra></extra>"
-                                ),
-                            )
-                        )
-                _hor = float(_tl.get("horizon_h", 24.0))
-                fig.update_layout(
-                    barmode="overlay",
-                    height=max(360, min(920, 26 * len(_frows))),
-                    margin=dict(l=72, r=24, t=48, b=48),
-                    xaxis_title="Time (h)",
-                    title=f"Filter duty — {_hdays} d horizon",
-                    template="plotly_white",
-                )
-                fig.update_xaxes(range=[0.0, _hor])
-                st.plotly_chart(fig, use_container_width=True, key="bw_timeline_gantt")
-                _cap_n = _tl.get("hours_operating_eq_design_n_h")
-                _cap_n1 = _tl.get("hours_operating_eq_n_minus_1_h")
-                _duty_line = ""
-                if isinstance(_cap_n, (int, float)) and isinstance(_cap_n1, (int, float)):
-                    _duty_line = (
-                        f" **Duty (plant-wide):** ≈ **{float(_cap_n):.1f}** h at **N** · "
-                        f"≈ **{float(_cap_n1):.1f}** h at **N−1** (not in BW count vs design N)."
-                    )
-                st.caption(
-                    f"Filtration cycle (design TSS) ≈ **{_tl.get('t_cycle_h', '—')}** h · "
-                    f"BW duration **{_tl.get('bw_duration_h', '—')}** h · "
-                    f"repeat period **{_tl.get('period_h', '—')}** h.{_duty_line}  {_tl.get('note', '')}"
-                )
+    from ui.bw_duty_timeline_section import render_bw_duty_timeline_section
+
+    bw_timeline = render_bw_duty_timeline_section(inputs, computed, bw_timeline=bw_timeline)
 
     with st.expander("6 · Underdrain / nozzle plate (1D screening)", expanded=False):
         st.caption(

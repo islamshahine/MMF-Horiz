@@ -29,7 +29,7 @@ def test_brick_layout_fills_chord_not_centerline_only():
         h_dish_m=1.375,
         bore_d_mm=50.0,
     )
-    assert lay["layout_mode"] == "brick_rows"
+    assert lay["layout_mode"] in ("brick_rows", "brick_rows_full_span", "triangular_stagger")
     assert lay["n_rows_across_chord"] >= 5
     ys = {h[1] for h in lay["holes_xy"]}
     assert len(ys) >= 5
@@ -52,8 +52,39 @@ def test_brick_pitch_from_plate_area():
         area_one_dish_m2=geo["area_one_dish_m2"],
         bore_d_mm=50.0,
     )
-    p_expect = max(0.075, math.sqrt(geo["area_total_m2"] / 500))
-    assert abs(lay["pitch_trans_m"] - p_expect) < 0.02
+    a_cell = geo["area_total_m2"] / 500
+    p_tri = math.sqrt(a_cell / (math.sqrt(3) / 2))
+    d_m = 50.0 / 1000.0
+    p_min = max(2.5 * d_m, d_m + 0.05)
+    assert lay["layout_mode"] == "triangular_stagger"
+    # Pitch may shrink below ideal when boundary clip limits candidate count.
+    assert p_min - 1e-6 <= lay["pitch_long_m"] <= p_tri + 1e-6
+    assert lay["pitch_trans_m"] > 0
+    assert lay["pitch_trans_m"] < lay["pitch_long_m"]
+
+
+def test_brick_layout_spans_full_plate_axially():
+    geo = nozzle_plate_area(1.0, 5.5, 19.55, 1.375)
+    h_d = 1.375
+    total = 19.55 + 2 * h_d
+    lay = staggered_plate_layout(
+        cyl_len_m=total,
+        total_length_m=total,
+        straight_cyl_len_m=19.55,
+        h_dish_m=h_d,
+        vessel_id_m=5.5,
+        nozzle_plate_h_m=1.0,
+        n_holes_total=1200,
+        chord_m=geo["chord_m"],
+        plate_area_total_m2=geo["area_total_m2"],
+        area_cyl_m2=geo["area_cyl_m2"],
+        area_one_dish_m2=geo["area_one_dish_m2"],
+        bore_d_mm=50.0,
+    )
+    xs = [h[0] for h in lay["holes_xy"]]
+    assert xs
+    assert min(xs) <= total * 0.12
+    assert max(xs) >= total * 0.88
 
 
 def test_layout_places_holes_in_dish_heads():
@@ -111,7 +142,7 @@ def test_nozzle_plate_active_with_bw_flow():
         h_dish_m=1.375,
     )
     assert out["active"] is True
-    assert out["layout"] == "brick_rows"
+    assert out["layout"] in ("brick_rows", "brick_rows_full_span", "triangular_stagger")
     holes = out.get("hole_network") or []
     assert len(holes) >= 100
     ys = {round(h["y_plot_m"], 3) for h in holes}
@@ -141,8 +172,8 @@ def test_compute_all_includes_collector_nozzle_plate():
     c = compute_all(inp)
     npb = c.get("collector_nozzle_plate") or {}
     assert npb.get("active") is True
-    assert npb.get("layout") == "brick_rows"
-    assert int(npb.get("layout_revision", 0) or 0) >= 3
+    assert npb.get("layout") in ("brick_rows", "brick_rows_full_span", "triangular_stagger")
+    assert int(npb.get("layout_revision", 0) or 0) >= 6
     assert int(npb.get("n_rows_across_chord", 0) or 0) >= 3
     holes = npb.get("hole_network") or []
     ys = {round(h.get("y_plot_m", 0), 2) for h in holes}

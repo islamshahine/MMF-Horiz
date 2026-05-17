@@ -145,8 +145,8 @@ _FEED_MAT_OPTS = ("Cast iron", "Carbon steel", "SS316", "Duplex", "Super duplex"
 _FEED_SEAL_OPTS = ("Packing", "Single mechanical seal", "Dual seal / API Plan 53")
 
 BLOWER_MODE_LABELS: dict[str, str] = {
-    "single_duty": "1 × duty online (redundant units idle)",
-    "twin_50_iso": "Twin centrifugal — both online at ~50 % flow each (rough Q³)",
+    "single_duty": "Annual kWh: 1 × duty online (spares idle)",
+    "twin_50_iso": "Annual kWh: all installed online — equal flow split (rough Q³)",
 }
 
 
@@ -407,7 +407,11 @@ def render_tab_pump_costing(inputs: dict, computed: dict):
                 max_value=6,
                 value=int(st.session_state.get("pp_n_blowers", 1)),
                 key="pp_n_blowers",
-                help="CAPEX = n × unit package. Tie to BW hydraulic **trains** where applicable.",
+                help=(
+                    "Installed packages (CAPEX = n × unit). **Map Q-split:** "
+                    "Q_per_machine = Q_plant ÷ this count (e.g. 3 installed → Q/3). "
+                    "**Annual kWh** still follows **operating mode** below."
+                ),
             )
         )
         e1, e2 = st.columns(2)
@@ -428,7 +432,10 @@ def render_tab_pump_costing(inputs: dict, computed: dict):
         )
         st.caption(
             f"Feasibility model: **{n_bw_sys}** BW hydraulic train(s). "
-            "Installed blower count is often **one per train** or **N+1** for large plants."
+            f"**Map Q-split:** **{n_blow}** installed → Q_plant ÷ **{n_blow}** per machine. "
+            f"**Annual kWh** uses operating mode "
+            f"({'all {0} online'.format(n_blow) if blower_mode == 'twin_50_iso' and n_blow >= 2 else '1 duty + spares'}). "
+            "Set count only here — §4c map reads it automatically."
         )
 
     streams = int(auto["streams"])
@@ -615,6 +622,10 @@ def render_tab_pump_costing(inputs: dict, computed: dict):
         st.caption(
             f"**Installed blowers:** {n_blow}  ·  **Operating mode:** {_bm_disp} — {_bm_note}"
         )
+
+    from ui.blower_map_ui import render_blower_map_panel
+
+    render_blower_map_panel(inputs, computed)
 
     # ═══ 4b Air blower RFQ — site & environment (separate manufacturer datasheet) ═
     with st.expander(

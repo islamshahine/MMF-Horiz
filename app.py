@@ -144,36 +144,127 @@ _inputs_for_compute = patch_inputs_collector_header_si(
 )
 
 from ui.compute_cache import _COMPUTE_CACHE_VERSION
-
-computed = compute_all_cached(_inputs_for_compute, _COMPUTE_CACHE_VERSION)
-from engine.design_basis import build_design_basis
-from engine.explainability import build_explainability_index
-from engine.lifecycle_degradation import build_lifecycle_degradation
-from engine.design_targets import build_design_targets_summary, targets_from_inputs
-from engine.operating_envelope import build_operating_envelope
-
-computed["operating_envelope"] = build_operating_envelope(_inputs_for_compute, computed)
-from engine.spatial_distribution import (
-    build_spatial_distribution,
-    enrich_hole_network_with_spatial,
+from ui.bw_timeline_cache import (
+    inputs_for_compute_cache,
+    merge_bw_duty_applied,
+    refresh_bw_timeline_in_computed,
+    _repair_bw_timeline_slot,
 )
 
-computed["spatial_distribution"] = build_spatial_distribution(_inputs_for_compute, computed)
-_sp = computed.get("spatial_distribution") or {}
-if _sp.get("enabled"):
-    _np_plate = computed.get("collector_nozzle_plate")
-    if isinstance(_np_plate, dict) and _np_plate.get("hole_network"):
-        _np_plate["hole_network"] = enrich_hole_network_with_spatial(
-            list(_np_plate["hole_network"]), _sp,
+_duty_only = bool(st.session_state.pop("_bw_duty_only_rerun", False))
+st.session_state.pop("_bw_duty_fast_ui", None)  # legacy flag — no longer hides tabs
+_last = st.session_state.get("mmf_last_computed")
+
+if _duty_only and isinstance(_last, dict) and _last:
+    computed = dict(_last)
+    _repair_bw_timeline_slot(computed)
+    _merged = merge_bw_duty_applied(_inputs_for_compute)
+    refresh_bw_timeline_in_computed(_merged, computed)
+elif _duty_only:
+    st.warning(
+        "No saved plant model in this session — running a **full** calculation once. "
+        "After that, **Update duty chart** only refreshes the timeline (fast)."
+    )
+    computed = compute_all_cached(
+        inputs_for_compute_cache(_inputs_for_compute),
+        _COMPUTE_CACHE_VERSION,
+    )
+else:
+    computed = compute_all_cached(
+        inputs_for_compute_cache(_inputs_for_compute),
+        _COMPUTE_CACHE_VERSION,
+    )
+if not st.session_state.get("_bw_duty_applied"):
+    st.session_state["_bw_duty_applied"] = {
+        "bw_schedule_horizon_days": 7,
+        "bw_timeline_stagger": "feasibility_trains",
+        "bw_peak_tariff_start_h": 14.0,
+        "bw_peak_tariff_end_h": 22.0,
+        "bw_tariff_peak_multiplier": 1.5,
+        "bw_maintenance_blackout_enabled": False,
+        "bw_maintenance_blackout_t0_h": 0.0,
+        "bw_maintenance_blackout_t1_h": 0.0,
+    }
+
+if not _duty_only:
+    from engine.design_basis import build_design_basis
+    from engine.explainability import build_explainability_index
+    from engine.lifecycle_degradation import build_lifecycle_degradation
+    from engine.design_targets import build_design_targets_summary, targets_from_inputs
+    from engine.operating_envelope import build_operating_envelope
+
+    computed["operating_envelope"] = build_operating_envelope(_inputs_for_compute, computed)
+    from engine.spatial_distribution import (
+        build_spatial_distribution,
+        enrich_hole_network_with_spatial,
+    )
+
+    computed["spatial_distribution"] = build_spatial_distribution(_inputs_for_compute, computed)
+    _sp = computed.get("spatial_distribution") or {}
+    if _sp.get("enabled"):
+        _np_plate = computed.get("collector_nozzle_plate")
+        if isinstance(_np_plate, dict) and _np_plate.get("hole_network"):
+            _np_plate["hole_network"] = enrich_hole_network_with_spatial(
+                list(_np_plate["hole_network"]), _sp,
+            )
+    computed["design_targets"] = build_design_targets_summary(
+        _inputs_for_compute,
+        computed,
+        targets=targets_from_inputs(_inputs_for_compute),
+    )
+    from engine.blower_maps import build_blower_map_analysis
+
+    _bm_in = dict(_inputs_for_compute)
+    _bm_in["pp_n_blowers"] = int(st.session_state.get("pp_n_blowers", _bm_in.get("pp_n_blowers", 1)) or 1)
+    _bm_in["pp_blower_mode"] = str(
+        st.session_state.get("pp_blower_mode", _bm_in.get("pp_blower_mode", "single_duty"))
+    )
+    _bm_in.setdefault("blower_map_auto_curve", bool(st.session_state.get("blower_map_auto_curve", True)))
+    _bm_in.setdefault(
+        "blower_curve_id",
+        str(st.session_state.get("blower_map_curve_sel", _bm_in.get("blower_curve_id", "oem_vendor_motor"))),
+    )
+    computed["blower_map"] = build_blower_map_analysis(_bm_in, computed)
+    computed["design_basis"] = build_design_basis(_inputs_for_compute, computed)
+    computed["explainability"] = build_explainability_index(_inputs_for_compute, computed)
+    computed["lifecycle_degradation"] = build_lifecycle_degradation(_inputs_for_compute, computed)
+    if st.session_state.get("mc_lite_enabled"):
+        from engine.monte_carlo_lite import build_monte_carlo_cycle_lite
+
+        computed["monte_carlo_cycle"] = build_monte_carlo_cycle_lite(
+            _inputs_for_compute,
+            computed,
+            n_samples=int(st.session_state.get("mc_lite_n_samples", 200) or 200),
+            seed=int(st.session_state.get("mc_lite_seed", 42) or 42),
         )
-computed["design_targets"] = build_design_targets_summary(
-    _inputs_for_compute,
-    computed,
-    targets=targets_from_inputs(_inputs_for_compute),
-)
-computed["design_basis"] = build_design_basis(_inputs_for_compute, computed)
-computed["explainability"] = build_explainability_index(_inputs_for_compute, computed)
-computed["lifecycle_degradation"] = build_lifecycle_degradation(_inputs_for_compute, computed)
+    else:
+        computed["monte_carlo_cycle"] = {"enabled": False}
+    _cfd_csv = st.session_state.get("mmf_cfd_import_text")
+    if _cfd_csv:
+        from engine.cfd_import import build_cfd_import_comparison
+
+        computed["cfd_import_comparison"] = build_cfd_import_comparison(_cfd_csv, computed)
+    else:
+        computed["cfd_import_comparison"] = {"enabled": False}
+    _ops_telemetry = st.session_state.get("mmf_ops_telemetry_text")
+    if _ops_telemetry:
+        from engine.digital_twin_lite import build_digital_twin_lite
+
+        computed["digital_twin_lite"] = build_digital_twin_lite(
+            _ops_telemetry, _inputs_for_compute, computed,
+        )
+    else:
+        computed["digital_twin_lite"] = {"enabled": False}
+    _tag_csv = st.session_state.get("mmf_equipment_tag_text")
+    if _tag_csv:
+        from engine.equipment_tag_import import build_equipment_tag_registry
+
+        computed["equipment_tag_registry"] = build_equipment_tag_registry(
+            _tag_csv, _inputs_for_compute, computed,
+        )
+    else:
+        computed["equipment_tag_registry"] = {"enabled": False}
+
 st.session_state["mmf_last_computed"] = computed
 
 _INTRO_CAPTION = (
@@ -194,8 +285,8 @@ def _render_main_results_stack(
     st.caption(_INTRO_CAPTION)
     render_section_guide_row()
     render_compute_validation_banners(computed)
-    (tab_filtration, tab_backwash, tab_mechanical,
-     tab_media, tab_pumps, tab_economics, tab_assessment, tab_report, tab_compare) = st.tabs(
+    (tab_filtration, tab_backwash, tab_mechanical, tab_media, tab_pumps,
+     tab_economics, tab_assessment, tab_report, tab_compare) = st.tabs(
         [
             "💧 Filtration", "🔄 Backwash", "⚙️ Mechanical",
             "🧱 Media", "⚡ Pumps & power", "💰 Economics", "🎯 Assessment", "📄 Report",
@@ -206,28 +297,20 @@ def _render_main_results_stack(
 
     with tab_filtration:
         render_tab_filtration(inputs, computed)
-
     with tab_backwash:
         render_tab_backwash(inputs, computed)
-
     with tab_mechanical:
         render_tab_mechanical(inputs, computed)
-
     with tab_media:
         render_tab_media(inputs, computed)
-
     with tab_pumps:
         render_tab_pump_costing(inputs, computed)
-
     with tab_economics:
         render_tab_economics(inputs, computed)
-
     with tab_assessment:
         render_tab_assessment(inputs, computed)
-
     with tab_report:
         render_tab_report(inputs, computed)
-
     with tab_compare:
         render_tab_compare(inputs, computed)
 

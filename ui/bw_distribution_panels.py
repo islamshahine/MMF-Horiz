@@ -627,6 +627,9 @@ def render_underdrain_panel(computed: dict, inputs: dict) -> None:
                             mime=_mime,
                             key="collector_cfd_download",
                         )
+                from ui.cfd_import_panel import render_cfd_import_panel
+
+                render_cfd_import_panel(computed, key_prefix="bw_cfd_import")
 
 
 def render_collector_design_panel(computed: dict, inputs: dict) -> None:

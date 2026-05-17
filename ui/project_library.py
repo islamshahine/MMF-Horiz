@@ -9,14 +9,17 @@ import pandas as pd
 import streamlit as st
 
 from engine.project_db import (
+    create_case,
     delete_project,
+    diff_revisions,
     init_db,
+    list_cases,
     list_projects,
+    list_revisions,
     load_project,
-    load_snapshot,
-    project_history,
+    load_revision,
     save_project,
-    save_snapshot,
+    save_revision,
     update_project_by_id,
 )
 from engine.project_io import default_filename, engine_inputs_dict, inputs_to_json
@@ -76,7 +79,7 @@ def render_project_library_panel(inputs: dict, computed: dict | None) -> None:
     st.markdown("**Local project library**")
     st.caption(
         "Stores the same payload as a JSON project file (inputs + pump/blower UI state). "
-        "Use **snapshots** to keep dated checkpoints without overwriting the main record."
+        "**Cases** group alternatives; **revisions** are dated checkpoints with a report hash."
     )
     st.text_input("Database file", value=_db_path(), key="mmf_project_db_path")
 
@@ -166,57 +169,133 @@ def render_project_library_panel(inputs: dict, computed: dict | None) -> None:
                 st.rerun()
 
         st.divider()
-        st.markdown("##### Snapshot history")
-        hist = project_history(db, pid)
+        st.markdown("##### Cases & revisions")
+        cases = list_cases(db, pid)
+        case_labels = [
+            f"{c['case_name']}{' (default)' if c.get('is_default') else ''}"
+            for c in cases
+        ]
+        case_pick = st.selectbox(
+            "Case",
+            range(len(cases)),
+            format_func=lambda i: case_labels[i],
+            key="mmf_lib_case_pick",
+        )
+        case_row = cases[int(case_pick)]
+        case_id = int(case_row["id"])
+
+        with st.expander("New case", expanded=False):
+            new_case_name = st.text_input("Case name", value="", key="mmf_lib_new_case_name")
+            if st.button("Create case", key="mmf_lib_new_case_btn"):
+                try:
+                    create_case(db, pid, new_case_name.strip())
+                except (ValueError, KeyError) as ex:
+                    st.error(str(ex))
+                else:
+                    st.session_state["_mmf_project_toast"] = f"Case **{new_case_name.strip()}** created."
+                    st.rerun()
+
+        hist = list_revisions(db, case_id, metadata_only=True)
         if not hist:
-            st.caption("No snapshots yet — save one from the current session below.")
+            st.caption("No revisions yet — save one from the current session below.")
         else:
-            snap_labels = [
-                f"{h['created_at'][:16]} · {h['label'] or '—'} · {h['notes'] or ''}"
+            rev_labels = [
+                f"{h['created_at'][:16]} · {h.get('revision_code') or '—'} · "
+                f"{h['label'] or '—'} · hash {h.get('report_hash', '')[:8]}"
                 for h in hist
             ]
-            snap_pick = st.selectbox(
-                "Snapshot",
+            rev_pick = st.selectbox(
+                "Revision",
                 range(len(hist)),
-                format_func=lambda i: snap_labels[i],
-                key="mmf_lib_snap_pick",
+                format_func=lambda i: rev_labels[i],
+                key="mmf_lib_rev_pick",
             )
-            sh = hist[int(snap_pick)]
-            sc1, sc2 = st.columns(2)
+            sh = hist[int(rev_pick)]
+            sc1, sc2, sc3 = st.columns(3)
             with sc1:
-                if st.button("Restore snapshot", use_container_width=True, key="mmf_lib_snap_load"):
-                    snap = load_snapshot(db, int(sh["id"]))
-                    doc = snap.get("document")
+                if st.button("Open revision", use_container_width=True, key="mmf_lib_rev_load"):
+                    rev = load_revision(db, int(sh["id"]))
+                    doc = rev.get("document")
                     if doc is None:
-                        st.error("Snapshot has no inputs.")
+                        st.error("Revision has no inputs.")
                     else:
                         _queue_open_document(
                             doc,
-                            toast=f"Restored snapshot **{sh.get('label') or sh['id']}**.",
+                            toast=f"Opened revision **{sh.get('label') or sh['id']}**.",
                         )
             with sc2:
-                st.caption(
-                    f"{'Inputs' if sh['has_inputs'] else '—'} · "
-                    f"{'Computed' if sh['has_computed'] else '—'}"
+                diff_pick = st.selectbox(
+                    "Diff vs",
+                    range(len(hist)),
+                    format_func=lambda i: rev_labels[i],
+                    key="mmf_lib_rev_diff_pick",
+                    index=min(1, len(hist) - 1),
+                )
+                if st.button("Show diff", use_container_width=True, key="mmf_lib_rev_diff"):
+                    if int(diff_pick) == int(rev_pick):
+                        st.warning("Pick a different revision to compare.")
+                    else:
+                        try:
+                            d = diff_revisions(
+                                db, int(sh["id"]), int(hist[int(diff_pick)]["id"]),
+                            )
+                            st.session_state["mmf_lib_diff_rows"] = d["rows"]
+                            st.session_state["mmf_lib_diff_summary"] = d["summary"]
+                        except (ValueError, KeyError) as ex:
+                            st.error(str(ex))
+            with sc3:
+                rev_full = load_revision(db, int(sh["id"]))
+                doc = rev_full.get("document") or {}
+                ui_snap = doc.get("_ui_session") if isinstance(doc.get("_ui_session"), dict) else None
+                rev_json = inputs_to_json(
+                    engine_inputs_dict(doc) if doc else (rev_full.get("inputs") or {}),
+                    ui_session_overrides=ui_snap,
+                )
+                st.download_button(
+                    "Export revision JSON",
+                    data=rev_json,
+                    file_name=default_filename(
+                        sel["display_name"],
+                        f"{sel['doc_number']}-{sh.get('revision_code') or sh['id']}",
+                    ),
+                    mime="application/json",
+                    use_container_width=True,
+                    key="mmf_lib_rev_export",
+                )
+            st.caption(
+                f"Hash `{sh.get('report_hash', '')}` · "
+                f"{'Inputs' if sh['has_inputs'] else '—'} · "
+                f"{'Computed' if sh['has_computed'] else '—'}"
+            )
+            diff_rows = st.session_state.get("mmf_lib_diff_rows")
+            if diff_rows:
+                st.caption(st.session_state.get("mmf_lib_diff_summary", ""))
+                st.dataframe(
+                    pd.DataFrame(diff_rows)[["key", "value_a", "value_b"]],
+                    use_container_width=True,
+                    hide_index=True,
                 )
 
-        snap_label = st.text_input(
-            "Snapshot label",
+        rev_label = st.text_input(
+            "Revision label",
             value=(f"Rev {inputs.get('revision', '')}".strip() or "Checkpoint"),
             key="mmf_lib_snap_label",
         )
-        if st.button("Save snapshot (current session)", key="mmf_lib_snap_save", use_container_width=True):
+        if st.button("Save revision (current session)", key="mmf_lib_snap_save", use_container_width=True):
             ui = collect_ui_session_persist_dict()
-            save_snapshot(
+            save_revision(
                 db,
-                pid,
+                case_id,
                 inputs=inputs,
                 computed=computed,
-                label=snap_label.strip() or "Snapshot",
+                label=rev_label.strip() or "Revision",
                 notes=notes.strip(),
+                revision_code=str(inputs.get("revision") or ""),
                 ui_session_overrides=ui,
             )
-            st.session_state["_mmf_project_toast"] = f"Snapshot saved for **{sel['project_key']}**."
+            st.session_state["_mmf_project_toast"] = (
+                f"Revision saved for **{sel['project_key']}** / {case_row['case_name']}."
+            )
             st.rerun()
 
     st.divider()

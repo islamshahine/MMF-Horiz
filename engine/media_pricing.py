@@ -20,6 +20,8 @@ _DEFAULT_USD_PER_M3: dict[str, float] = {
 REGION_FACTOR: dict[str, float] = {
     "global": 1.0,
     "gcc": 1.12,
+    "middle_east": 1.11,
+    "egypt": 1.09,
     "western_europe": 1.18,
     "southeast_asia": 0.93,
     "north_america": 1.05,

@@ -1,5 +1,9 @@
 """BW scheduler — phase optimization and multi-day timeline."""
 
+import pytest
+
+pytestmark = pytest.mark.slow
+
 from engine.backwash import filter_bw_timeline_24h, timeline_plant_operating_hours
 from engine.bw_scheduler import (
     build_bw_schedule_assessment,

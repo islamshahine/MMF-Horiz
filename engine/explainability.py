@@ -199,6 +199,18 @@ METRIC_REGISTRY: Dict[str, MetricExplanation] = {
         ),
         "§3.22 Spatial distribution",
     ),
+    "blower_map_delta": MetricExplanation(
+        "blower_map_delta",
+        "Blower map vs adiabatic motor (per machine)",
+        "Map and adiabatic at Q_plant/n_on_duty — fleet totals in motor_kw_fleet",
+        (
+            MetricContributor("Map / machine", "computed.blower_map.curve_map.motor_kw_per_machine", "kW"),
+            MetricContributor("Adiabatic / machine", "computed.blower_map.adiabatic.motor_kw_per_machine", "kW"),
+            MetricContributor("Δ % / machine", "computed.blower_map.delta_map_vs_adiabatic_motor_pct", "%"),
+            MetricContributor("VFD / machine", "computed.blower_map.vfd.motor_kw_per_machine", "kW"),
+        ),
+        "§3.25 Blower performance maps",
+    ),
     "collector_flow_imbalance": MetricExplanation(
         "collector_flow_imbalance",
         "Collector flow imbalance",
