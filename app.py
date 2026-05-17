@@ -200,7 +200,12 @@ if not _duty_only:
         enrich_hole_network_with_spatial,
     )
 
-    computed["spatial_distribution"] = build_spatial_distribution(_inputs_for_compute, computed)
+    computed["spatial_distribution"] = build_spatial_distribution(
+        _inputs_for_compute, computed, flow_basis="backwash",
+    )
+    computed["spatial_distribution_filtration"] = build_spatial_distribution(
+        _inputs_for_compute, computed, flow_basis="filtration",
+    )
     _sp = computed.get("spatial_distribution") or {}
     if _sp.get("enabled"):
         _np_plate = computed.get("collector_nozzle_plate")

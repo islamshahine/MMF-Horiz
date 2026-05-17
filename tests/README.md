@@ -53,7 +53,7 @@ tests/
   test_equipment_tag_import.py   C3 lite equipment tag CSV import
   test_operating_envelope.py     LV × EBCT feasibility grid (Phase 4 A2)
   test_design_targets.py         Design-to-target caps + grid search (Phase 4 A3)
-  test_spatial_distribution.py   Voronoi nozzle loading map (Phase 4 A4)
+  test_spatial_distribution.py   Voronoi nozzle loading map (BW + filtration Q basis)
   test_blower_maps.py            Blower Q–ΔP maps, VFD affinity, vs adiabatic (Phase 4 B1)
   test_blower_oem_catalog.py     OEM ROBOX/GRBS motor kW catalog (realistic nameplate)
   test_uncertainty.py            Cycle uncertainty envelopes

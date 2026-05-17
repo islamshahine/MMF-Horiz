@@ -199,6 +199,34 @@ METRIC_REGISTRY: Dict[str, MetricExplanation] = {
         ),
         "§3.22 Spatial distribution",
     ),
+    "spatial_uniformity_filtration": MetricExplanation(
+        "spatial_uniformity_filtration",
+        "Nozzle plate uniformity — filtration service",
+        "Same Voronoi lumped split as BW map; Q_basis = q_per_filter",
+        (
+            MetricContributor(
+                "Uniformity",
+                "computed.spatial_distribution_filtration.hydraulic_uniformity_index",
+                "0–1",
+            ),
+            MetricContributor(
+                "Max loading",
+                "computed.spatial_distribution_filtration.max_loading_factor",
+                "−",
+            ),
+            MetricContributor(
+                "Q basis",
+                "computed.spatial_distribution_filtration.q_basis_m3h",
+                "m³/h",
+            ),
+            MetricContributor(
+                "Method",
+                "computed.spatial_distribution_filtration.method",
+                "id",
+            ),
+        ),
+        "§3.22 Spatial distribution (filtration)",
+    ),
     "blower_map_delta": MetricExplanation(
         "blower_map_delta",
         "Blower map vs adiabatic motor (per machine)",

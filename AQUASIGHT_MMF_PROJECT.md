@@ -532,7 +532,7 @@ Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-targe
 |----------|------|----------------|
 | **P5.2** | Duty-chart speed | **Done (fast path)** — `_duty_fast` renders Backwash §5 timeline only; post-hooks already skipped on duty-only rerun |
 | **P5.3** | Nozzle QA | Regression at ρ = 40, 50, 60 /m²; axial coverage ≥95% |
-| **P5.4** | Filtration spatial map | Reuse `spatial_distribution.py` on service flow (optional) |
+| **P5.4** | Filtration spatial map | **Done** — `computed["spatial_distribution_filtration"]`; Filtration tab expander; Backwash map unchanged |
 | **Docs** | Keep §3 / §11 / §12 aligned after each PR | Both MD files + `tests/README.md` |
 
 #### G.3 Medium-term backlog (non-blocking)
@@ -550,7 +550,7 @@ Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-targe
 | Area | Module |
 |------|--------|
 | Nozzle layout | `engine/nozzle_plate_distribution.py`, `engine/collector_nozzle_plate.py` |
-| Spatial map | `engine/spatial_distribution.py`, `ui/collector_design_panel.py` |
+| Spatial map | `engine/spatial_distribution.py`, `ui/spatial_loading_panel.py` (BW + Filtration) |
 | BW duty UX | `ui/bw_timeline_cache.py`, `ui/sidebar.py`, `engine/bw_timeline_build.py` |
 | Cache bust | `ui/compute_cache.py` (`_COMPUTE_CACHE_VERSION`) |
 | Media regions | `engine/media_pricing.py` (`egypt`, `middle_east`) |

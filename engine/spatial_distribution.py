@@ -208,6 +208,10 @@ def build_spatial_distribution(
     if float(np.mean(dead_z)) > 0.25:
         flags.append("elevated_dead_zone_risk")
 
+    assumption_ids = ["ASM-SPATIAL-001", "ASM-SPATIAL-002"]
+    if flow_basis == "filtration":
+        assumption_ids.append("ASM-SPATIAL-003")
+
     return {
         "enabled": True,
         "method": METHOD_ID,
@@ -232,7 +236,7 @@ def build_spatial_distribution(
         "max_loading_factor": round(float(np.max(lf_arr)) if lf_arr.size else 1.0, 4),
         "min_loading_factor": round(float(np.min(lf_arr)) if lf_arr.size else 1.0, 4),
         "advisory_flags": flags,
-        "assumption_ids": ["ASM-SPATIAL-001", "ASM-SPATIAL-002"],
+        "assumption_ids": assumption_ids,
         "note": (
             "2D plan Voronoi (grid) service areas; lumped Q split. "
             "Not RTD or media channeling model."

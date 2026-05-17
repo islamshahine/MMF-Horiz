@@ -19,6 +19,7 @@ from ui.filtration_uncertainty_charts import (
     figure_scenario_cycle_bands,
 )
 from ui.monte_carlo_charts import figure_cycle_duration_histogram
+from ui.spatial_loading_panel import render_spatial_loading_panel
 
 
 def render_tab_filtration(inputs: dict, computed: dict):
@@ -251,6 +252,27 @@ def render_tab_filtration(inputs: dict, computed: dict):
             delta=fmt(bw_dp["dp_dirty_mwc"], "pressure_mwc", 3),
             delta_color="off",
             help=metric_explain_help("dp_dirty", inputs, computed) or None,
+        )
+
+    _np_plate = computed.get("collector_nozzle_plate") or {}
+    _sp_filt = computed.get("spatial_distribution_filtration") or {}
+    if _sp_filt.get("enabled") and _np_plate.get("active"):
+        render_metric_explain_panel(
+            inputs,
+            computed,
+            ["spatial_uniformity_filtration"],
+            title="Nozzle plate uniformity — filtration service",
+        )
+        render_spatial_loading_panel(
+            _sp_filt,
+            _np_plate,
+            chart_key="spatial_loading_heatmap_filtration",
+            phase_label="filtration",
+            expanded=False,
+        )
+    elif _np_plate.get("active") and not _sp_filt.get("enabled"):
+        st.caption(
+            _sp_filt.get("note", "Spatial filtration map unavailable — check nozzle layout.")
         )
 
     with st.expander("Filtration cycle matrix — TSS × temperature", expanded=True):

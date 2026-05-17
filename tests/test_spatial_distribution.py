@@ -27,6 +27,34 @@ def test_build_disabled_without_nozzle_plate():
     assert out["enabled"] is False
 
 
+def test_build_filtration_flow_basis_uses_q_per_filter():
+    holes = [
+        {"station_m": 1.0, "y_plot_m": 0.0, "orifice_d_mm": 50.0},
+        {"station_m": 2.0, "y_plot_m": 0.5, "orifice_d_mm": 50.0},
+        {"station_m": 1.5, "y_plot_m": -0.5, "orifice_d_mm": 50.0},
+    ]
+    computed = {
+        "q_per_filter": 185.5,
+        "collector_nozzle_plate": {
+            "active": True,
+            "hole_network": holes,
+            "field_x_start_m": 0.5,
+            "field_x_end_m": 2.5,
+            "field_y_plot_start_m": -1.0,
+            "field_y_plot_end_m": 1.0,
+            "chord_m": 2.0,
+            "pitch_long_mm": 100.0,
+            "pitch_trans_mm": 100.0,
+        },
+        "bw_hyd": {"q_bw_m3h": 999.0},
+    }
+    sp = build_spatial_distribution({}, computed, flow_basis="filtration")
+    assert sp["enabled"] is True
+    assert sp["flow_basis"] == "filtration"
+    assert sp["q_basis_m3h"] == pytest.approx(185.5, rel=1e-6)
+    assert "ASM-SPATIAL-003" in sp["assumption_ids"]
+
+
 def test_build_from_synthetic_hole_network():
     holes = [
         {

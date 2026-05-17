@@ -153,6 +153,14 @@ def _build_assumptions_catalog(inputs: dict, computed: dict) -> List[dict[str, A
             ),
         },
         {
+            "id": "ASM-SPATIAL-003",
+            "category": "Internals",
+            "text": (
+                "Filtration-phase spatial map: same Voronoi lumped split as BW map but "
+                "Q_basis = q_per_filter (service flow) — screening only, not coupled to Ergun ΔP."
+            ),
+        },
+        {
             "id": "ASM-BLOWER-01",
             "category": "Backwash / energy",
             "text": (

@@ -8,7 +8,7 @@ import streamlit as st
 
 
 # Bump when computed dict shape / collector rules change (invalidates Streamlit LRU cache).
-_COMPUTE_CACHE_VERSION = 27  # triangular nozzle distribution rev 6
+_COMPUTE_CACHE_VERSION = 28  # spatial_distribution_filtration (P5.4)
 
 
 @st.cache_data(show_spinner=True, max_entries=48)

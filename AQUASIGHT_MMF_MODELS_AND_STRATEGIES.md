@@ -492,7 +492,7 @@ Built **after** full `compute_all` in `app.py` (schema **`1.1`**).
 
 ### 3.22 Spatial hydraulic distribution (`engine/spatial_distribution.py`) — **Delivered (Phase 4 A4)**
 
-> **Status (2026-05):** Implemented as **post-compute enrichment** in `app.py` (after `compute_all`), using `collector_nozzle_plate.hole_network` positions from **`staggered_plate_layout`** (triangular engine §3.33). UI: vessel outline on loading map; plot caps only for >12k markers (metrics use all holes).
+> **Status (2026-05-17):** Post-compute in `app.py` after `compute_all`. **BW:** `computed["spatial_distribution"]` (`flow_basis=backwash`, Q = q_bw). **Filtration (P5.4):** `computed["spatial_distribution_filtration"]` (`flow_basis=filtration`, Q = `q_per_filter`). Shared UI: `ui/spatial_loading_panel.py` (Backwash collector panel + Filtration tab). Hole-network CFD enrich still uses BW spatial only.
 
 #### Purpose
 
@@ -964,7 +964,7 @@ Use these prompts with AI or workshops. Each axis is independent — mix and mat
 | Direction | Status | Description |
 |-----------|--------|-------------|
 | **1D collector hydraulics (1A/1B/1B+)** | **Delivered** | `collector_hydraulics.py`, manifold, auto maldistribution, CFD BC export |
-| **Spatial nozzle loading (2D plan)** | **Delivered (A4)** | `spatial_distribution.py`; Backwash nozzle panel heatmap |
+| **Spatial nozzle loading (2D plan)** | **Delivered (A4 + P5.4)** | BW + filtration maps; `spatial_loading_panel.py` |
 | **Biofouling / GAC breakthrough** | **Backlog** | First-principles growth or adsorption curves |
 | **Air scour + blower** | **Delivered** | `auto_expansion`, thermo kW; **B1:** generic maps + VFD affinity vs adiabatic (§3.25) |
 | **BW scheduler** | **v3 delivered (B2)** | `tariff_aware_v3`: peak trains + off-peak tariff + maintenance blackouts; MILP/DCS → C5 |
@@ -1175,7 +1175,7 @@ Statements the platform should *not* overclaim:
 | **P5.1** | Git hygiene — commit/push uncommitted engine/UI/tests | repo root | **Done** — `ad49e3d` on `origin/main` (2026-05-17) |
 | **P5.2** | BW duty chart — duty-only fast UI | `bw_timeline_cache.py`, `app.py` | **Done** — `_duty_fast` skips eight main tabs; renders §5 timeline only |
 | **P5.3** | Triangular nozzle QA at client densities (40–60 /m²) | `nozzle_plate_distribution.py` | **User-validated** sample; add regression cases |
-| **P5.4** | Filtration-phase spatial map | `spatial_distribution.py` | **Backlog** |
+| **P5.4** | Filtration-phase spatial map | `spatial_distribution.py`, `ui/spatial_loading_panel.py`, Filtration tab | **Done** — `spatial_distribution_filtration`; shared Plotly panel |
 | **P5.5** | External media pricing API | `media_pricing.py` | **Backlog** |
 | **P5.6** | C2 full in-app CFD | new solver hook | **Backlog** |
 | **P5.7** | C3 P&ID OCR | — | **Aspirational** |
@@ -1345,7 +1345,7 @@ Use this section as the **single checklist** after the May 2026 nozzle-layout an
 |---|--------|--------|
 | **A** | **Duty-chart performance** | **Fast path shipped** — `_duty_fast` in `app.py` renders §5 timeline only; post-hooks skipped on duty-only rerun. Verify latency on your laptop after **Update duty chart**. |
 | **B** | **Nozzle layout QA** | Add pytest cases at ρ = 40, 50, 60 /m² for a reference plate area; assert axial coverage ≥95%, `layout_mode == triangular_stagger`, `len(hole_network) ≈ N`. |
-| **C** | **Spatial map polish** | Optional: Filtration-tab service-phase map using same `spatial_distribution` engine; document `ASM-SPATIAL-02` if added. |
+| **C** | **Spatial map polish** | **Done (P5.4)** — Filtration tab map via `flow_basis=filtration` → `spatial_distribution_filtration`; `ASM-SPATIAL-003`. |
 | **D** | **Documentation drift** | After each feature: update §3 equation row, §11 Phase table, §12 checklist, `tests/README.md`. |
 
 ### 12.3 Medium term (backlog — do not block release)
