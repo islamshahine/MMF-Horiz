@@ -545,7 +545,7 @@ Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-targe
 | C3 P&ID OCR | Aspirational — tag CSV lite done |
 | C5 DCS / MES export | Backlog — `milp_lite` done |
 | External media pricing API | Backlog — region factors only |
-| Client vs engineer UI mode | Backlog |
+| Client vs engineer UI mode | **Done** — sidebar **UI mode** radio; `ui/ui_profile.py`; hides Compare tab, calibration/MC/collector studies, Assessment Tier-C panels |
 
 #### G.4 Key files (May 2026 sprint)
 

@@ -254,35 +254,38 @@ def render_tab_assessment(inputs: dict, computed: dict):
 
     st.divider()
 
-    with st.expander(
-        "Filter-count study — hydraulics, ranking & apply to sidebar",
-        expanded=False,
-    ):
-        from ui.design_optim_ui import render_design_optimisation_panel
+    from ui.ui_profile import is_engineer_mode
 
-        render_design_optimisation_panel(
-            inputs,
-            n_filters=int(n_filters),
-            velocity_threshold=float(velocity_threshold),
-            hydraulic_assist=int(hydraulic_assist),
-            redundancy=int(redundancy),
-        )
+    if is_engineer_mode():
+        with st.expander(
+            "Filter-count study — hydraulics, ranking & apply to sidebar",
+            expanded=False,
+        ):
+            from ui.design_optim_ui import render_design_optimisation_panel
 
-    with st.expander(
-        "Design to target — ΔP, LCOW, BW flow, CAPEX",
-        expanded=False,
-    ):
-        from ui.design_targets_ui import render_design_targets_panel
+            render_design_optimisation_panel(
+                inputs,
+                n_filters=int(n_filters),
+                velocity_threshold=float(velocity_threshold),
+                hydraulic_assist=int(hydraulic_assist),
+                redundancy=int(redundancy),
+            )
 
-        render_design_targets_panel(inputs, computed)
+        with st.expander(
+            "Design to target — ΔP, LCOW, BW flow, CAPEX",
+            expanded=False,
+        ):
+            from ui.design_targets_ui import render_design_targets_panel
 
-    from ui.digital_twin_panel import render_digital_twin_panel
+            render_design_targets_panel(inputs, computed)
 
-    render_digital_twin_panel(inputs, computed)
+        from ui.digital_twin_panel import render_digital_twin_panel
 
-    from ui.equipment_tag_panel import render_equipment_tag_panel
+        render_digital_twin_panel(inputs, computed)
 
-    render_equipment_tag_panel(computed)
+        from ui.equipment_tag_panel import render_equipment_tag_panel
+
+        render_equipment_tag_panel(computed)
 
     st.divider()
 

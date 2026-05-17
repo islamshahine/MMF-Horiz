@@ -134,6 +134,14 @@ def render_sidebar(
     if unit_system != _prev_units:
         _reconvert_session_units(_prev_units, unit_system)
     st.session_state["_prev_unit_system"] = unit_system
+
+    from ui.ui_profile import (
+        is_engineer_mode,
+        merge_client_sidebar_defaults,
+        render_ui_profile_selector,
+    )
+
+    render_ui_profile_selector()
     st.divider()
     st.caption(
         "**Sidebar = inputs** (what you change before **Apply**). **Main tabs** = **Filtration · Backwash · "
@@ -397,31 +405,35 @@ def render_sidebar(
         with rc2:
             out["head_radio"]  = st.selectbox("Head",  RADIOGRAPHY_OPTIONS, index=2, key="hd_r")
             st.caption(f"E = {JOINT_EFFICIENCY[out['head_radio']]:.2f}")
-        st.markdown("*Thickness overrides* (**0** = use ASME-calculated thickness)")
-        _lbl_ov_sh = f"Shell t override ({unit_label('length_mm', unit_system)})"
-        _def_ov = float(display_value(0.0, "length_mm", unit_system))
-        _stp_ov = float(display_value(1.0, "length_mm", unit_system))
-        out["ov_shell"]     = st.number_input(
-            _lbl_ov_sh,
-            value=_def_ov,
-            step=_stp_ov,
-            key="ov_sh",
-            help=(
-                "0 — use calculated shell thickness from ASME VIII-1. Non-zero — force this thickness "
-                f"({unit_label('length_mm', unit_system)})."
-            ),
-        )
-        _lbl_ov_hd = f"Head t override ({unit_label('length_mm', unit_system)})"
-        out["ov_head"]      = st.number_input(
-            _lbl_ov_hd,
-            value=_def_ov,
-            step=_stp_ov,
-            key="ov_hd",
-            help=(
-                "0 — use calculated head thickness from ASME VIII-1. Non-zero — force this thickness "
-                f"({unit_label('length_mm', unit_system)})."
-            ),
-        )
+        if is_engineer_mode():
+            st.markdown("*Thickness overrides* (**0** = use ASME-calculated thickness)")
+            _lbl_ov_sh = f"Shell t override ({unit_label('length_mm', unit_system)})"
+            _def_ov = float(display_value(0.0, "length_mm", unit_system))
+            _stp_ov = float(display_value(1.0, "length_mm", unit_system))
+            out["ov_shell"]     = st.number_input(
+                _lbl_ov_sh,
+                value=_def_ov,
+                step=_stp_ov,
+                key="ov_sh",
+                help=(
+                    "0 — use calculated shell thickness from ASME VIII-1. Non-zero — force this thickness "
+                    f"({unit_label('length_mm', unit_system)})."
+                ),
+            )
+            _lbl_ov_hd = f"Head t override ({unit_label('length_mm', unit_system)})"
+            out["ov_head"]      = st.number_input(
+                _lbl_ov_hd,
+                value=_def_ov,
+                step=_stp_ov,
+                key="ov_hd",
+                help=(
+                    "0 — use calculated head thickness from ASME VIII-1. Non-zero — force this thickness "
+                    f"({unit_label('length_mm', unit_system)})."
+                ),
+            )
+        else:
+            out["ov_shell"] = 0.0
+            out["ov_head"] = 0.0
         _lbl_sd = f"Steel density ({unit_label('density_kg_m3', unit_system)})"
         _def_sd = display_value(float(STEEL_DENSITY_KG_M3), "density_kg_m3", unit_system)
         out["steel_density"]= st.number_input(_lbl_sd, value=_def_sd, key="steel_density")
@@ -782,83 +794,101 @@ def render_sidebar(
         _stp_sl = display_value(0.1, "loading_kg_m2", unit_system)
         out["solid_loading"]          = st.number_input(_lbl_sl, value=_def_sl, step=_stp_sl, key="solid_loading")
 
-        with st.expander("Monte Carlo lite (optional)", expanded=False):
-            st.caption(
-                "Enable sampling and view the histogram on the **💧 Filtration** tab → "
-                "*Monte Carlo lite — optional cycle sampling*. Press **Apply** after toggling."
-            )
-
-        with st.expander("Calibration, fouling assistant & cake resistance (α)", expanded=False):
-            with st.expander("Advanced — pilot / field calibration factors", expanded=False):
+        if is_engineer_mode():
+            with st.expander("Monte Carlo lite (optional)", expanded=False):
                 st.caption(
-                    "**M_max scale** scales the solids inventory used in ΔP dirty and BW trigger math "
-                    "(not the label value above). **Maldistribution (≥1)** inflates superficial velocity for "
-                    "Ergun + cake (distributor / wall effects). **α factor** scales cake resistance after "
-                    "auto or user α. **TSS capture** is the fraction of feed TSS assumed to deposit for cycle-time "
-                    "estimates. **Expansion scale** adjusts R–Z expanded bed height increment (pilot vs correlation)."
-                )
-                _c1a, _c2a = st.columns(2)
-                with _c1a:
-                    out["solid_loading_scale"] = st.number_input(
-                        "M_max scale (−)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
-                        key="solid_loading_scale",
-                    )
-                    out["use_calculated_maldistribution"] = st.checkbox(
-                        "Link filtration mal factor to 1D underdrain distribution",
-                        value=bool(st.session_state.get("use_calculated_maldistribution", False)),
-                        key="use_calculated_maldistribution",
-                        help=(
-                            "When enabled, **filtration** Ergun / cake use the **1D distribution factor** "
-                            "(max/mean flow) from the 1D screening solve. "
-                            "Your **nozzle plate** is defined in **🧱 Media**; this link is approximate until "
-                            "nozzle-plate hydraulics are added. Not §4 shell BW/air nozzles."
-                        ),
-                    )
-                    out["maldistribution_factor"] = st.number_input(
-                        "Filtration maldistribution factor (≥1) — manual",
-                        value=1.0, min_value=1.0, max_value=2.0, step=0.05,
-                        key="maldistribution_factor",
-                        disabled=bool(out.get("use_calculated_maldistribution")),
-                        help="Plant-wide fouling velocity multiplier. Ignored when linked to 1D underdrain distribution.",
-                    )
-                with _c2a:
-                    out["alpha_calibration_factor"] = st.number_input(
-                        "α calibration factor (−)", value=1.0, min_value=0.3, max_value=3.0, step=0.05,
-                        key="alpha_calibration_factor",
-                    )
-                    out["tss_capture_efficiency"] = st.number_input(
-                        "TSS capture efficiency (0–1)", value=1.0, min_value=0.0, max_value=1.0, step=0.05,
-                        key="tss_capture_efficiency",
-                    )
-                out["expansion_calibration_scale"] = st.number_input(
-                    "BW expansion increment scale (0.5–1.5)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
-                    key="expansion_calibration_scale",
-                    help="Scales only the **expanded height increment** above settled depth per layer (1 = model).",
-                )
-            with st.expander("Fouling assistant — guided workflow (SDI / MFI → M_max)", expanded=False):
-                render_fouling_guided_workflow(
-                    out,
-                    unit_system,
-                    computed=st.session_state.get("mmf_last_computed") or {},
-                    on_apply_solid_loading=_apply_fouling_suggested_solid_loading,
+                    "Enable sampling and view the histogram on the **💧 Filtration** tab → "
+                    "*Monte Carlo lite — optional cycle sampling*. Press **Apply** after toggling."
                 )
 
+        if is_engineer_mode():
+            with st.expander("Calibration, fouling assistant & cake resistance (α)", expanded=False):
+                with st.expander("Advanced — pilot / field calibration factors", expanded=False):
+                    st.caption(
+                        "**M_max scale** scales the solids inventory used in ΔP dirty and BW trigger math "
+                        "(not the label value above). **Maldistribution (≥1)** inflates superficial velocity for "
+                        "Ergun + cake (distributor / wall effects). **α factor** scales cake resistance after "
+                        "auto or user α. **TSS capture** is the fraction of feed TSS assumed to deposit for cycle-time "
+                        "estimates. **Expansion scale** adjusts R–Z expanded bed height increment (pilot vs correlation)."
+                    )
+                    _c1a, _c2a = st.columns(2)
+                    with _c1a:
+                        out["solid_loading_scale"] = st.number_input(
+                            "M_max scale (−)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
+                            key="solid_loading_scale",
+                        )
+                        out["use_calculated_maldistribution"] = st.checkbox(
+                            "Link filtration mal factor to 1D underdrain distribution",
+                            value=bool(st.session_state.get("use_calculated_maldistribution", False)),
+                            key="use_calculated_maldistribution",
+                            help=(
+                                "When enabled, **filtration** Ergun / cake use the **1D distribution factor** "
+                                "(max/mean flow) from the 1D screening solve. "
+                                "Your **nozzle plate** is defined in **🧱 Media**; this link is approximate until "
+                                "nozzle-plate hydraulics are added. Not §4 shell BW/air nozzles."
+                            ),
+                        )
+                        out["maldistribution_factor"] = st.number_input(
+                            "Filtration maldistribution factor (≥1) — manual",
+                            value=1.0, min_value=1.0, max_value=2.0, step=0.05,
+                            key="maldistribution_factor",
+                            disabled=bool(out.get("use_calculated_maldistribution")),
+                            help="Plant-wide fouling velocity multiplier. Ignored when linked to 1D underdrain distribution.",
+                        )
+                    with _c2a:
+                        out["alpha_calibration_factor"] = st.number_input(
+                            "α calibration factor (−)", value=1.0, min_value=0.3, max_value=3.0, step=0.05,
+                            key="alpha_calibration_factor",
+                        )
+                        out["tss_capture_efficiency"] = st.number_input(
+                            "TSS capture efficiency (0–1)", value=1.0, min_value=0.0, max_value=1.0, step=0.05,
+                            key="tss_capture_efficiency",
+                        )
+                    out["expansion_calibration_scale"] = st.number_input(
+                        "BW expansion increment scale (0.5–1.5)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
+                        key="expansion_calibration_scale",
+                        help="Scales only the **expanded height increment** above settled depth per layer (1 = model).",
+                    )
+                with st.expander("Fouling assistant — guided workflow (SDI / MFI → M_max)", expanded=False):
+                    render_fouling_guided_workflow(
+                        out,
+                        unit_system,
+                        computed=st.session_state.get("mmf_last_computed") or {},
+                        on_apply_solid_loading=_apply_fouling_suggested_solid_loading,
+                    )
+
+                _lbl_csd = f"Captured solids density ({unit_label('density_kg_m3', unit_system)})"
+                _def_csd = display_value(1020.0, "density_kg_m3", unit_system)
+                _stp_csd = display_value(10.0, "density_kg_m3", unit_system)
+                out["captured_solids_density"] = st.number_input(
+                    _lbl_csd, value=_def_csd, step=_stp_csd, key="captured_solids_density",
+                )
+                alpha_9 = st.number_input(
+                    "Specific cake resistance α (× 10⁹ m/kg)",
+                    value=0.0, step=5.0, min_value=0.0, key="alpha_res",
+                    help="0 — auto-calibrate α so dirty-bed ΔP matches the BW initiation setpoint at M_max solid loading. "
+                         "Non-zero — fixed α for the Ruth cake model (ΔP tables, filtration cycles).",
+                )
+                out["alpha_specific"] = alpha_9 * 1e9
+                st.caption(
+                    "**0** — auto-calibrate α from the BW ΔP setpoint and **M_max** solid loading. "
+                    "**> 0** — your α (×10⁹ m/kg). "
+                    "*Same pattern:* shell/head thickness **0** = ASME-calculated (Vessel tab); nozzle-plate override **0** = calculated."
+                )
+        else:
+            st.markdown("**Cake resistance (core)**")
             _lbl_csd = f"Captured solids density ({unit_label('density_kg_m3', unit_system)})"
             _def_csd = display_value(1020.0, "density_kg_m3", unit_system)
             _stp_csd = display_value(10.0, "density_kg_m3", unit_system)
-            out["captured_solids_density"]= st.number_input(_lbl_csd, value=_def_csd, step=_stp_csd, key="captured_solids_density")
+            out["captured_solids_density"] = st.number_input(
+                _lbl_csd, value=_def_csd, step=_stp_csd, key="captured_solids_density",
+            )
             alpha_9 = st.number_input(
                 "Specific cake resistance α (× 10⁹ m/kg)",
                 value=0.0, step=5.0, min_value=0.0, key="alpha_res",
-                help="0 — auto-calibrate α so dirty-bed ΔP matches the BW initiation setpoint at M_max solid loading. "
-                     "Non-zero — fixed α for the Ruth cake model (ΔP tables, filtration cycles).",
+                help="0 — auto-calibrate α at M_max solid loading. Non-zero — fixed α for ΔP tables.",
             )
             out["alpha_specific"] = alpha_9 * 1e9
-            st.caption(
-                "**0** — auto-calibrate α from the BW ΔP setpoint and **M_max** solid loading. "
-                "**> 0** — your α (×10⁹ m/kg). "
-                "*Same pattern:* shell/head thickness **0** = ASME-calculated (Vessel tab); nozzle-plate override **0** = calculated."
-            )
 
     # ── Tab 4: BW ─────────────────────────────────────────────────────────
     with bw_tab:
@@ -1389,46 +1419,48 @@ def render_sidebar(
                     disabled=not _custom_cap,
                 )
 
-            st.divider()
-            st.markdown("**Re-optimize after edits**")
-            st.caption(
-                "Run when you change **lateral DN**, **perforation Ø**, **N laterals**, "
-                "**construction**, or **material** (and header ID if not linked to §4). "
-                "The solver picks N × DN × perforation count for the lowest 1D distribution factor; "
-                "it does not change §4 vessel nozzles or a linked header diameter."
-            )
-            _opt_msg = st.session_state.pop("_collector_opt_message", None)
-            if _opt_msg:
-                st.success(_opt_msg)
-            from ui.collector_optim_ui import run_collector_optimization_from_session
+            if is_engineer_mode():
+                st.divider()
+                st.markdown("**Re-optimize after edits**")
+                st.caption(
+                    "Run when you change **lateral DN**, **perforation Ø**, **N laterals**, "
+                    "**construction**, or **material** (and header ID if not linked to §4). "
+                    "The solver picks N × DN × perforation count for the lowest 1D distribution factor; "
+                    "it does not change §4 vessel nozzles or a linked header diameter."
+                )
+                _opt_msg = st.session_state.pop("_collector_opt_message", None)
+                if _opt_msg:
+                    st.success(_opt_msg)
+                from ui.collector_optim_ui import run_collector_optimization_from_session
 
-            st.button(
-                "Run collector optimization solver",
-                key="collector_run_optim_solver",
-                type="primary",
-                help=(
-                    "Uses your current material, diameters, and BW flow. "
-                    "Overwrites N laterals, lateral DN, and perforation count when a better layout is found."
-                ),
-                on_click=run_collector_optimization_from_session,
-            )
+                st.button(
+                    "Run collector optimization solver",
+                    key="collector_run_optim_solver",
+                    type="primary",
+                    help=(
+                        "Uses your current material, diameters, and BW flow. "
+                        "Overwrites N laterals, lateral DN, and perforation count when a better layout is found."
+                    ),
+                    on_click=run_collector_optimization_from_session,
+                )
 
-        with st.expander(
-            "Optional — collector studies (extra runtime)",
-            expanded=False,
-        ):
-            st.caption(
-                "Screening tools on top of the 1D model — not required for a basic BW sizing run."
-            )
-            st.markdown("**Optional — collector flow study (1D)**")
-            from ui.collector_envelope_form import render_collector_bw_envelope_form
+            if is_engineer_mode():
+                with st.expander(
+                    "Optional — collector studies (extra runtime)",
+                    expanded=False,
+                ):
+                    st.caption(
+                        "Screening tools on top of the 1D model — not required for a basic BW sizing run."
+                    )
+                    st.markdown("**Optional — collector flow study (1D)**")
+                    from ui.collector_envelope_form import render_collector_bw_envelope_form
 
-            render_collector_bw_envelope_form()
+                    render_collector_bw_envelope_form()
 
-            st.markdown("**Optional — perforation staging (advisory)**")
-            from ui.collector_staged_form import render_collector_staged_orifice_form
+                    st.markdown("**Optional — perforation staging (advisory)**")
+                    from ui.collector_staged_form import render_collector_staged_orifice_form
 
-            render_collector_staged_orifice_form()
+                    render_collector_staged_orifice_form()
 
     # ── Tab 5: Econ ───────────────────────────────────────────────────────
     with econ_tab:
@@ -1615,6 +1647,8 @@ def render_sidebar(
         out["media_co2"] = _media_co2
 
     merge_feed_hydraulics_into_out(out, unit_system)
+
+    out = merge_client_sidebar_defaults(out)
 
     # ── Convert display-unit inputs back to SI before returning ───────────
     out = convert_inputs(out, unit_system)

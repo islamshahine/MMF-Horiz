@@ -63,6 +63,7 @@ from ui.layout_enhancements import (
     render_readiness_strip,
     render_section_guide_row,
 )
+from ui.ui_profile import init_ui_profile_state, visible_main_tab_labels
 
 _MAIN_TAB_RENDERERS = {
     "💧 Filtration": render_tab_filtration,
@@ -77,6 +78,7 @@ _MAIN_TAB_RENDERERS = {
 }
 
 init_layout_session_state()
+init_ui_profile_state()
 apply_pending_tab_jumps()
 inject_layout_css()
 
@@ -293,7 +295,9 @@ if not _duty_only and not _envelope_only and not _staged_only:
     computed["design_basis"] = build_design_basis(_inputs_for_compute, computed)
     computed["explainability"] = build_explainability_index(_inputs_for_compute, computed)
     computed["lifecycle_degradation"] = build_lifecycle_degradation(_inputs_for_compute, computed)
-    if st.session_state.get("mc_lite_enabled"):
+    from ui.ui_profile import is_engineer_mode
+
+    if is_engineer_mode() and st.session_state.get("mc_lite_enabled"):
         from engine.monte_carlo_lite import build_monte_carlo_cycle_lite
 
         computed["monte_carlo_cycle"] = build_monte_carlo_cycle_lite(
@@ -367,12 +371,14 @@ def _render_main_results_stack(
         )
     render_section_guide_row()
     render_compute_validation_banners(computed)
-    _active_tab = st.session_state.get("mmf_main_tabs", MAIN_TAB_LABELS[0])
-    if _active_tab not in MAIN_TAB_LABELS:
-        _active_tab = MAIN_TAB_LABELS[0]
+    _tab_labels = visible_main_tab_labels(MAIN_TAB_LABELS)
+    _active_tab = st.session_state.get("mmf_main_tabs", _tab_labels[0])
+    if _active_tab not in _tab_labels:
+        _active_tab = _tab_labels[0]
+        st.session_state["mmf_main_tabs"] = _active_tab
     st.radio(
         "Results tabs",
-        options=MAIN_TAB_LABELS,
+        options=_tab_labels,
         horizontal=True,
         key="mmf_main_tabs",
         label_visibility="collapsed",

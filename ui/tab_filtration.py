@@ -441,41 +441,44 @@ def render_tab_filtration(inputs: dict, computed: dict):
                 except ImportError:
                     pass
 
-    with st.expander("Monte Carlo lite — optional cycle sampling (N scenario)", expanded=False):
-        from ui.monte_carlo_controls import render_monte_carlo_lite_controls
+    from ui.ui_profile import is_engineer_mode
 
-        render_monte_carlo_lite_controls()
-        _mc = computed.get("monte_carlo_cycle") or {}
-        if not st.session_state.get("mc_lite_enabled"):
-            st.info("Enable the checkbox above, then **Apply** in the input column to run samples.")
-        elif not _mc.get("enabled"):
-            st.warning(
-                _mc.get("reason", "Sampling did not complete — check hydraulics and try **Apply** again.")
-            )
-        else:
-            st.caption(_mc.get("note", ""))
-            pct = _mc.get("percentiles_h") or {}
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric(f"P10 ({ulbl('time_h')})", fmt(pct.get("p10"), "time_h", 1))
-            c2.metric(f"P50 ({ulbl('time_h')})", fmt(pct.get("p50"), "time_h", 1))
-            c3.metric(f"P90 ({ulbl('time_h')})", fmt(pct.get("p90"), "time_h", 1))
-            c4.metric("Samples", f"{_mc.get('n_samples_finite', 0)} / {_mc.get('n_samples_requested', 0)}")
-            det = _mc.get("deterministic_envelope_h") or {}
-            st.caption(
-                f"Deterministic envelope — optimistic {fmt(det.get('optimistic'), 'time_h', 1)} · "
-                f"expected {fmt(det.get('expected'), 'time_h', 1)} · "
-                f"conservative {fmt(det.get('conservative'), 'time_h', 1)}"
-            )
-            try:
-                _fig_mc = figure_cycle_duration_histogram(_mc)
-                if _fig_mc is not None:
-                    st.plotly_chart(
-                        _fig_mc,
-                        use_container_width=True,
-                        key="monte_carlo_cycle_hist",
-                    )
-            except ImportError:
-                st.info("Install **plotly** for the Monte Carlo histogram.")
+    if is_engineer_mode():
+        with st.expander("Monte Carlo lite — optional cycle sampling (N scenario)", expanded=False):
+            from ui.monte_carlo_controls import render_monte_carlo_lite_controls
+
+            render_monte_carlo_lite_controls()
+            _mc = computed.get("monte_carlo_cycle") or {}
+            if not st.session_state.get("mc_lite_enabled"):
+                st.info("Enable the checkbox above, then **Apply** in the input column to run samples.")
+            elif not _mc.get("enabled"):
+                st.warning(
+                    _mc.get("reason", "Sampling did not complete — check hydraulics and try **Apply** again.")
+                )
+            else:
+                st.caption(_mc.get("note", ""))
+                pct = _mc.get("percentiles_h") or {}
+                c1, c2, c3, c4 = st.columns(4)
+                c1.metric(f"P10 ({ulbl('time_h')})", fmt(pct.get("p10"), "time_h", 1))
+                c2.metric(f"P50 ({ulbl('time_h')})", fmt(pct.get("p50"), "time_h", 1))
+                c3.metric(f"P90 ({ulbl('time_h')})", fmt(pct.get("p90"), "time_h", 1))
+                c4.metric("Samples", f"{_mc.get('n_samples_finite', 0)} / {_mc.get('n_samples_requested', 0)}")
+                det = _mc.get("deterministic_envelope_h") or {}
+                st.caption(
+                    f"Deterministic envelope — optimistic {fmt(det.get('optimistic'), 'time_h', 1)} · "
+                    f"expected {fmt(det.get('expected'), 'time_h', 1)} · "
+                    f"conservative {fmt(det.get('conservative'), 'time_h', 1)}"
+                )
+                try:
+                    _fig_mc = figure_cycle_duration_histogram(_mc)
+                    if _fig_mc is not None:
+                        st.plotly_chart(
+                            _fig_mc,
+                            use_container_width=True,
+                            key="monte_carlo_cycle_hist",
+                        )
+                except ImportError:
+                    st.info("Install **plotly** for the Monte Carlo histogram.")
 
     _op_env = computed.get("operating_envelope") or {}
     if _op_env.get("enabled"):

@@ -122,8 +122,11 @@ def render_project_toolbar(inputs: dict, computed: dict | None = None) -> None:
                 except Exception as err:
                     st.error(f"Load failed: {err}")
 
-        with st.expander("Project library", expanded=False):
-            render_project_library_panel(inputs, computed)
+        from ui.ui_profile import is_engineer_mode
+
+        if is_engineer_mode():
+            with st.expander("Project library", expanded=False):
+                render_project_library_panel(inputs, computed)
 
 
 # Re-export for app.py import compatibility

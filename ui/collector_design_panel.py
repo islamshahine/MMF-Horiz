@@ -19,6 +19,7 @@ from ui.collector_hyd_schematic import (
 )
 from ui.spatial_loading_panel import render_spatial_loading_panel
 from ui.scroll_markers import inject_anchor
+from ui.ui_profile import is_engineer_mode
 
 
 def _render_collector_bw_envelope_block(computed: dict, *, expanded: bool = False) -> None:
@@ -144,6 +145,8 @@ def render_collector_optional_studies_panel(computed: dict) -> None:
     """
     BW-flow sweep + staged Ø — sidebar-triggered studies (not inside legacy lateral expander).
     """
+    if not is_engineer_mode():
+        return
     inject_anchor("mmf-anchor-collector-optional-studies")
     _stg = computed.get("collector_staged_orifices")
     _env = computed.get("collector_bw_envelope")
@@ -437,7 +440,7 @@ def render_collector_design_panel(computed: dict, inputs: dict) -> None:
     render_collector_optional_studies_panel(computed)
 
     _ch = computed.get("collector_hyd") or {}
-    if _ch:
+    if _ch and is_engineer_mode():
         with st.expander(
             "Legacy pipe-lateral surrogate (optional — not your nozzle-plate layout)",
             expanded=False,
