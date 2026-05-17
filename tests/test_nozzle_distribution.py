@@ -10,7 +10,10 @@ from engine.nozzle_plate_distribution import (
     generate_triangular_candidates,
     pitch_from_density,
 )
-from engine.collector_nozzle_plate import staggered_plate_layout, chord_at_axial_x
+from engine.collector_nozzle_plate import (
+    chord_at_axial_x,
+    staggered_plate_layout,
+)
 
 
 def _plate_geo():
@@ -128,6 +131,35 @@ def test_staggered_offset_exists():
     assert xs_even
     assert xs_odd
     assert xs_even != xs_odd
+
+
+@pytest.mark.parametrize("density_per_m2", [40.0, 50.0, 60.0])
+def test_client_density_regression_pack(density_per_m2: float):
+    """P5.3 — reference vessel at sidebar densities ρ = 40 / 50 / 60 holes/m²."""
+    geo, h_d, total = _plate_geo()
+    lay = staggered_plate_layout(
+        cyl_len_m=total,
+        total_length_m=total,
+        straight_cyl_len_m=19.55,
+        h_dish_m=h_d,
+        vessel_id_m=5.5,
+        nozzle_plate_h_m=1.0,
+        n_holes_total=0,
+        chord_m=geo["chord_m"],
+        plate_area_total_m2=geo["area_total_m2"],
+        area_cyl_m2=geo["area_cyl_m2"],
+        area_one_dish_m2=geo["area_one_dish_m2"],
+        np_density_per_m2=density_per_m2,
+        bore_d_mm=50.0,
+    )
+    n_target = int(round(density_per_m2 * geo["area_total_m2"]))
+    n_placed = int(lay["actual_holes_from_layout"])
+    assert lay["layout_mode"] == "triangular_stagger"
+    assert abs(n_placed - n_target) / max(n_target, 1) <= 0.05
+    assert float(lay["layout_axial_utilization"]) >= 0.95
+    xs = [h[0] for h in lay["holes_xy"]]
+    assert xs
+    assert max(xs) - min(xs) >= total * 0.85
 
 
 def test_staggered_plate_layout_integration():

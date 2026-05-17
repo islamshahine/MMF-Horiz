@@ -1174,7 +1174,7 @@ Statements the platform should *not* overclaim:
 |----|------|-------------|--------|
 | **P5.1** | Git hygiene — commit/push uncommitted engine/UI/tests | repo root | **Done** — `ad49e3d` on `origin/main` (2026-05-17) |
 | **P5.2** | BW duty chart — duty-only fast UI | `bw_timeline_cache.py`, `app.py` | **Done** — `_duty_fast` skips eight main tabs; renders §5 timeline only |
-| **P5.3** | Triangular nozzle QA at client densities (40–60 /m²) | `nozzle_plate_distribution.py` | **User-validated** sample; add regression cases |
+| **P5.3** | Triangular nozzle QA at client densities (40–60 /m²) | `tests/test_nozzle_distribution.py` | **Done** — parametrized regression pack |
 | **P5.4** | Filtration-phase spatial map | `spatial_distribution.py`, `ui/spatial_loading_panel.py`, Filtration tab | **Done** — `spatial_distribution_filtration`; shared Plotly panel |
 | **P5.5** | External media pricing API | `media_pricing.py` | **Backlog** |
 | **P5.6** | C2 full in-app CFD | new solver hook | **Backlog** |

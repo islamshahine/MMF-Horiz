@@ -524,14 +524,14 @@ Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-targe
 | 1 | **Git** — commit and push sprint (`engine/`, `ui/`, `tests/`, docs, CI) | **Done** — `ad49e3d` on `origin/main` (2026-05-17) |
 | 2 | **Targeted pytest** — nozzle + media + spatial smoke | **Done** — 24 passed (`test_nozzle_distribution`, `test_collector_nozzle_plate`, `test_media_pricing`, `test_spatial_distribution`) |
 | 3 | **Smoke UI** — `python -m streamlit run app.py` → **Apply** → Backwash → change stagger → **Update duty chart** (all main tabs visible) | **Verify on your machine** |
-| 4 | **Density contract** — sidebar **Hole density (/m²)** is the only source for `N = round(ρ × A_plate)` | **Enforced in code** — regression at ρ = 40/50/60 optional (P5.3) |
+| 4 | **Density contract** — sidebar **Hole density (/m²)** is the only source for `N = round(ρ × A_plate)` | **Done** — `test_client_density_regression_pack` at ρ = 40/50/60 |
 
 #### G.2 Short term (2–4 weeks)
 
 | Priority | Work | Files / notes |
 |----------|------|----------------|
 | **P5.2** | Duty-chart speed | **Done (fast path)** — `_duty_fast` renders Backwash §5 timeline only; post-hooks already skipped on duty-only rerun |
-| **P5.3** | Nozzle QA | Regression at ρ = 40, 50, 60 /m²; axial coverage ≥95% |
+| **P5.3** | Nozzle QA | **Done** — `test_client_density_regression_pack` at ρ = 40/50/60 /m² (axial ≥95%, triangular stagger) |
 | **P5.4** | Filtration spatial map | **Done** — `computed["spatial_distribution_filtration"]`; Filtration tab expander; Backwash map unchanged |
 | **Docs** | Keep §3 / §11 / §12 aligned after each PR | Both MD files + `tests/README.md` |
 
