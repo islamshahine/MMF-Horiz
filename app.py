@@ -343,7 +343,12 @@ _INTRO_CAPTION = (
 
 
 def _render_main_results_stack(
-    *, inputs: dict, computed: dict, inputs_collapsed: bool, duty_fast: bool = False
+    *,
+    inputs: dict,
+    computed: dict,
+    inputs_collapsed: bool,
+    duty_fast: bool = False,
+    collector_study_flash: bool = False,
 ) -> None:
     """Project strip → quick jump → intro caption → section guide → validation → tabs (results column)."""
     column_marker("main")
@@ -354,6 +359,11 @@ def _render_main_results_stack(
         st.caption(
             "⚡ **Duty chart updated** — timeline refreshed. Sidebar **Process / Vessel / Media / BW / Econ** "
             "tabs stay available; plant inputs are unchanged until you edit them."
+        )
+    elif collector_study_flash:
+        st.caption(
+            "⚡ **Collector study updated** — full **Backwash** tab below; "
+            "**Optional collector studies** panel is expanded in §6."
         )
     render_section_guide_row()
     render_compute_validation_banners(computed)
@@ -368,16 +378,10 @@ def _render_main_results_stack(
         label_visibility="collapsed",
     )
     _active_tab = st.session_state.get("mmf_main_tabs", _active_tab)
-    _collector_fast = duty_fast or _staged_only or _envelope_only
-    if _collector_fast and _active_tab == "🔄 Backwash":
-        if duty_fast:
-            from ui.bw_duty_timeline_section import render_bw_duty_timeline_section
+    if duty_fast and _active_tab == "🔄 Backwash":
+        from ui.bw_duty_timeline_section import render_bw_duty_timeline_section
 
-            render_bw_duty_timeline_section(inputs, computed, expanded=True)
-        else:
-            from ui.collector_design_panel import render_collector_studies_lightweight
-
-            render_collector_studies_lightweight(computed)
+        render_bw_duty_timeline_section(inputs, computed, expanded=True)
         return
     _render_tab = _MAIN_TAB_RENDERERS.get(_active_tab)
     if _render_tab is not None:
@@ -386,15 +390,25 @@ def _render_main_results_stack(
         render_tab_filtration(inputs, computed)
 
 
+_collector_study_flash = _staged_only or _envelope_only
+
 if _ctx_collapsed:
     _render_main_results_stack(
-        inputs=inputs, computed=computed, inputs_collapsed=True, duty_fast=_duty_fast,
+        inputs=inputs,
+        computed=computed,
+        inputs_collapsed=True,
+        duty_fast=_duty_fast,
+        collector_study_flash=_collector_study_flash,
     )
     render_readiness_strip(inputs, computed)
 else:
     with main:
         _render_main_results_stack(
-            inputs=inputs, computed=computed, inputs_collapsed=False, duty_fast=_duty_fast,
+            inputs=inputs,
+            computed=computed,
+            inputs_collapsed=False,
+            duty_fast=_duty_fast,
+            collector_study_flash=_collector_study_flash,
         )
     with ctx:
         render_readiness_strip(inputs, computed)

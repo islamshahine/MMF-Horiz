@@ -170,15 +170,6 @@ def render_collector_optional_studies_panel(computed: dict) -> None:
         _render_collector_staged_orifice_block(computed, expanded=_force_expand or _has_stg)
 
 
-def render_collector_studies_lightweight(computed: dict) -> None:
-    """Optional collector studies only — used on fast envelope / staged reruns."""
-    st.caption(
-        "⚡ **Collector study updated** — results are in the panel below (not inside "
-        "**Collector intelligence**, which is vessel-nozzle screening only)."
-    )
-    render_collector_optional_studies_panel(computed)
-
-
 def render_collector_design_panel(computed: dict, inputs: dict) -> None:
     """Vessel intelligence, nozzle-plate BW hydraulics, legacy lateral surrogate, studies."""
     _np = computed.get("collector_nozzle_plate") or {}
