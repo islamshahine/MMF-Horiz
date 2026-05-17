@@ -743,8 +743,10 @@ Post-compute in `app.py` (before `build_design_basis` so traceability can resolv
 | **Stagger compare** | `engine/bw_stagger_compare.py` + panel — cached comparison without re-running full physics. |
 | **Long horizons** | `scheduler_max_passes()` in `bw_scheduler.py` caps MILP/heuristic cost on multi-day windows. |
 | **Regression guard** | Do **not** hide main tabs on duty refresh (removed `_bw_duty_fast_ui` early-return). |
+| **Lazy main tabs** | `app.py` renders only the active main tab (radio) — reduces rerun cost. |
+| **Collector BW-flow sweep (P5.5)** | Removed from `compute_all` (was N× `compute_collector_hydraulics` per rerun). Sidebar **form** + **Run BW-flow sweep** → `_collector_envelope_rerun` + `_envelope_fast` reuses `mmf_last_computed`; `build_collector_bw_flow_envelope_cached` in `ui/collector_envelope_cache.py`; results in `computed["collector_bw_envelope"]` (Backwash collector studies). |
 
-**Still slow?** Next levers: lazy tab render in `app.py`; defer non-Backwash post-hooks on duty-only flag; profile `compute_all` with `engine.logger` timing.
+**Still slow?** Profile `compute_all` with `engine.logger` timing; optional: defer **staged perforation** selectbox to a button (same pattern as sweep).
 
 ---
 
@@ -1320,7 +1322,8 @@ Reference changelog aligned with repo behaviour documented in §2.1, §3.7, §3.
 | **Schematic** | `collector_hyd_schematic` — dimensions below vessel, cleaner legend/captions (§3.17). |
 | **Tests (indicative)** | `test_compare_workspace`, `test_explainability`, `test_design_basis`, `test_lifecycle_degradation`, `test_nozzle_plate_catalogue`, `test_nozzle_system`, `test_strainer_materials`, `test_fouling_workflow`, `test_bw_scheduler`, `test_collector_nozzle_plate`, **`test_nozzle_distribution`**, `test_media_pricing`, `test_spatial_distribution`, `test_operating_envelope`, `test_design_targets`. |
 | **Triangular nozzle plate (§3.33)** | Density-driven **N**, triangular pitch, full-plate stagger, `layout_revision` **6**; spatial map + schematic aligned. |
-| **Duty-chart UX (§3.34)** | Timeline cache + duty-only rerun; stagger compare cache; tab-hiding regression removed. |
+| **Duty-chart UX (§3.34)** | Timeline cache + duty-only rerun; stagger compare cache; tab-hiding regression removed; lazy main tabs. |
+| **Collector sweep (P5.5)** | `collector_envelope_form` + `collector_envelope_cache`; post-compute restore when geometry unchanged. |
 | **Media regions** | Egypt / Middle East `REGION_FACTOR` keys on Media tab. |
 | **Release `ad49e3d` (2026-05-17)** | Pushed to `origin/main`: triangular nozzles, BW duty cache, Tier B/C lite, `pytest.ini`, GitHub Actions CI; pitch test allows shrink below ideal when boundary clip limits placement. |
 
@@ -1336,7 +1339,7 @@ Use this section as the **single checklist** after the May 2026 nozzle-layout an
 |---|--------|--------|-----|
 | 1 | **Commit & push** sprint to `origin/main` | **Done** | `ad49e3d` — triangular nozzles, BW duty cache, Tier B/C lite, docs, CI |
 | 2 | **Targeted pytest** (nozzle + media + spatial) | **Done** | 24 passed — `pytest tests/test_nozzle_distribution.py tests/test_collector_nozzle_plate.py tests/test_media_pricing.py tests/test_spatial_distribution.py -q` |
-| 3 | **Smoke Streamlit** | **Verify** | `python -m streamlit run app.py` → Apply → Backwash → change stagger → **Update duty chart** (all main tabs visible) |
+| 3 | **Smoke Streamlit** | **Verify** | `python -m streamlit run app.py` → Apply → Backwash → **Update duty chart** + optional **Run BW-flow sweep** (sidebar studies expander; no hang on open) |
 | 4 | **Hole density contract** | **Enforced** | Sidebar **Hole density (/m²)** → `N = round(ρ × A_plate)` only; optional regression at ρ = 40/50/60 (§12.2 **B**) |
 
 ### 12.2 Short term (next 2–4 weeks)
@@ -1346,6 +1349,7 @@ Use this section as the **single checklist** after the May 2026 nozzle-layout an
 | **A** | **Duty-chart performance** | **Fast path shipped** — `_duty_fast` in `app.py` renders §5 timeline only; post-hooks skipped on duty-only rerun. Verify latency on your laptop after **Update duty chart**. |
 | **B** | **Nozzle layout QA** | Add pytest cases at ρ = 40, 50, 60 /m² for a reference plate area; assert axial coverage ≥95%, `layout_mode == triangular_stagger`, `len(hole_network) ≈ N`. |
 | **C** | **Spatial map polish** | **Done (P5.4)** — Filtration tab map via `flow_basis=filtration` → `spatial_distribution_filtration`; `ASM-SPATIAL-003`. |
+| **E** | **Collector BW-flow sweep UX** | **Done (P5.5)** — `f140beb`: on-demand sweep; not in `compute_all`; `test_collector_envelope_cache.py`. |
 | **D** | **Documentation drift** | After each feature: update §3 equation row, §11 Phase table, §12 checklist, `tests/README.md`. |
 
 ### 12.3 Medium term (backlog — do not block release)
@@ -1370,12 +1374,12 @@ Use this section as the **single checklist** after the May 2026 nozzle-layout an
 
 | Field | Value |
 |-------|--------|
-| **SHA** | `ad49e3d` |
+| **SHA** | `f140beb` (latest perf); `ad49e3d` (May sprint) |
 | **Branch** | `main` → `origin/main` |
 | **Date** | 2026-05-17 |
-| **Summary** | Triangular nozzle layout (`layout_revision` 6), BW duty timeline cache, Tier B/C lite modules, Egypt/Middle East media regions, CI workflow |
+| **Summary** | P5.5 on-demand collector BW-flow sweep; §3.34 duty-chart + lazy tabs; triangular nozzles; Tier B/C lite |
 
 ---
 
-*Document version: 2026-05-17 — Phase 4 complete; Phase 5 active (P5.1 done); §3.33–3.34 shipped; §12 verification checklist.*
+*Document version: 2026-05-17 — Phase 5: P5.2–P5.5 shipped; §3.34 UX + on-demand collector sweep; §12 verification checklist.*
 

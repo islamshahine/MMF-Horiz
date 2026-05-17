@@ -523,7 +523,7 @@ Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-targe
 |---|--------|--------|
 | 1 | **Git** — commit and push sprint (`engine/`, `ui/`, `tests/`, docs, CI) | **Done** — `ad49e3d` on `origin/main` (2026-05-17) |
 | 2 | **Targeted pytest** — nozzle + media + spatial smoke | **Done** — 24 passed (`test_nozzle_distribution`, `test_collector_nozzle_plate`, `test_media_pricing`, `test_spatial_distribution`) |
-| 3 | **Smoke UI** — `python -m streamlit run app.py` → **Apply** → Backwash → change stagger → **Update duty chart** (all main tabs visible) | **Verify on your machine** |
+| 3 | **Smoke UI** — `python -m streamlit run app.py` → **Apply** → Backwash → **Update duty chart** + **Run BW-flow sweep** (all main tabs visible; no hang on sidebar open) | **Verify on your machine** |
 | 4 | **Density contract** — sidebar **Hole density (/m²)** is the only source for `N = round(ρ × A_plate)` | **Done** — `test_client_density_regression_pack` at ρ = 40/50/60 |
 
 #### G.2 Short term (2–4 weeks)
@@ -533,6 +533,7 @@ Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-targe
 | **P5.2** | Duty-chart speed | **Done (fast path)** — `_duty_fast` renders Backwash §5 timeline only; post-hooks already skipped on duty-only rerun |
 | **P5.3** | Nozzle QA | **Done** — `test_client_density_regression_pack` at ρ = 40/50/60 /m² (axial ≥95%, triangular stagger) |
 | **P5.4** | Filtration spatial map | **Done** — `computed["spatial_distribution_filtration"]`; Filtration tab expander; Backwash map unchanged |
+| **P5.5** | Collector BW-flow sweep UX | **Done** — sweep removed from `compute_all`; sidebar form + **Run BW-flow sweep**; `_envelope_fast` in `app.py`; `ui/collector_envelope_cache.py` |
 | **Docs** | Keep §3 / §11 / §12 aligned after each PR | Both MD files + `tests/README.md` |
 
 #### G.3 Medium-term backlog (non-blocking)
@@ -552,6 +553,7 @@ Phases **0–4** and Tier **B** are **delivered** (envelope map, design-to-targe
 | Nozzle layout | `engine/nozzle_plate_distribution.py`, `engine/collector_nozzle_plate.py` |
 | Spatial map | `engine/spatial_distribution.py`, `ui/spatial_loading_panel.py` (BW + Filtration) |
 | BW duty UX | `ui/bw_timeline_cache.py`, `ui/sidebar.py`, `engine/bw_timeline_build.py` |
+| Collector BW-flow sweep | `engine/collector_envelope.py`, `ui/collector_envelope_form.py`, `ui/collector_envelope_cache.py` |
 | Cache bust | `ui/compute_cache.py` (`_COMPUTE_CACHE_VERSION`) |
 | Media regions | `engine/media_pricing.py` (`egypt`, `middle_east`) |
 

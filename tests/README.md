@@ -44,6 +44,8 @@ tests/
   test_collector_geometry.py     Lateral reach / screening
   test_collector_manifold.py     Dual-end + CFD export normalize
   test_collector_benchmarks.py   Hand-calc regression pack
+  test_collector_envelope.py       Deterministic BW-flow sweep (1D collector)
+  test_collector_envelope_cache.py  On-demand sweep kwargs + fingerprint (P5.5)
   test_collector_staged_orifices.py  Staged orifice advisory
   test_bw_scheduler.py           BW scheduler v2 (stream-aware, peak windows) [@pytest.mark.slow]
   test_bw_scheduler_v3.py        BW scheduler v3 (tariff + maintenance blackouts)
