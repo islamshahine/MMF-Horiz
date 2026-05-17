@@ -127,4 +127,4 @@ def run_collector_optimization_from_session() -> None:
         st.session_state["_collector_opt_message"] = str(
             result.get("message", "Optimization failed."),
         )
-    st.rerun()
+    # on_click already triggers a script rerun; st.rerun() inside callbacks is a no-op.

@@ -60,7 +60,7 @@ def patch_inputs_collector_header_si(inputs_si: dict, **flow_kwargs: Any) -> dic
 
 
 def persist_nozzle_editor_to_session() -> None:
-    """data_editor on_change — save §4 SI rows and sync linked header, then rerun."""
+    """data_editor on_change — save §4 SI rows and sync linked header (widget already reruns)."""
     import streamlit as st
 
     from ui.helpers import nozzle_schedule_si_from_editor_df
@@ -77,4 +77,4 @@ def persist_nozzle_editor_to_session() -> None:
     )
     st.session_state["mmf_nozzle_sched_user"] = sched_si
     sync_linked_collector_header_session()
-    st.rerun()
+    # Do not st.rerun() here — Streamlit no-ops rerun inside on_change and it can stall the app.

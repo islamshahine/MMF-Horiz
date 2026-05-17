@@ -53,6 +53,7 @@ st.set_page_config(page_title="AQUASIGHT™ MMF", layout="wide",
                    initial_sidebar_state="collapsed")
 
 from ui.layout_enhancements import (
+    MAIN_TAB_LABELS,
     apply_pending_tab_jumps,
     column_marker,
     init_layout_session_state,
@@ -62,6 +63,18 @@ from ui.layout_enhancements import (
     render_readiness_strip,
     render_section_guide_row,
 )
+
+_MAIN_TAB_RENDERERS = {
+    "💧 Filtration": render_tab_filtration,
+    "🔄 Backwash": render_tab_backwash,
+    "⚙️ Mechanical": render_tab_mechanical,
+    "🧱 Media": render_tab_media,
+    "⚡ Pumps & power": render_tab_pump_costing,
+    "💰 Economics": render_tab_economics,
+    "🎯 Assessment": render_tab_assessment,
+    "📄 Report": render_tab_report,
+    "⚖️ Compare": render_tab_compare,
+}
 
 init_layout_session_state()
 apply_pending_tab_jumps()
@@ -301,34 +314,22 @@ def _render_main_results_stack(
         )
     render_section_guide_row()
     render_compute_validation_banners(computed)
-    (tab_filtration, tab_backwash, tab_mechanical, tab_media, tab_pumps,
-     tab_economics, tab_assessment, tab_report, tab_compare) = st.tabs(
-        [
-            "💧 Filtration", "🔄 Backwash", "⚙️ Mechanical",
-            "🧱 Media", "⚡ Pumps & power", "💰 Economics", "🎯 Assessment", "📄 Report",
-            "⚖️ Compare",
-        ],
+    _active_tab = st.session_state.get("mmf_main_tabs", MAIN_TAB_LABELS[0])
+    if _active_tab not in MAIN_TAB_LABELS:
+        _active_tab = MAIN_TAB_LABELS[0]
+    st.radio(
+        "Results tabs",
+        options=MAIN_TAB_LABELS,
+        horizontal=True,
         key="mmf_main_tabs",
+        label_visibility="collapsed",
     )
-
-    with tab_filtration:
+    _active_tab = st.session_state.get("mmf_main_tabs", _active_tab)
+    _render_tab = _MAIN_TAB_RENDERERS.get(_active_tab)
+    if _render_tab is not None:
+        _render_tab(inputs, computed)
+    else:
         render_tab_filtration(inputs, computed)
-    with tab_backwash:
-        render_tab_backwash(inputs, computed)
-    with tab_mechanical:
-        render_tab_mechanical(inputs, computed)
-    with tab_media:
-        render_tab_media(inputs, computed)
-    with tab_pumps:
-        render_tab_pump_costing(inputs, computed)
-    with tab_economics:
-        render_tab_economics(inputs, computed)
-    with tab_assessment:
-        render_tab_assessment(inputs, computed)
-    with tab_report:
-        render_tab_report(inputs, computed)
-    with tab_compare:
-        render_tab_compare(inputs, computed)
 
 
 if _ctx_collapsed:
