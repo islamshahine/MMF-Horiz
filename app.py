@@ -63,7 +63,7 @@ from ui.layout_enhancements import (
     render_readiness_strip,
     render_section_guide_row,
 )
-from ui.ui_profile import init_ui_profile_state, visible_main_tab_labels
+from ui.ui_mode import init_ui_mode_state, show_tier_c_tools, visible_main_tab_labels
 
 _MAIN_TAB_RENDERERS = {
     "💧 Filtration": render_tab_filtration,
@@ -78,7 +78,7 @@ _MAIN_TAB_RENDERERS = {
 }
 
 init_layout_session_state()
-init_ui_profile_state()
+init_ui_mode_state()
 apply_pending_tab_jumps()
 inject_layout_css()
 
@@ -295,9 +295,7 @@ if not _duty_only and not _envelope_only and not _staged_only:
     computed["design_basis"] = build_design_basis(_inputs_for_compute, computed)
     computed["explainability"] = build_explainability_index(_inputs_for_compute, computed)
     computed["lifecycle_degradation"] = build_lifecycle_degradation(_inputs_for_compute, computed)
-    from ui.ui_profile import is_engineer_mode
-
-    if is_engineer_mode() and st.session_state.get("mc_lite_enabled"):
+    if show_tier_c_tools() and st.session_state.get("mc_lite_enabled"):
         from engine.monte_carlo_lite import build_monte_carlo_cycle_lite
 
         computed["monte_carlo_cycle"] = build_monte_carlo_cycle_lite(

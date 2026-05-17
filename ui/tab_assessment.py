@@ -254,9 +254,9 @@ def render_tab_assessment(inputs: dict, computed: dict):
 
     st.divider()
 
-    from ui.ui_profile import is_engineer_mode
+    from ui.ui_profile import is_expert_mode
 
-    if is_engineer_mode():
+    if is_expert_mode():
         with st.expander(
             "Filter-count study — hydraulics, ranking & apply to sidebar",
             expanded=False,

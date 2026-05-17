@@ -117,6 +117,20 @@ def render_sidebar(
     _ensure_presets()
     out = {}
 
+    from ui.ui_mode import (
+        current_ui_mode,
+        get_mode_config,
+        is_expert_mode,
+        merge_hidden_input_defaults,
+        render_ui_mode_selector,
+        show_engineer_tools,
+    )
+    from ui.ui_profile import is_client_mode, is_engineer_mode
+
+    ui_mode = render_ui_mode_selector()
+    _mode_cfg = get_mode_config(ui_mode)
+    st.divider()
+
     # ── Unit system toggle ─────────────────────────────────────────────────
     _us_radio = st.session_state.get("unit_system")
     _unit_radio_idx = UNIT_SYSTEMS.index(_us_radio) if _us_radio in UNIT_SYSTEMS else 0
@@ -135,26 +149,18 @@ def render_sidebar(
         _reconvert_session_units(_prev_units, unit_system)
     st.session_state["_prev_unit_system"] = unit_system
 
-    from ui.ui_profile import (
-        is_engineer_mode,
-        merge_client_sidebar_defaults,
-        render_ui_profile_selector,
-    )
-
-    render_ui_profile_selector()
-    st.divider()
     st.caption(
         "**Sidebar = inputs** (what you change before **Apply**). **Main tabs** = **Filtration · Backwash · "
         "Mechanical · Media** = read-only **results** from the same inputs — edit here, review there."
     )
 
-    proc_tab, vessel_tab, media_tab, bw_tab, econ_tab = st.tabs(
-        ["⚙️ Process", "🏗️ Vessel", "🧱 Media", "🔄 BW", "💰 Econ"],
-        key="mmf_sidebar_tabs",
-    )
+    _visible_tabs = list(_mode_cfg["visible_sidebar_tabs"])
+    _tab_widgets = st.tabs(_visible_tabs, key="mmf_sidebar_tabs")
+    _tab_ctx = dict(zip(_visible_tabs, _tab_widgets))
 
     # ── Tab 1: Process ────────────────────────────────────────────────────
-    with proc_tab:
+    if "⚙️ Process" in _tab_ctx:
+      with _tab_ctx["⚙️ Process"]:
         inject_anchor("mmf-anchor-sb-process")
         st.caption(
             "**Process** — plant duty, water quality, **cartridge/CF** (below). **LV/EBCT** limits: **🧱 Media** tab. "
@@ -365,7 +371,8 @@ def render_sidebar(
                 )
 
     # ── Tab 2: Vessel ─────────────────────────────────────────────────────
-    with vessel_tab:
+    if "🏗️ Vessel" in _tab_ctx:
+      with _tab_ctx["🏗️ Vessel"]:
         inject_anchor("mmf-anchor-sb-vessel")
         st.caption(
             "**Vessel** — geometry, ASME design, lining, environment. **Thicknesses, weights, nozzles, drawing:** "
@@ -572,7 +579,8 @@ def render_sidebar(
             )
 
     # ── Tab 3: Media ──────────────────────────────────────────────────────
-    with media_tab:
+    if "🧱 Media" in _tab_ctx:
+      with _tab_ctx["🧱 Media"]:
         inject_anchor("mmf-anchor-sb-media")
         st.caption(
             "**Media** — nozzle plate, **layer stack** (bottom→top), **M_max / α / fouling** (below). "
@@ -794,61 +802,62 @@ def render_sidebar(
         _stp_sl = display_value(0.1, "loading_kg_m2", unit_system)
         out["solid_loading"]          = st.number_input(_lbl_sl, value=_def_sl, step=_stp_sl, key="solid_loading")
 
-        if is_engineer_mode():
+        if is_expert_mode():
             with st.expander("Monte Carlo lite (optional)", expanded=False):
                 st.caption(
                     "Enable sampling and view the histogram on the **💧 Filtration** tab → "
                     "*Monte Carlo lite — optional cycle sampling*. Press **Apply** after toggling."
                 )
 
-        if is_engineer_mode():
+        if show_engineer_tools():
             with st.expander("Calibration, fouling assistant & cake resistance (α)", expanded=False):
-                with st.expander("Advanced — pilot / field calibration factors", expanded=False):
-                    st.caption(
-                        "**M_max scale** scales the solids inventory used in ΔP dirty and BW trigger math "
-                        "(not the label value above). **Maldistribution (≥1)** inflates superficial velocity for "
-                        "Ergun + cake (distributor / wall effects). **α factor** scales cake resistance after "
-                        "auto or user α. **TSS capture** is the fraction of feed TSS assumed to deposit for cycle-time "
-                        "estimates. **Expansion scale** adjusts R–Z expanded bed height increment (pilot vs correlation)."
-                    )
-                    _c1a, _c2a = st.columns(2)
-                    with _c1a:
-                        out["solid_loading_scale"] = st.number_input(
-                            "M_max scale (−)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
-                            key="solid_loading_scale",
+                if is_expert_mode():
+                    with st.expander("Advanced — pilot / field calibration factors", expanded=False):
+                        st.caption(
+                            "**M_max scale** scales the solids inventory used in ΔP dirty and BW trigger math "
+                            "(not the label value above). **Maldistribution (≥1)** inflates superficial velocity for "
+                            "Ergun + cake (distributor / wall effects). **α factor** scales cake resistance after "
+                            "auto or user α. **TSS capture** is the fraction of feed TSS assumed to deposit for cycle-time "
+                            "estimates. **Expansion scale** adjusts R–Z expanded bed height increment (pilot vs correlation)."
                         )
-                        out["use_calculated_maldistribution"] = st.checkbox(
-                            "Link filtration mal factor to 1D underdrain distribution",
-                            value=bool(st.session_state.get("use_calculated_maldistribution", False)),
-                            key="use_calculated_maldistribution",
-                            help=(
-                                "When enabled, **filtration** Ergun / cake use the **1D distribution factor** "
-                                "(max/mean flow) from the 1D screening solve. "
-                                "Your **nozzle plate** is defined in **🧱 Media**; this link is approximate until "
-                                "nozzle-plate hydraulics are added. Not §4 shell BW/air nozzles."
-                            ),
+                        _c1a, _c2a = st.columns(2)
+                        with _c1a:
+                            out["solid_loading_scale"] = st.number_input(
+                                "M_max scale (−)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
+                                key="solid_loading_scale",
+                            )
+                            out["use_calculated_maldistribution"] = st.checkbox(
+                                "Link filtration mal factor to 1D underdrain distribution",
+                                value=bool(st.session_state.get("use_calculated_maldistribution", False)),
+                                key="use_calculated_maldistribution",
+                                help=(
+                                    "When enabled, **filtration** Ergun / cake use the **1D distribution factor** "
+                                    "(max/mean flow) from the 1D screening solve. "
+                                    "Your **nozzle plate** is defined in **🧱 Media**; this link is approximate until "
+                                    "nozzle-plate hydraulics are added. Not §4 shell BW/air nozzles."
+                                ),
+                            )
+                            out["maldistribution_factor"] = st.number_input(
+                                "Filtration maldistribution factor (≥1) — manual",
+                                value=1.0, min_value=1.0, max_value=2.0, step=0.05,
+                                key="maldistribution_factor",
+                                disabled=bool(out.get("use_calculated_maldistribution")),
+                                help="Plant-wide fouling velocity multiplier. Ignored when linked to 1D underdrain distribution.",
+                            )
+                        with _c2a:
+                            out["alpha_calibration_factor"] = st.number_input(
+                                "α calibration factor (−)", value=1.0, min_value=0.3, max_value=3.0, step=0.05,
+                                key="alpha_calibration_factor",
+                            )
+                            out["tss_capture_efficiency"] = st.number_input(
+                                "TSS capture efficiency (0–1)", value=1.0, min_value=0.0, max_value=1.0, step=0.05,
+                                key="tss_capture_efficiency",
+                            )
+                        out["expansion_calibration_scale"] = st.number_input(
+                            "BW expansion increment scale (0.5–1.5)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
+                            key="expansion_calibration_scale",
+                            help="Scales only the **expanded height increment** above settled depth per layer (1 = model).",
                         )
-                        out["maldistribution_factor"] = st.number_input(
-                            "Filtration maldistribution factor (≥1) — manual",
-                            value=1.0, min_value=1.0, max_value=2.0, step=0.05,
-                            key="maldistribution_factor",
-                            disabled=bool(out.get("use_calculated_maldistribution")),
-                            help="Plant-wide fouling velocity multiplier. Ignored when linked to 1D underdrain distribution.",
-                        )
-                    with _c2a:
-                        out["alpha_calibration_factor"] = st.number_input(
-                            "α calibration factor (−)", value=1.0, min_value=0.3, max_value=3.0, step=0.05,
-                            key="alpha_calibration_factor",
-                        )
-                        out["tss_capture_efficiency"] = st.number_input(
-                            "TSS capture efficiency (0–1)", value=1.0, min_value=0.0, max_value=1.0, step=0.05,
-                            key="tss_capture_efficiency",
-                        )
-                    out["expansion_calibration_scale"] = st.number_input(
-                        "BW expansion increment scale (0.5–1.5)", value=1.0, min_value=0.5, max_value=1.5, step=0.05,
-                        key="expansion_calibration_scale",
-                        help="Scales only the **expanded height increment** above settled depth per layer (1 = model).",
-                    )
                 with st.expander("Fouling assistant — guided workflow (SDI / MFI → M_max)", expanded=False):
                     render_fouling_guided_workflow(
                         out,
@@ -891,7 +900,8 @@ def render_sidebar(
             out["alpha_specific"] = alpha_9 * 1e9
 
     # ── Tab 4: BW ─────────────────────────────────────────────────────────
-    with bw_tab:
+    if "🔄 BW" in _tab_ctx:
+      with _tab_ctx["🔄 BW"]:
         inject_anchor("mmf-anchor-sb-bw")
         st.caption(
             "**Inputs** for backwash duty (plant), **underdrain / nozzle plate (1D screening)**, and optional studies. "
@@ -1463,7 +1473,8 @@ def render_sidebar(
                     render_collector_staged_orifice_form()
 
     # ── Tab 5: Econ ───────────────────────────────────────────────────────
-    with econ_tab:
+    if "💰 Econ" in _tab_ctx:
+      with _tab_ctx["💰 Econ"]:
         inject_anchor("mmf-anchor-sb-econ")
         st.caption(
             "**💰 Econ** sidebar = tariffs, intervals, financial knobs; main **Economics** tab = **results**."
@@ -1648,7 +1659,7 @@ def render_sidebar(
 
     merge_feed_hydraulics_into_out(out, unit_system)
 
-    out = merge_client_sidebar_defaults(out)
+    out = merge_hidden_input_defaults(out, ui_mode)
 
     # ── Convert display-unit inputs back to SI before returning ───────────
     out = convert_inputs(out, unit_system)
